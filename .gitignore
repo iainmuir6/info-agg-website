@@ -1,4 +1,5 @@
 *.code-workspace
+Icon?
 
 # dependencies
 /node_modules
