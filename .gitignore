@@ -1,6 +1,7 @@
 *.code-workspace
 Icon?
 _agg_venv/
+/data/
 
 # dependencies
 /node_modules
