@@ -1,8 +1,6 @@
 "use client";
 
 import { useState } from "react";
-import { redirect } from "next/navigation";
-import { createClient } from "@/lib/supabase/server";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { ExpandableSection } from "@/components/expandable-section";
 
