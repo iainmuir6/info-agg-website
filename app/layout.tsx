@@ -11,6 +11,11 @@ export const metadata: Metadata = {
   metadataBase: new URL(defaultUrl),
   title: "Info Aggregator",
   description: "Personal information aggregator with news, sports, markets, media, and more",
+  icons: {
+    icon: "/assets/website_logos/info_agg.svg",
+    shortcut: "/assets/website_logos/info_agg.svg",
+    apple: "/assets/website_logos/info_agg.svg",
+  },
 };
 
 const geistSans = Geist({
