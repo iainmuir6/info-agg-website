@@ -4,57 +4,58 @@
 
 @layer base {
   :root {
-    --background: 0 0% 100%;
-    --foreground: 0 0% 3.9%;
+    /* High-contrast monochrome palette */
+    --background: 0 0% 98%;
+    --foreground: 0 0% 4%;
     --card: 0 0% 100%;
-    --card-foreground: 0 0% 3.9%;
+    --card-foreground: 0 0% 4%;
     --popover: 0 0% 100%;
-    --popover-foreground: 0 0% 3.9%;
-    --primary: 0 0% 9%;
+    --popover-foreground: 0 0% 4%;
+    --primary: 0 0% 4%;
     --primary-foreground: 0 0% 98%;
-    --secondary: 0 0% 96.1%;
-    --secondary-foreground: 0 0% 9%;
-    --muted: 0 0% 96.1%;
-    --muted-foreground: 0 0% 45.1%;
-    --accent: 0 0% 96.1%;
-    --accent-foreground: 0 0% 9%;
+    --secondary: 0 0% 93%;
+    --secondary-foreground: 0 0% 4%;
+    --muted: 0 0% 90%;
+    --muted-foreground: 0 0% 40%;
+    --accent: 0 0% 93%;
+    --accent-foreground: 0 0% 4%;
     --destructive: 0 84.2% 60.2%;
     --destructive-foreground: 0 0% 98%;
-    --border: 0 0% 89.8%;
-    --input: 0 0% 89.8%;
-    --ring: 0 0% 3.9%;
-    --chart-1: 12 76% 61%;
-    --chart-2: 173 58% 39%;
-    --chart-3: 197 37% 24%;
-    --chart-4: 43 74% 66%;
-    --chart-5: 27 87% 67%;
-    --radius: 0.5rem;
+    --border: 0 0% 82%;
+    --input: 0 0% 82%;
+    --ring: 0 0% 4%;
+    --radius: 0rem;
+    /* Category accent colors */
+    --news-accent: 220 90% 52%;
+    --sports-accent: 25 95% 50%;
+    --markets-accent: 142 65% 42%;
+    --media-accent: 340 78% 50%;
   }
+
   .dark {
-    --background: 0 0% 3.9%;
-    --foreground: 0 0% 98%;
-    --card: 0 0% 3.9%;
-    --card-foreground: 0 0% 98%;
-    --popover: 0 0% 3.9%;
-    --popover-foreground: 0 0% 98%;
-    --primary: 0 0% 98%;
-    --primary-foreground: 0 0% 9%;
-    --secondary: 0 0% 14.9%;
-    --secondary-foreground: 0 0% 98%;
-    --muted: 0 0% 14.9%;
-    --muted-foreground: 0 0% 63.9%;
-    --accent: 0 0% 14.9%;
-    --accent-foreground: 0 0% 98%;
+    --background: 0 0% 4%;
+    --foreground: 0 0% 96%;
+    --card: 0 0% 7%;
+    --card-foreground: 0 0% 96%;
+    --popover: 0 0% 7%;
+    --popover-foreground: 0 0% 96%;
+    --primary: 0 0% 96%;
+    --primary-foreground: 0 0% 4%;
+    --secondary: 0 0% 12%;
+    --secondary-foreground: 0 0% 96%;
+    --muted: 0 0% 14%;
+    --muted-foreground: 0 0% 58%;
+    --accent: 0 0% 14%;
+    --accent-foreground: 0 0% 96%;
     --destructive: 0 62.8% 30.6%;
     --destructive-foreground: 0 0% 98%;
-    --border: 0 0% 14.9%;
-    --input: 0 0% 14.9%;
-    --ring: 0 0% 83.1%;
-    --chart-1: 220 70% 50%;
-    --chart-2: 160 60% 45%;
-    --chart-3: 30 80% 55%;
-    --chart-4: 280 65% 60%;
-    --chart-5: 340 75% 55%;
+    --border: 0 0% 18%;
+    --input: 0 0% 18%;
+    --ring: 0 0% 85%;
+    --news-accent: 220 80% 65%;
+    --sports-accent: 25 90% 60%;
+    --markets-accent: 142 60% 50%;
+    --media-accent: 340 75% 62%;
   }
 }
 
@@ -64,5 +65,137 @@
   }
   body {
     @apply bg-background text-foreground;
+    font-feature-settings: "kern" 1, "liga" 1;
   }
+}
+
+/* ============================================================
+   INFINITE SCROLL / TICKER ANIMATIONS
+   ============================================================ */
+@keyframes scroll-left {
+  0%   { transform: translateX(0); }
+  100% { transform: translateX(-50%); }
+}
+
+@keyframes scroll-right {
+  0%   { transform: translateX(-50%); }
+  100% { transform: translateX(0); }
+}
+
+@keyframes ticker-scroll {
+  0%   { transform: translateX(0); }
+  100% { transform: translateX(-50%); }
+}
+
+@keyframes fade-in-up {
+  0%   { opacity: 0; transform: translateY(10px); }
+  100% { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes pulse-dot {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0.25; }
+}
+
+@keyframes blink-cursor {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0; }
+}
+
+@keyframes slide-in-right {
+  0%   { opacity: 0; transform: translateX(20px); }
+  100% { opacity: 1; transform: translateX(0); }
+}
+
+.animate-scroll-left {
+  animation: scroll-left linear infinite;
+}
+
+.animate-scroll-right {
+  animation: scroll-right linear infinite;
+}
+
+.animate-ticker {
+  display: inline-flex;
+  white-space: nowrap;
+  animation: ticker-scroll linear infinite;
+}
+
+.animate-fade-in-up {
+  animation: fade-in-up 0.35s ease-out both;
+}
+
+.animate-pulse-dot {
+  animation: pulse-dot 2s ease-in-out infinite;
+}
+
+.animate-blink-cursor {
+  animation: blink-cursor 1s step-end infinite;
+}
+
+.animate-slide-in-right {
+  animation: slide-in-right 0.3s ease-out both;
+}
+
+/* Pause scroll on hover */
+.pause-on-hover:hover .animate-scroll-left,
+.pause-on-hover:hover .animate-scroll-right,
+.pause-on-hover:hover .animate-ticker {
+  animation-play-state: paused;
+}
+
+/* Stagger delays for list items */
+.stagger-1 { animation-delay: 0.05s; }
+.stagger-2 { animation-delay: 0.10s; }
+.stagger-3 { animation-delay: 0.15s; }
+.stagger-4 { animation-delay: 0.20s; }
+.stagger-5 { animation-delay: 0.25s; }
+
+/* ============================================================
+   SCROLLBAR — Minimal
+   ============================================================ */
+::-webkit-scrollbar { width: 3px; height: 3px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: hsl(var(--border)); }
+::-webkit-scrollbar-thumb:hover { background: hsl(var(--muted-foreground)); }
+
+/* ============================================================
+   NEWSPAPER DIVIDERS
+   ============================================================ */
+.rule-double {
+  border-top: 3px solid hsl(var(--foreground));
+  border-bottom: 1px solid hsl(var(--foreground));
+  height: 5px;
+}
+
+/* ============================================================
+   CATEGORY TEXT + BORDER COLORS
+   ============================================================ */
+.text-news    { color: hsl(var(--news-accent)); }
+.text-sports  { color: hsl(var(--sports-accent)); }
+.text-markets { color: hsl(var(--markets-accent)); }
+.text-media   { color: hsl(var(--media-accent)); }
+
+.border-news    { border-color: hsl(var(--news-accent)); }
+.border-sports  { border-color: hsl(var(--sports-accent)); }
+.border-markets { border-color: hsl(var(--markets-accent)); }
+.border-media   { border-color: hsl(var(--media-accent)); }
+
+.bg-news    { background-color: hsl(var(--news-accent)); }
+.bg-sports  { background-color: hsl(var(--sports-accent)); }
+.bg-markets { background-color: hsl(var(--markets-accent)); }
+.bg-media   { background-color: hsl(var(--media-accent)); }
+
+/* ============================================================
+   MARKET DATA COLORS
+   ============================================================ */
+.text-positive { color: hsl(var(--markets-accent)); }
+.text-negative { color: hsl(0 72% 50%); }
+
+/* ============================================================
+   SELECTION
+   ============================================================ */
+::selection {
+  background: hsl(var(--foreground));
+  color: hsl(var(--background));
 }

@@ -1,388 +1,286 @@
-"use client";
+import Link from "next/link";
+import { createClient } from "@/lib/supabase/server";
 
-import { useState } from "react";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { ExpandableSection } from "@/components/expandable-section";
-
-const tabs = [
-  { name: "News", color: "blue", logo: "NYT" },
-  { name: "Sports", color: "orange", logo: "ESPN" },
-  { name: "Markets", color: "green", logo: "Robinhood" },
-  { name: "Media", color: "red", logo: "YouTube" },
-  { name: "Misc", color: "purple", logo: "Tools" },
+const SECTIONS = [
+  {
+    href: "/protected/news",
+    label: "NEWS",
+    accent: "news",
+    accentColor: "hsl(220 90% 52%)",
+    icon: "◈",
+    description: "Top stories from NYT and NewsAPI across all categories.",
+    table: "news_articles",
+    countField: "id",
+  },
+  {
+    href: "/protected/sports",
+    label: "SPORTS",
+    accent: "sports",
+    accentColor: "hsl(25 95% 50%)",
+    icon: "◉",
+    description: "Live scores and news from ESPN — NFL, NBA, MLB, NHL, EPL.",
+    table: "sports_news",
+    countField: "id",
+  },
+  {
+    href: "/protected/markets",
+    label: "MARKETS",
+    accent: "markets",
+    accentColor: "hsl(142 65% 42%)",
+    icon: "◆",
+    description: "Real-time stock quotes and market news. Powered by Finnhub.",
+    table: "stock_quotes",
+    countField: "id",
+  },
+  {
+    href: "/protected/media",
+    label: "MEDIA",
+    accent: "media",
+    accentColor: "hsl(340 78% 50%)",
+    icon: "◎",
+    description: "Spotify new releases and trending Reddit posts.",
+    table: "spotify_releases",
+    countField: "id",
+  },
 ];
 
-const colorClasses = {
-  blue: "text-blue-600 border-blue-600",
-  orange: "text-orange-600 border-orange-600", 
-  green: "text-green-600 border-green-600",
-  red: "text-red-600 border-red-600",
-  purple: "text-purple-600 border-purple-600",
-};
+async function getDataCounts(supabase: Awaited<ReturnType<typeof createClient>>) {
+  const counts: Record<string, number> = {};
 
-export default function HomePage() {
-  const [activeTab, setActiveTab] = useState("News");
+  await Promise.all(
+    SECTIONS.map(async (s) => {
+      try {
+        const { count } = await supabase
+          .from(s.table)
+          .select("*", { count: "exact", head: true });
+        counts[s.label] = count ?? 0;
+      } catch {
+        counts[s.label] = 0;
+      }
+    })
+  );
 
-  const renderTabContent = () => {
-    switch (activeTab) {
-      case "News":
-        return (
-          <div className="flex-1 w-full flex flex-col gap-6">
-            <div className="space-y-4">
-              <ExpandableSection
-                title="The New York Times"
-                logo="/assets/logos/news/nyt.svg"
-                logoAlt="New York Times"
-                defaultExpanded={true}
-              >
-                <div className="space-y-4">
-                  <div className="flex gap-4 p-3">
-                    <div className="w-16 h-16 bg-gray-200 rounded flex items-center justify-center">
-                      <span className="text-gray-500 text-xs">Image</span>
-                    </div>
-                    <div className="flex-1">
-                      <h4 className="font-semibold">News Title...</h4>
-                      <p className="text-sm text-gray-600 mt-1">Summary...</p>
-                      <div className="flex justify-between items-center mt-2 text-xs text-gray-500">
-                        <span>By John Smith</span>
-                        <span>10/18/2025 4:12 pm</span>
-                      </div>
-                    </div>
-                  </div>
-                  <div className="flex gap-4 p-3">
-                    <div className="w-16 h-16 bg-gray-200 rounded flex items-center justify-center">
-                      <span className="text-gray-500 text-xs">Image</span>
-                    </div>
-                    <div className="flex-1">
-                      <h4 className="font-semibold">News Title...</h4>
-                      <p className="text-sm text-gray-600 mt-1">Summary...</p>
-                      <div className="flex justify-between items-center mt-2 text-xs text-gray-500">
-                        <span>By Jane Doe</span>
-                        <span>10/18/2025 3:45 pm</span>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              </ExpandableSection>
+  return counts;
+}
 
-              <ExpandableSection
-                title="The Wall Street Journal"
-                logo="/assets/logos/news/wsj.svg"
-                logoAlt="Wall Street Journal"
-              >
-                <div className="space-y-4">
-                  <div className="flex gap-4 p-3">
-                    <div className="w-16 h-16 bg-gray-200 rounded flex items-center justify-center">
-                      <span className="text-gray-500 text-xs">Image</span>
-                    </div>
-                    <div className="flex-1">
-                      <h4 className="font-semibold">Financial News...</h4>
-                      <p className="text-sm text-gray-600 mt-1">Market analysis and business updates...</p>
-                      <div className="flex justify-between items-center mt-2 text-xs text-gray-500">
-                        <span>By Market Reporter</span>
-                        <span>10/18/2025 2:30 pm</span>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              </ExpandableSection>
+async function getLatestNews(supabase: Awaited<ReturnType<typeof createClient>>) {
+  try {
+    const { data } = await supabase
+      .from("news_articles")
+      .select("title, source, section, published_at")
+      .order("published_at", { ascending: false })
+      .limit(5);
+    return data ?? [];
+  } catch {
+    return [];
+  }
+}
 
-            </div>
-          </div>
-        );
+async function getLatestStocks(supabase: Awaited<ReturnType<typeof createClient>>) {
+  try {
+    const { data } = await supabase
+      .from("stock_quotes")
+      .select("current_price, percent_change, stocks(ticker)")
+      .order("fetched_at", { ascending: false })
+      .limit(7);
+    return data ?? [];
+  } catch {
+    return [];
+  }
+}
 
-      case "Sports":
-        return (
-          <div className="flex-1 w-full flex flex-col gap-6">
-            <div className="space-y-4">
-              <ExpandableSection
-                title="ESPN"
-                logo="/assets/logos/sports/espn.svg"
-                logoAlt="ESPN"
-                defaultExpanded={true}
-              >
-                <div className="space-y-4">
-                  <div className="flex gap-4 p-3">
-                    <div className="w-16 h-16 bg-gray-200 rounded flex items-center justify-center">
-                      <span className="text-gray-500 text-xs">Score</span>
-                    </div>
-                    <div className="flex-1">
-                      <h4 className="font-semibold">Lakers vs Warriors</h4>
-                      <p className="text-sm text-gray-600 mt-1">Final: Lakers 112 - Warriors 108</p>
-                      <div className="flex justify-between items-center mt-2 text-xs text-gray-500">
-                        <span>NBA</span>
-                        <span>10/18/2025 10:30 pm</span>
-                      </div>
-                    </div>
-                  </div>
-                  <div className="flex gap-4 p-3">
-                    <div className="w-16 h-16 bg-gray-200 rounded flex items-center justify-center">
-                      <span className="text-gray-500 text-xs">Score</span>
-                    </div>
-                    <div className="flex-1">
-                      <h4 className="font-semibold">Chiefs vs Bills</h4>
-                      <p className="text-sm text-gray-600 mt-1">Final: Chiefs 24 - Bills 21</p>
-                      <div className="flex justify-between items-center mt-2 text-xs text-gray-500">
-                        <span>NFL</span>
-                        <span>10/18/2025 7:45 pm</span>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              </ExpandableSection>
+async function getLatestScores(supabase: Awaited<ReturnType<typeof createClient>>) {
+  try {
+    const { data } = await supabase
+      .from("sports_scores")
+      .select("home_team, away_team, home_score, away_score, status, leagues(sport)")
+      .order("game_date", { ascending: false })
+      .limit(4);
+    return data ?? [];
+  } catch {
+    return [];
+  }
+}
 
-            </div>
-          </div>
-        );
+export default async function OverviewPage() {
+  const supabase = await createClient();
+  const [counts, latestNews, latestStocks, latestScores] = await Promise.all([
+    getDataCounts(supabase),
+    getLatestNews(supabase),
+    getLatestStocks(supabase),
+    getLatestScores(supabase),
+  ]);
 
-      case "Markets":
-        return (
-          <div className="flex-1 w-full flex flex-col gap-6">
-            <div className="space-y-4">
-              <ExpandableSection
-                title="Robinhood"
-                logo="/assets/logos/markets/robinhood.svg"
-                logoAlt="Robinhood"
-                defaultExpanded={true}
-              >
-                <div className="space-y-4">
-                  <div className="flex gap-4 p-3">
-                    <div className="w-16 h-16 bg-gray-200 rounded flex items-center justify-center">
-                      <span className="text-gray-500 text-xs">Chart</span>
-                    </div>
-                    <div className="flex-1">
-                      <h4 className="font-semibold">AAPL - Apple Inc.</h4>
-                      <p className="text-sm text-gray-600 mt-1">$175.43 (+2.15%)</p>
-                      <div className="flex justify-between items-center mt-2 text-xs text-gray-500">
-                        <span>NASDAQ</span>
-                        <span>4:00 PM ET</span>
-                      </div>
-                    </div>
-                  </div>
-                  <div className="flex gap-4 p-3">
-                    <div className="w-16 h-16 bg-gray-200 rounded flex items-center justify-center">
-                      <span className="text-gray-500 text-xs">Chart</span>
-                    </div>
-                    <div className="flex-1">
-                      <h4 className="font-semibold">TSLA - Tesla Inc.</h4>
-                      <p className="text-sm text-gray-600 mt-1">$248.12 (-1.23%)</p>
-                      <div className="flex justify-between items-center mt-2 text-xs text-gray-500">
-                        <span>NASDAQ</span>
-                        <span>4:00 PM ET</span>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              </ExpandableSection>
-
-            </div>
-          </div>
-        );
-
-      case "Media":
-        return (
-          <div className="flex-1 w-full flex flex-col gap-6">
-            <div className="space-y-4">
-
-              <ExpandableSection
-                title="YouTube"
-                logo="/assets/logos/media/youtube.svg"
-                logoAlt="YouTube"
-                defaultExpanded={true}
-              >
-                <div className="space-y-4">
-                  <div className="flex gap-4 p-3">
-                    <div className="w-16 h-16 bg-gray-200 rounded flex items-center justify-center">
-                      <span className="text-gray-500 text-xs">Video</span>
-                    </div>
-                    <div className="flex-1">
-                      <h4 className="font-semibold">Trending Tech Review</h4>
-                      <p className="text-sm text-gray-600 mt-1">Latest iPhone 15 Pro review and comparison</p>
-                      <div className="flex justify-between items-center mt-2 text-xs text-gray-500">
-                        <span>TechChannel</span>
-                        <span>2.3M views</span>
-                      </div>
-                    </div>
-                  </div>
-                  <div className="flex gap-4 p-3">
-                    <div className="w-16 h-16 bg-gray-200 rounded flex items-center justify-center">
-                      <span className="text-gray-500 text-xs">Video</span>
-                    </div>
-                    <div className="flex-1">
-                      <h4 className="font-semibold">Cooking Tutorial</h4>
-                      <p className="text-sm text-gray-600 mt-1">How to make perfect pasta from scratch</p>
-                      <div className="flex justify-between items-center mt-2 text-xs text-gray-500">
-                        <span>ChefMaster</span>
-                        <span>856K views</span>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              </ExpandableSection>
-
-              <ExpandableSection
-                title="Reddit"
-                logo="/assets/logos/media/reddit.svg"
-                logoAlt="Reddit"
-              >
-                <div className="space-y-4">
-                  <div className="flex gap-4 p-3">
-                    <div className="w-16 h-16 bg-gray-200 rounded flex items-center justify-center">
-                      <span className="text-gray-500 text-xs">Post</span>
-                    </div>
-                    <div className="flex-1">
-                      <h4 className="font-semibold">r/technology - AI Discussion</h4>
-                      <p className="text-sm text-gray-600 mt-1">What do you think about the future of AI?</p>
-                      <div className="flex justify-between items-center mt-2 text-xs text-gray-500">
-                        <span>r/technology</span>
-                        <span>2.1K upvotes</span>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              </ExpandableSection>
-
-            </div>
-          </div>
-        );
-
-      case "Misc":
-        return (
-          <div className="flex-1 w-full flex flex-col gap-6">
-            <div className="w-full">
-              <h1 className="text-3xl font-bold mb-2">Miscellaneous</h1>
-              <p className="text-muted-foreground">
-                Various tools, utilities, and miscellaneous information.
-              </p>
-            </div>
-            
-            <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-              <Card>
-                <CardHeader>
-                  <CardTitle>Weather</CardTitle>
-                </CardHeader>
-                <CardContent>
-                  <p className="text-sm text-muted-foreground">
-                    Current weather conditions and forecasts will be displayed here.
-                  </p>
-                </CardContent>
-              </Card>
-              
-              <Card>
-                <CardHeader>
-                  <CardTitle>Calendar</CardTitle>
-                </CardHeader>
-                <CardContent>
-                  <p className="text-sm text-muted-foreground">
-                    Important dates, holidays, and calendar events will appear here.
-                  </p>
-                </CardContent>
-              </Card>
-              
-              <Card>
-                <CardHeader>
-                  <CardTitle>Tools</CardTitle>
-                </CardHeader>
-                <CardContent>
-                  <p className="text-sm text-muted-foreground">
-                    Useful online tools and utilities will be shown here.
-                  </p>
-                </CardContent>
-              </Card>
-              
-              <Card>
-                <CardHeader>
-                  <CardTitle>Bookmarks</CardTitle>
-                </CardHeader>
-                <CardContent>
-                  <p className="text-sm text-muted-foreground">
-                    Your saved bookmarks and favorite links will be displayed here.
-                  </p>
-                </CardContent>
-              </Card>
-              
-              <Card>
-                <CardHeader>
-                  <CardTitle>Notes</CardTitle>
-                </CardHeader>
-                <CardContent>
-                  <p className="text-sm text-muted-foreground">
-                    Personal notes and reminders will appear here.
-                  </p>
-                </CardContent>
-              </Card>
-              
-              <Card>
-                <CardHeader>
-                  <CardTitle>Random</CardTitle>
-                </CardHeader>
-                <CardContent>
-                  <p className="text-sm text-muted-foreground">
-                    Random facts, quotes, and interesting content will be shown here.
-                  </p>
-                </CardContent>
-              </Card>
-            </div>
-          </div>
-        );
-
-      default:
-        return null;
-    }
-  };
+  const now = new Date();
 
   return (
-      <div className="w-full">
-      {/* Navigation */}
-      <nav className="w-full max-w-5xl mx-auto">
-        <div className="flex justify-center">
-          <div className="flex space-x-8">
-            {tabs.map((tab) => (
-              <button
-                key={tab.name}
-                onClick={() => setActiveTab(tab.name)}
-                className={`px-2 py-3 text-sm font-medium transition-colors relative ${
-                  activeTab === tab.name
-                    ? colorClasses[tab.color as keyof typeof colorClasses]
-                    : "text-gray-600 hover:text-gray-900"
-                }`}
-              >
-                {tab.name}
-              </button>
-            ))}
-          </div>
+    <div className="space-y-8">
+      {/* Page header */}
+      <div>
+        <div className="rule-double mb-3" />
+        <div className="flex items-baseline justify-between">
+          <h2 className="text-2xl font-black tracking-tight" style={{ fontFamily: "Georgia, serif" }}>
+            COMMAND OVERVIEW
+          </h2>
+          <span className="text-xs font-mono text-muted-foreground">
+            {now.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", second: "2-digit" })}
+          </span>
         </div>
-        
-        {/* Double divider lines below navigation */}
-        <div className="w-full max-w-5xl mx-auto mt-2">
-          <div className="flex justify-center">
-            <div className="flex space-x-8">
-              {tabs.map((tab) => (
-                <div key={tab.name} className="px-2">
-                  {activeTab === tab.name ? (
-                    <div className={`h-2 w-full ${
-                      colorClasses[tab.color as keyof typeof colorClasses]
-                    }`}>
-                      <div className={`h-0.5 w-full border-b-2 ${
-                        colorClasses[tab.color as keyof typeof colorClasses]
-                      }`}></div>
-                      <div className={`h-0.5 w-full border-b-2 ${
-                        colorClasses[tab.color as keyof typeof colorClasses]
-                      }`}></div>
-                    </div>
-                  ) : (
-                    <div className="h-2 w-full" />
-                  )}
-                </div>
-              ))}
-            </div>
-          </div>
-        </div>
-      </nav>
+        <p className="text-xs font-mono text-muted-foreground mt-1 tracking-wider">
+          ALL SYSTEMS · {Object.values(counts).some((v) => v > 0) ? "DATA LOADED" : "AWAITING SYNC"}
+        </p>
+      </div>
 
-      {/* Tab Content */}
-      <div className="mt-8">
-        {renderTabContent()}
+      {/* Category cards grid */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-px bg-border">
+        {SECTIONS.map((s) => (
+          <Link
+            key={s.label}
+            href={s.href}
+            className="bg-background p-5 group hover:bg-secondary transition-colors block"
+          >
+            <div
+              className="w-6 h-0.5 mb-4"
+              style={{ backgroundColor: s.accentColor }}
+            />
+            <div className="flex items-start justify-between mb-3">
+              <span
+                className="text-sm font-mono tracking-widest uppercase"
+                style={{ color: s.accentColor }}
+              >
+                {s.icon} {s.label}
+              </span>
+              <span className="text-xs font-mono text-muted-foreground">
+                {(counts[s.label] ?? 0).toLocaleString()}
+              </span>
+            </div>
+            <p className="text-xs text-muted-foreground leading-relaxed mb-4">
+              {s.description}
+            </p>
+            <span className="text-xs font-mono tracking-wider text-foreground group-hover:underline">
+              OPEN →
+            </span>
+          </Link>
+        ))}
+      </div>
+
+      {/* Data panes */}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-px bg-border">
+        {/* Latest headlines */}
+        <div className="bg-background p-5 md:col-span-1">
+          <div className="flex items-center justify-between mb-4">
+            <span className="text-xs font-mono tracking-widest uppercase text-news">
+              ◈ Latest Headlines
+            </span>
+            <Link href="/protected/news" className="text-[10px] font-mono text-muted-foreground hover:text-foreground uppercase tracking-wider">
+              View All →
+            </Link>
+          </div>
+          <div className="space-y-3">
+            {latestNews.length > 0 ? (
+              latestNews.map((a: any, i: number) => (
+                <div key={i} className="border-b border-border pb-3 last:border-0">
+                  <p className="text-xs leading-snug font-medium line-clamp-2">{a.title}</p>
+                  <div className="flex items-center gap-2 mt-1">
+                    <span className="text-[10px] font-mono text-muted-foreground uppercase">
+                      {a.source}
+                    </span>
+                    {a.section && (
+                      <span className="text-[10px] font-mono text-muted-foreground">
+                        · {a.section}
+                      </span>
+                    )}
+                  </div>
+                </div>
+              ))
+            ) : (
+              <p className="text-xs text-muted-foreground font-mono">No data — run ETL to sync</p>
+            )}
+          </div>
+        </div>
+
+        {/* Stock quotes */}
+        <div className="bg-background p-5 md:col-span-1">
+          <div className="flex items-center justify-between mb-4">
+            <span className="text-xs font-mono tracking-widest uppercase text-markets">
+              ◆ Markets
+            </span>
+            <Link href="/protected/markets" className="text-[10px] font-mono text-muted-foreground hover:text-foreground uppercase tracking-wider">
+              View All →
+            </Link>
+          </div>
+          <div className="space-y-2">
+            {latestStocks.length > 0 ? (
+              latestStocks.map((q: any, i: number) => {
+                const change = parseFloat(q.percent_change ?? 0);
+                const isPos = change >= 0;
+                return (
+                  <div key={i} className="flex items-center justify-between py-1.5 border-b border-border last:border-0">
+                    <span className="text-xs font-mono font-bold">
+                      {(q.stocks as any)?.ticker ?? "—"}
+                    </span>
+                    <span className="text-xs font-mono text-muted-foreground">
+                      ${parseFloat(q.current_price ?? 0).toFixed(2)}
+                    </span>
+                    <span
+                      className="text-xs font-mono"
+                      style={{ color: isPos ? "hsl(142 65% 42%)" : "hsl(0 72% 50%)" }}
+                    >
+                      {isPos ? "+" : ""}{change.toFixed(2)}%
+                    </span>
+                  </div>
+                );
+              })
+            ) : (
+              <p className="text-xs text-muted-foreground font-mono">No data — run ETL to sync</p>
+            )}
+          </div>
+        </div>
+
+        {/* Live scores */}
+        <div className="bg-background p-5 md:col-span-1">
+          <div className="flex items-center justify-between mb-4">
+            <span className="text-xs font-mono tracking-widest uppercase text-sports">
+              ◉ Live Scores
+            </span>
+            <Link href="/protected/sports" className="text-[10px] font-mono text-muted-foreground hover:text-foreground uppercase tracking-wider">
+              View All →
+            </Link>
+          </div>
+          <div className="space-y-2">
+            {latestScores.length > 0 ? (
+              latestScores.map((g: any, i: number) => (
+                <div key={i} className="py-2 border-b border-border last:border-0">
+                  <div className="flex items-center justify-between text-xs font-mono">
+                    <span className="text-muted-foreground w-16 truncate">{g.away_team}</span>
+                    <span className="text-foreground font-bold">{g.away_score ?? "—"}</span>
+                    <span className="text-[10px] text-muted-foreground px-2">vs</span>
+                    <span className="text-foreground font-bold">{g.home_score ?? "—"}</span>
+                    <span className="text-muted-foreground w-16 truncate text-right">{g.home_team}</span>
+                  </div>
+                  <p className="text-[10px] font-mono text-muted-foreground mt-0.5">{g.status}</p>
+                </div>
+              ))
+            ) : (
+              <p className="text-xs text-muted-foreground font-mono">No data — run ETL to sync</p>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* ETL status / trigger */}
+      <div className="border border-border p-4 flex items-center justify-between">
+        <div>
+          <p className="text-xs font-mono tracking-widest uppercase text-muted-foreground">
+            Data Sync
+          </p>
+          <p className="text-xs text-muted-foreground mt-0.5">
+            Run the Python ETL to populate all data sources.
+          </p>
+        </div>
+        <code className="text-xs font-mono bg-secondary px-3 py-1.5 text-muted-foreground">
+          python src/api/run_etl.py
+        </code>
       </div>
     </div>
   );
