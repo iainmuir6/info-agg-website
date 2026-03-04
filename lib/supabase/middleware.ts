@@ -46,36 +46,22 @@ export async function updateSession(request: NextRequest) {
   // with the Supabase client, your users may be randomly logged out.
   try {
     const { data, error } = await supabase.auth.getClaims();
-    
-    // If there's an error getting claims, treat as no user (fail gracefully)
     const user = error ? null : data?.claims;
 
-    if (
-      request.nextUrl.pathname !== "/" &&
-      !user &&
-      !request.nextUrl.pathname.startsWith("/login") &&
-      !request.nextUrl.pathname.startsWith("/auth")
-    ) {
-      // no user, potentially respond by redirecting the user to the login page
+    // Only protect explicitly private routes (e.g. /premium, /dashboard).
+    // All public routes (/, /news, /sports, /markets, /media) are open.
+    const PRIVATE_PREFIXES = ["/premium", "/dashboard"];
+    const isPrivate = PRIVATE_PREFIXES.some((p) =>
+      request.nextUrl.pathname.startsWith(p)
+    );
+
+    if (isPrivate && !user) {
       const url = request.nextUrl.clone();
       url.pathname = "/auth/login";
       return NextResponse.redirect(url);
     }
-  } catch (error) {
-    // If getClaims() throws an error, log it and continue without authentication
-    // This prevents the entire app from crashing
-    console.error("Error in middleware getClaims:", error);
-    
-    // For protected routes, redirect to login if auth fails
-    if (
-      request.nextUrl.pathname !== "/" &&
-      !request.nextUrl.pathname.startsWith("/login") &&
-      !request.nextUrl.pathname.startsWith("/auth")
-    ) {
-      const url = request.nextUrl.clone();
-      url.pathname = "/auth/login";
-      return NextResponse.redirect(url);
-    }
+  } catch {
+    // Auth errors are non-fatal for public routes — continue normally.
   }
 
   // IMPORTANT: You *must* return the supabaseResponse object as it is.

@@ -45,13 +45,14 @@ CREATE TRIGGER trigger_news_articles_updated_at
     EXECUTE FUNCTION update_news_articles_updated_at();
 
 -- ============================================================
--- ENABLE ROW LEVEL SECURITY (read-only for authenticated users)
+-- ENABLE ROW LEVEL SECURITY (public read, service role write)
 -- ============================================================
 ALTER TABLE news_articles ENABLE ROW LEVEL SECURITY;
 
-CREATE POLICY "Allow authenticated read access to news_articles"
+-- Public read: all data is visible to anyone (anon + authenticated)
+CREATE POLICY "Allow public read access to news_articles"
     ON news_articles FOR SELECT
-    TO authenticated
+    TO anon, authenticated
     USING (true);
 
 CREATE POLICY "Allow service role full access to news_articles"

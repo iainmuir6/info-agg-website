@@ -111,7 +111,7 @@ export default async function SportsPage() {
   const hasData = leagues.length > 0 && (scores.length > 0 || news.length > 0);
 
   return (
-    <div className="space-y-6">
+    <div className="px-6 py-6 max-w-7xl mx-auto space-y-6">
       {/* Page header */}
       <div>
         <div className="rule-double mb-3" />

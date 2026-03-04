@@ -27,9 +27,9 @@ CREATE INDEX IF NOT EXISTS idx_spotify_releases_fetched_at ON spotify_releases(f
 
 ALTER TABLE spotify_releases ENABLE ROW LEVEL SECURITY;
 
-CREATE POLICY "Allow authenticated read access to spotify_releases"
+CREATE POLICY "Allow public read access to spotify_releases"
     ON spotify_releases FOR SELECT
-    TO authenticated
+    TO anon, authenticated
     USING (true);
 
 CREATE POLICY "Allow service role full access to spotify_releases"
@@ -69,9 +69,9 @@ CREATE INDEX IF NOT EXISTS idx_reddit_posts_subreddit_score ON reddit_posts(subr
 
 ALTER TABLE reddit_posts ENABLE ROW LEVEL SECURITY;
 
-CREATE POLICY "Allow authenticated read access to reddit_posts"
+CREATE POLICY "Allow public read access to reddit_posts"
     ON reddit_posts FOR SELECT
-    TO authenticated
+    TO anon, authenticated
     USING (true);
 
 CREATE POLICY "Allow service role full access to reddit_posts"

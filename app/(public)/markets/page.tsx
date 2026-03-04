@@ -87,7 +87,7 @@ export default async function MarketsPage() {
   const hasData = stocks.length > 0;
 
   return (
-    <div className="space-y-8">
+    <div className="px-6 py-6 max-w-7xl mx-auto space-y-8">
       {/* Page header */}
       <div>
         <div className="rule-double mb-3" />
