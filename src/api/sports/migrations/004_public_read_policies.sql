@@ -2,9 +2,9 @@
 -- Date: 2026-03-04
 -- All sports data is publicly readable (no auth required)
 
-ALTER TABLE leagues ENABLE ROW LEVEL SECURITY;
-ALTER TABLE sports_news ENABLE ROW LEVEL SECURITY;
-ALTER TABLE sports_scores ENABLE ROW LEVEL SECURITY;
+ALTER TABLE info_agg.leagues ENABLE ROW LEVEL SECURITY;
+ALTER TABLE info_agg.sports_news ENABLE ROW LEVEL SECURITY;
+ALTER TABLE info_agg.sports_scores ENABLE ROW LEVEL SECURITY;
 
 CREATE POLICY IF NOT EXISTS "Allow public read access to leagues"
     ON leagues FOR SELECT TO anon, authenticated USING (true);

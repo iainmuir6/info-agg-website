@@ -7,6 +7,10 @@
 
 from typing import Dict, List, Optional, Any
 from supabase import create_client, Client
+try:
+    from supabase.lib.client_options import ClientOptions
+except ImportError:
+    ClientOptions = None
 import os
 from dotenv import load_dotenv
 
@@ -26,6 +30,8 @@ def get_supabase_client() -> Client:
     if not supabase_url or not supabase_key:
         raise ValueError("SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY must be set in environment variables")
     
+    if ClientOptions is not None:
+        return create_client(supabase_url, supabase_key, options=ClientOptions(schema='info_agg'))
     return create_client(supabase_url, supabase_key)
 
 

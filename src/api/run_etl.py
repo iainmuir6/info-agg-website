@@ -13,6 +13,10 @@ import argparse
 from datetime import datetime
 from typing import Dict, Any, List, Optional
 from supabase import create_client, Client
+try:
+    from supabase.lib.client_options import ClientOptions
+except ImportError:
+    ClientOptions = None
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -46,6 +50,8 @@ def get_supabase_client() -> Client:
     if not supabase_url or not supabase_key:
         raise ValueError("NEXT_PUBLIC_SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY must be set")
 
+    if ClientOptions is not None:
+        return create_client(supabase_url, supabase_key, options=ClientOptions(schema='info_agg'))
     return create_client(supabase_url, supabase_key)
 
 

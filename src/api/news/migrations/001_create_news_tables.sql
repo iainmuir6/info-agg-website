@@ -6,7 +6,7 @@
 -- ============================================================
 -- NEWS ARTICLES TABLE
 -- ============================================================
-CREATE TABLE IF NOT EXISTS news_articles (
+CREATE TABLE IF NOT EXISTS info_agg.news_articles (
     id SERIAL PRIMARY KEY,
     source TEXT NOT NULL,                          -- 'nyt', 'newsapi'
     section TEXT,                                  -- nyt section (technology, business, sports, etc.) or newsapi category
@@ -23,12 +23,12 @@ CREATE TABLE IF NOT EXISTS news_articles (
 );
 
 -- Indexes for common query patterns
-CREATE INDEX IF NOT EXISTS idx_news_articles_source ON news_articles(source);
-CREATE INDEX IF NOT EXISTS idx_news_articles_section ON news_articles(section);
-CREATE INDEX IF NOT EXISTS idx_news_articles_published_at ON news_articles(published_at DESC);
-CREATE INDEX IF NOT EXISTS idx_news_articles_created_at ON news_articles(created_at DESC);
-CREATE INDEX IF NOT EXISTS idx_news_articles_source_section ON news_articles(source, section);
-CREATE INDEX IF NOT EXISTS idx_news_articles_source_published ON news_articles(source, published_at DESC);
+CREATE INDEX IF NOT EXISTS idx_news_articles_source ON info_agg.news_articles(source);
+CREATE INDEX IF NOT EXISTS idx_news_articles_section ON info_agg.news_articles(section);
+CREATE INDEX IF NOT EXISTS idx_news_articles_published_at ON info_agg.news_articles(published_at DESC);
+CREATE INDEX IF NOT EXISTS idx_news_articles_created_at ON info_agg.news_articles(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_news_articles_source_section ON info_agg.news_articles(source, section);
+CREATE INDEX IF NOT EXISTS idx_news_articles_source_published ON info_agg.news_articles(source, published_at DESC);
 
 -- Auto-update updated_at trigger
 CREATE OR REPLACE FUNCTION update_news_articles_updated_at()
@@ -40,14 +40,14 @@ END;
 $$ LANGUAGE plpgsql;
 
 CREATE TRIGGER trigger_news_articles_updated_at
-    BEFORE UPDATE ON news_articles
+    BEFORE UPDATE ON info_agg.news_articles
     FOR EACH ROW
     EXECUTE FUNCTION update_news_articles_updated_at();
 
 -- ============================================================
 -- ENABLE ROW LEVEL SECURITY (public read, service role write)
 -- ============================================================
-ALTER TABLE news_articles ENABLE ROW LEVEL SECURITY;
+ALTER TABLE info_agg.news_articles ENABLE ROW LEVEL SECURITY;
 
 -- Public read: all data is visible to anyone (anon + authenticated)
 CREATE POLICY "Allow public read access to news_articles"

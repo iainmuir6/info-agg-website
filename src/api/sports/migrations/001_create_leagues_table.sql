@@ -1,6 +1,6 @@
 -- Create leagues table
 -- This table stores all sports/league combinations with unique IDs
-CREATE TABLE IF NOT EXISTS leagues (
+CREATE TABLE IF NOT EXISTS info_agg.leagues (
     id SERIAL PRIMARY KEY,
     sport TEXT NOT NULL,
     league TEXT NOT NULL,
@@ -12,11 +12,11 @@ CREATE TABLE IF NOT EXISTS leagues (
 );
 
 -- Create index on sport and league for faster lookups
-CREATE INDEX IF NOT EXISTS idx_leagues_sport_league ON leagues(sport, league);
-CREATE INDEX IF NOT EXISTS idx_leagues_is_active ON leagues(is_active);
+CREATE INDEX IF NOT EXISTS idx_leagues_sport_league ON info_agg.leagues(sport, league);
+CREATE INDEX IF NOT EXISTS idx_leagues_is_active ON info_agg.leagues(is_active);
 
 -- Insert initial league data based on SPORT_CONFIGS
-INSERT INTO leagues (sport, league, display_name) VALUES
+INSERT INTO info_agg.leagues (sport, league, display_name) VALUES
     -- Football
     ('football', 'nfl', 'NFL'),
     ('football', 'college-football', 'College Football'),
@@ -45,7 +45,7 @@ $$ language 'plpgsql';
 
 -- Create trigger to automatically update updated_at
 CREATE TRIGGER update_leagues_updated_at
-    BEFORE UPDATE ON leagues
+    BEFORE UPDATE ON info_agg.leagues
     FOR EACH ROW
     EXECUTE FUNCTION update_updated_at_column();
 

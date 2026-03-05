@@ -2,11 +2,11 @@
 -- Date: 2026-03-04
 -- All markets data is publicly readable (no auth required)
 
-ALTER TABLE stocks ENABLE ROW LEVEL SECURITY;
-ALTER TABLE stock_quotes ENABLE ROW LEVEL SECURITY;
-ALTER TABLE stock_candles ENABLE ROW LEVEL SECURITY;
-ALTER TABLE company_news ENABLE ROW LEVEL SECURITY;
-ALTER TABLE market_news ENABLE ROW LEVEL SECURITY;
+ALTER TABLE info_agg.stocks ENABLE ROW LEVEL SECURITY;
+ALTER TABLE info_agg.stock_quotes ENABLE ROW LEVEL SECURITY;
+ALTER TABLE info_agg.stock_candles ENABLE ROW LEVEL SECURITY;
+ALTER TABLE info_agg.company_news ENABLE ROW LEVEL SECURITY;
+ALTER TABLE info_agg.market_news ENABLE ROW LEVEL SECURITY;
 
 CREATE POLICY IF NOT EXISTS "Allow public read access to stocks"
     ON stocks FOR SELECT TO anon, authenticated USING (true);
