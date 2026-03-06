@@ -28,12 +28,12 @@ CREATE INDEX IF NOT EXISTS idx_spotify_releases_fetched_at ON info_agg.spotify_r
 ALTER TABLE info_agg.spotify_releases ENABLE ROW LEVEL SECURITY;
 
 CREATE POLICY "Allow public read access to spotify_releases"
-    ON spotify_releases FOR SELECT
+    ON info_agg.spotify_releases FOR SELECT
     TO anon, authenticated
     USING (true);
 
 CREATE POLICY "Allow service role full access to spotify_releases"
-    ON spotify_releases FOR ALL
+    ON info_agg.spotify_releases FOR ALL
     TO service_role
     USING (true);
 
@@ -70,11 +70,11 @@ CREATE INDEX IF NOT EXISTS idx_reddit_posts_subreddit_score ON info_agg.reddit_p
 ALTER TABLE info_agg.reddit_posts ENABLE ROW LEVEL SECURITY;
 
 CREATE POLICY "Allow public read access to reddit_posts"
-    ON reddit_posts FOR SELECT
+    ON info_agg.reddit_posts FOR SELECT
     TO anon, authenticated
     USING (true);
 
 CREATE POLICY "Allow service role full access to reddit_posts"
-    ON reddit_posts FOR ALL
+    ON info_agg.reddit_posts FOR ALL
     TO service_role
     USING (true);

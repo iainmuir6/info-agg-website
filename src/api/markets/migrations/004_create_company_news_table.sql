@@ -27,5 +27,5 @@ CREATE INDEX IF NOT EXISTS idx_company_news_stock_published ON info_agg.company_
 CREATE TRIGGER update_company_news_updated_at
     BEFORE UPDATE ON info_agg.company_news
     FOR EACH ROW
-    EXECUTE FUNCTION update_updated_at_column();
+    EXECUTE FUNCTION info_agg.set_updated_at();
 

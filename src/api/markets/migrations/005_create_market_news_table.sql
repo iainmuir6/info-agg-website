@@ -27,5 +27,5 @@ CREATE INDEX IF NOT EXISTS idx_market_news_category_published ON info_agg.market
 CREATE TRIGGER update_market_news_updated_at
     BEFORE UPDATE ON info_agg.market_news
     FOR EACH ROW
-    EXECUTE FUNCTION update_updated_at_column();
+    EXECUTE FUNCTION info_agg.set_updated_at();
 

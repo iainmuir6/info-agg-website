@@ -51,11 +51,11 @@ ALTER TABLE info_agg.news_articles ENABLE ROW LEVEL SECURITY;
 
 -- Public read: all data is visible to anyone (anon + authenticated)
 CREATE POLICY "Allow public read access to news_articles"
-    ON news_articles FOR SELECT
+    ON info_agg.news_articles FOR SELECT
     TO anon, authenticated
     USING (true);
 
 CREATE POLICY "Allow service role full access to news_articles"
-    ON news_articles FOR ALL
+    ON info_agg.news_articles FOR ALL
     TO service_role
     USING (true);
