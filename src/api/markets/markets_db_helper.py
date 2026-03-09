@@ -7,6 +7,10 @@
 
 from typing import Dict, List, Optional, Any
 from supabase import create_client, Client
+try:
+    from supabase.lib.client_options import ClientOptions
+except ImportError:
+    ClientOptions = None
 import os
 from dotenv import load_dotenv
 
@@ -26,6 +30,8 @@ def get_supabase_client() -> Client:
     if not supabase_url or not supabase_key:
         raise ValueError("NEXT_PUBLIC_SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY must be set in environment variables")
     
+    if ClientOptions is not None:
+        return create_client(supabase_url, supabase_key, options=ClientOptions(schema='info_agg'))
     return create_client(supabase_url, supabase_key)
 
 
@@ -305,7 +311,7 @@ def sync_stock_data(
     try:
         from .markets_fetcher import (
             fetch_stock_quote, fetch_stock_candles, fetch_company_profile,
-            fetch_company_news, get_api_key
+            fetch_company_news, get_finnhub_api_key
         )
     except ImportError:
         # Fallback for when running as standalone script
@@ -316,7 +322,7 @@ def sync_stock_data(
             sys.path.insert(0, current_dir)
         from markets_fetcher import (
             fetch_stock_quote, fetch_stock_candles, fetch_company_profile,
-            fetch_company_news, get_api_key
+            fetch_company_news, get_finnhub_api_key
         )
     
     stats = {
@@ -329,7 +335,7 @@ def sync_stock_data(
     }
     
     try:
-        api_key = get_api_key()
+        api_key = get_finnhub_api_key()
         
         # Fetch and insert profile
         if fetch_profile:
@@ -396,17 +402,17 @@ def sync_market_news(supabase: Client, categories: List[str] = ['general'], api_
         Dictionary with sync statistics
     """
     try:
-        from .markets_fetcher import fetch_market_news, get_api_key
+        from .markets_fetcher import fetch_market_news, get_finnhub_api_key
     except ImportError:
         import sys
         import os
         current_dir = os.path.dirname(os.path.abspath(__file__))
         if current_dir not in sys.path:
             sys.path.insert(0, current_dir)
-        from markets_fetcher import fetch_market_news, get_api_key
+        from markets_fetcher import fetch_market_news, get_finnhub_api_key
     
     if api_key is None:
-        api_key = get_api_key()
+        api_key = get_finnhub_api_key()
     
     stats = {
         'categories_processed': 0,

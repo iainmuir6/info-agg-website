@@ -2,6 +2,7 @@
 Icon?
 _agg_venv/
 /data/
+.pnpm-store/
 
 # dependencies
 /node_modules
@@ -43,3 +44,8 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo

@@ -1,6 +1,6 @@
 -- Create stocks table
 -- This table stores company/symbol information
-CREATE TABLE IF NOT EXISTS stocks (
+CREATE TABLE IF NOT EXISTS info_agg.stocks (
     id SERIAL PRIMARY KEY,
     ticker TEXT NOT NULL UNIQUE,
     name TEXT,
@@ -19,10 +19,10 @@ CREATE TABLE IF NOT EXISTS stocks (
 );
 
 -- Create indexes for better query performance
-CREATE INDEX IF NOT EXISTS idx_stocks_ticker ON stocks(ticker);
-CREATE INDEX IF NOT EXISTS idx_stocks_exchange ON stocks(exchange);
-CREATE INDEX IF NOT EXISTS idx_stocks_industry ON stocks(industry);
-CREATE INDEX IF NOT EXISTS idx_stocks_is_active ON stocks(is_active);
+CREATE INDEX IF NOT EXISTS idx_stocks_ticker ON info_agg.stocks(ticker);
+CREATE INDEX IF NOT EXISTS idx_stocks_exchange ON info_agg.stocks(exchange);
+CREATE INDEX IF NOT EXISTS idx_stocks_industry ON info_agg.stocks(industry);
+CREATE INDEX IF NOT EXISTS idx_stocks_is_active ON info_agg.stocks(is_active);
 
 -- Create function to update updated_at timestamp (if not already exists)
 CREATE OR REPLACE FUNCTION update_updated_at_column()
@@ -35,7 +35,7 @@ $$ language 'plpgsql';
 
 -- Create trigger to automatically update updated_at
 CREATE TRIGGER update_stocks_updated_at
-    BEFORE UPDATE ON stocks
+    BEFORE UPDATE ON info_agg.stocks
     FOR EACH ROW
     EXECUTE FUNCTION update_updated_at_column();
 
