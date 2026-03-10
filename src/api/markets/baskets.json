@@ -1,0 +1,50 @@
+{
+    "core_market": [
+      "VTI",
+      "SPY",
+      "QQQ",
+      "IWM",
+      "VXUS"
+    ],
+    "sectors": [
+      "XLC",
+      "XLY",
+      "XLP",
+      "XLE",
+      "XLF",
+      "XLV",
+      "XLI",
+      "XLB",
+      "XLRE",
+      "XLK",
+      "XLU"
+    ],
+    "breadth": [
+      "RSP",
+      "VUG",
+      "VTV"
+    ],
+    "risk": [
+      "TLT",
+      "HYG",
+      "GLD",
+      "UUP"
+    ],
+    "core_stocks": [
+      "AAPL",
+      "MSFT",
+      "NVDA",
+      "AMZN",
+      "GOOGL",
+      "META",
+      "TSLA",
+      "BRK.B",
+      "JPM",
+      "AVGO"
+    ],
+    "crypto": [
+      "BTC",
+      "ETH",
+      "XRP"
+    ]
+  }
