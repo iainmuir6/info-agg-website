@@ -846,18 +846,22 @@ def fetch_reddit_hot(subreddit: str = 'all', limit: int = 25) -> Optional[List[D
         for post in data.get('data', {}).get('children', []):
             post_data = post.get('data', {})
             posts.append({
+                'post_id': post_data.get('id'),
                 'title': post_data.get('title'),
                 'subreddit': post_data.get('subreddit'),
                 'author': post_data.get('author'),
                 'score': post_data.get('score'),
+                'upvote_ratio': post_data.get('upvote_ratio'),
                 'num_comments': post_data.get('num_comments'),
                 'url': post_data.get('url'),
                 'permalink': f"https://www.reddit.com{post_data.get('permalink', '')}",
                 'created_utc': post_data.get('created_utc'),
                 'thumbnail': post_data.get('thumbnail'),
                 'selftext': post_data.get('selftext'),
+                'is_self': post_data.get('is_self'),
                 'is_video': post_data.get('is_video'),
                 'over_18': post_data.get('over_18'),
+                'link_flair_text': post_data.get('link_flair_text'),
                 'fetched_at': datetime.now().isoformat()
             })
         

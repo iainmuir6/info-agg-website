@@ -7,10 +7,7 @@
 
 from typing import Dict, List, Optional, Any
 from supabase import create_client, Client
-try:
-    from supabase.lib.client_options import ClientOptions
-except ImportError:
-    ClientOptions = None
+from supabase import ClientOptions
 import os
 from dotenv import load_dotenv
 
@@ -48,8 +45,8 @@ def get_league_id(supabase: Client, sport: str, league: str) -> Optional[int]:
         League ID if found, None otherwise
     """
     try:
-        response = supabase.table('leagues').select('id').eq('sport', sport).eq('league', league).single().execute()
-        return response.data.get('id') if response.data else None
+        response = supabase.table('leagues').select('id').eq('sport', sport).eq('league', league).maybe_single().execute()
+        return response.data.get('id') if (response and response.data) else None
     except Exception as e:
         print(f"Error getting league ID for {sport}/{league}: {e}")
         return None
@@ -74,7 +71,7 @@ def insert_news_articles(supabase: Client, league_id: int, articles: List[Dict[s
     
     for article in articles:
         try:
-            # Prepare data for insertion
+            # Prepare data for upsert
             news_data = {
                 'league_id': league_id,
                 'title': article.get('title'),
@@ -84,27 +81,16 @@ def insert_news_articles(supabase: Client, league_id: int, articles: List[Dict[s
                 'source': article.get('source', 'ESPN'),
                 'image_url': article.get('image')
             }
-            
-            # Insert with ON CONFLICT DO NOTHING to handle duplicates
-            response = supabase.table('sports_news').insert(news_data).execute()
+
+            response = supabase.table('sports_news').upsert(
+                news_data,
+                on_conflict='url'
+            ).execute()
             if response.data:
                 inserted_count += 1
-                
+
         except Exception as e:
-            # Handle unique constraint violations (duplicate URLs)
-            if 'duplicate key' in str(e).lower() or 'unique constraint' in str(e).lower():
-                # Try to update existing record instead
-                try:
-                    supabase.table('sports_news').update({
-                        'title': article.get('title'),
-                        'description': article.get('description'),
-                        'published_at': article.get('published_at'),
-                        'image_url': article.get('image')
-                    }).eq('url', article.get('url')).execute()
-                except Exception as update_error:
-                    print(f"Error updating news article {article.get('url')}: {update_error}")
-            else:
-                print(f"Error inserting news article: {e}")
+            print(f"Error upserting news article: {e}")
     
     return inserted_count
 

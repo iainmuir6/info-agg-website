@@ -158,6 +158,123 @@ def fetch_stock_candles(
         return None
 
 
+# Per-key rate-limit tracking (5 req/min on free tier)
+_AV_LAST_CALL: Dict[str, float] = {}
+_AV_MIN_INTERVAL = 12.5  # seconds between calls per key
+
+
+def get_alphavantage_api_keys() -> List[str]:
+    """Return all configured Alpha Vantage API keys (for round-robin rotation)."""
+    keys = []
+    for i in ['', '_1', '_2', '_3']:
+        k = os.getenv(f'ALPHA_VANTAGE_API_KEY{i}')
+        if k and k not in keys:
+            keys.append(k)
+    if not keys:
+        raise ValueError("No ALPHA_VANTAGE_API_KEY* found in environment variables")
+    return keys
+
+
+def fetch_stock_candles_av(
+    ticker: str,
+    days_back: int = 365,
+    api_key: Optional[str] = None
+) -> Optional[Dict[str, Any]]:
+    """
+    Fetch daily OHLCV candle data for a stock via Alpha Vantage TIME_SERIES_DAILY.
+    Returns data in the same shape as fetch_stock_candles() for drop-in compatibility.
+
+    Args:
+        ticker: Stock symbol (e.g. 'AAPL')
+        days_back: How many calendar days of history to keep (max ~5 years with full output)
+        api_key: Optional specific API key; if None, tries KEY_1 then KEY_2
+
+    Returns:
+        Dict with keys: ticker, resolution, open, high, low, close, volume, timestamps, fetched_at
+        or None on failure.
+    """
+    keys = [api_key] if api_key else get_alphavantage_api_keys()
+    outputsize = 'compact'  # free-tier keys; compact = last 100 trading days (~5 months)
+
+    last_err = None
+    for key in keys:
+        # Respect per-key rate limit
+        elapsed = time.time() - _AV_LAST_CALL.get(key, 0)
+        if elapsed < _AV_MIN_INTERVAL:
+            time.sleep(_AV_MIN_INTERVAL - elapsed)
+        _AV_LAST_CALL[key] = time.time()
+
+        params = {
+            'function': 'TIME_SERIES_DAILY',
+            'symbol': ticker,
+            'outputsize': outputsize,
+            'apikey': key,
+        }
+        try:
+            response = requests.get(ALPHA_VANTAGE_BASE_URL, params=params, timeout=15)
+            response.raise_for_status()
+            data = response.json()
+
+            # Rate-limit / error messages
+            if 'Note' in data or 'Information' in data:
+                msg = data.get('Note') or data.get('Information', '')
+                print(f"  Alpha Vantage key rotation triggered for {ticker}: {msg[:80]}")
+                last_err = msg
+                continue  # try next key
+
+            if 'Error Message' in data:
+                print(f"  Alpha Vantage error for {ticker}: {data['Error Message']}")
+                return None
+
+            ts_key = 'Time Series (Daily)'
+            ts = data.get(ts_key)
+            if not ts:
+                print(f"  Alpha Vantage: no time-series data for {ticker}")
+                return None
+
+            cutoff = datetime.now() - timedelta(days=days_back)
+            opens, highs, lows, closes, volumes, timestamps = [], [], [], [], [], []
+
+            for date_str in sorted(ts.keys(), reverse=True):
+                dt = datetime.strptime(date_str, '%Y-%m-%d')
+                if dt < cutoff:
+                    break
+                bar = ts[date_str]
+                timestamps.append(int(dt.timestamp()))
+                opens.append(float(bar.get('1. open', 0)))
+                highs.append(float(bar.get('2. high', 0)))
+                lows.append(float(bar.get('3. low', 0)))
+                closes.append(float(bar.get('4. close', 0)))
+                volumes.append(int(float(bar.get('5. volume', 0))))
+
+            # Reverse so oldest-first
+            timestamps.reverse(); opens.reverse(); highs.reverse()
+            lows.reverse(); closes.reverse(); volumes.reverse()
+
+            return {
+                'ticker': ticker,
+                'resolution': 'D',
+                'open': opens,
+                'high': highs,
+                'low': lows,
+                'close': closes,
+                'volume': volumes,
+                'timestamps': timestamps,
+                'fetched_at': datetime.now().isoformat(),
+            }
+
+        except requests.exceptions.RequestException as e:
+            last_err = str(e)
+            print(f"  Alpha Vantage request error for {ticker}: {e}")
+            continue
+        except Exception as e:
+            print(f"  Alpha Vantage parse error for {ticker}: {e}")
+            return None
+
+    print(f"  All Alpha Vantage keys exhausted for {ticker}. Last error: {last_err}")
+    return None
+
+
 def fetch_company_profile(ticker: str, api_key: Optional[str] = None) -> Optional[Dict[str, Any]]:
     """
     Fetch company profile information
@@ -255,7 +372,7 @@ def fetch_company_news(
                 'image_url': article.get('image'),
                 'source': article.get('source'),
                 'published_at': datetime.fromtimestamp(article.get('datetime', 0)).isoformat() if article.get('datetime') else None,
-                'related_tickers': article.get('related', []),
+                'related_tickers': [t for t in (article.get('related') or '').split(',') if t],
                 'fetched_at': datetime.now().isoformat()
             })
         
@@ -306,7 +423,7 @@ def fetch_market_news(category: str = 'general', min_id: int = 0, api_key: Optio
                 'image_url': article.get('image'),
                 'source': article.get('source'),
                 'published_at': datetime.fromtimestamp(article.get('datetime', 0)).isoformat() if article.get('datetime') else None,
-                'related_tickers': article.get('related', []),
+                'related_tickers': [t for t in (article.get('related') or '').split(',') if t],
                 'fetched_at': datetime.now().isoformat()
             })
         

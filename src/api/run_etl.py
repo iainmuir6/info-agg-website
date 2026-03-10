@@ -13,10 +13,7 @@ import argparse
 from datetime import datetime
 from typing import Dict, Any, List, Optional
 from supabase import create_client, Client
-try:
-    from supabase.lib.client_options import ClientOptions
-except ImportError:
-    ClientOptions = None
+from supabase import ClientOptions
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -140,9 +137,8 @@ def run_markets_etl(
 def run_news_etl(
     supabase: Client,
     sections: Optional[List[str]] = None,
-    include_newsapi: bool = True
 ) -> Dict[str, Any]:
-    """Run news ETL: NYT top stories and NewsAPI headlines."""
+    """Run news ETL: NYT top stories."""
     print("\n" + "=" * 60)
     print("NEWS ETL")
     print("=" * 60)
@@ -152,30 +148,15 @@ def run_news_etl(
 
     try:
         sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'news'))
-        from news.news_db_helper import sync_nyt_data, sync_newsapi_data
-
-        total_stats = {
-            'nyt_articles': 0,
-            'newsapi_articles': 0,
-            'errors': []
-        }
+        from news.news_db_helper import sync_nyt_data
 
         print("\nSyncing NYT data...")
         nyt_stats = sync_nyt_data(supabase, sections=sections)
-        total_stats['nyt_articles'] = nyt_stats.get('articles_inserted', 0)
-        total_stats['errors'].extend(nyt_stats.get('errors', []))
-
-        if include_newsapi:
-            print("\nSyncing NewsAPI data...")
-            newsapi_stats = sync_newsapi_data(supabase)
-            total_stats['newsapi_articles'] = newsapi_stats.get('articles_inserted', 0)
-            total_stats['errors'].extend(newsapi_stats.get('errors', []))
 
         print(f"\nNews ETL Complete:")
-        print(f"  NYT articles inserted: {total_stats['nyt_articles']}")
-        print(f"  NewsAPI articles inserted: {total_stats['newsapi_articles']}")
+        print(f"  NYT articles inserted: {nyt_stats.get('articles_inserted', 0)}")
 
-        return {'success': True, 'stats': total_stats}
+        return {'success': True, 'stats': nyt_stats}
 
     except Exception as e:
         print(f"News ETL failed: {e}")

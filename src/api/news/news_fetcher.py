@@ -17,8 +17,6 @@ load_dotenv()
 
 # API base URLs
 NYT_BASE_URL = "https://api.nytimes.com/svc"
-NEWS_API_BASE_URL = "https://newsapi.org/v2"
-
 # NYT Top Stories sections
 NYT_SECTIONS = [
     'arts', 'automobiles', 'books', 'business', 'fashion', 'food',
@@ -42,19 +40,6 @@ def get_nyt_api_key() -> str:
     api_key = os.getenv('NYT_API_KEY')
     if not api_key:
         raise ValueError("NYT_API_KEY not found in environment variables")
-    return api_key
-
-
-def get_news_api_key() -> str:
-    """
-    Get NewsAPI key from environment variables
-    
-    Returns:
-        API key string
-    """
-    api_key = os.getenv('NEWS_API_KEY')
-    if not api_key:
-        raise ValueError("NEWS_API_KEY not found in environment variables")
     return api_key
 
 
@@ -92,12 +77,12 @@ def fetch_nyt_top_stories(section: str = 'home', api_key: Optional[str] = None) 
             return None
         
         articles = []
-        results = data.get('results', [])
-        
+        results = data.get('results') or []
+
         for article in results:
             # Extract multimedia images
             images = []
-            for media in article.get('multimedia', []):
+            for media in article.get('multimedia') or []:
                 images.append({
                     'url': media.get('url'),
                     'format': media.get('format'),
@@ -277,73 +262,6 @@ def fetch_all_nyt_top_stories(api_key: Optional[str] = None) -> Dict[str, Option
         time.sleep(0.1)
     
     return all_stories
-
-
-# ============================================================================
-# NEWSAPI FUNCTIONS
-# ============================================================================
-
-def fetch_newsapi_top_headlines(
-    category: str = 'general',
-    country: str = 'us',
-    page_size: int = 20,
-    api_key: Optional[str] = None
-) -> Optional[List[Dict[str, Any]]]:
-    """
-    Fetch top headlines from NewsAPI.
-
-    Args:
-        category: Category (general, technology, business, science, health, sports, entertainment)
-        country: Country code (us, gb, etc.)
-        page_size: Number of articles to fetch (max 100)
-        api_key: Optional API key
-
-    Returns:
-        List of article dictionaries or None on error
-    """
-    if api_key is None:
-        api_key = get_news_api_key()
-
-    url = f"{NEWS_API_BASE_URL}/top-headlines"
-    params = {
-        'category': category,
-        'country': country,
-        'pageSize': min(page_size, 100),
-        'apiKey': api_key,
-    }
-
-    try:
-        response = requests.get(url, params=params, timeout=10)
-        response.raise_for_status()
-        data = response.json()
-
-        if data.get('status') != 'ok':
-            print(f"NewsAPI error: {data.get('message', 'Unknown error')}")
-            return None
-
-        articles = []
-        for item in data.get('articles', []):
-            source = item.get('source', {})
-            articles.append({
-                'title': item.get('title'),
-                'description': item.get('description'),
-                'url': item.get('url'),
-                'image_url': item.get('urlToImage'),
-                'author': item.get('author'),
-                'source_name': source.get('name'),
-                'category': category,
-                'published_at': item.get('publishedAt'),
-                'fetched_at': datetime.now().isoformat()
-            })
-
-        return articles
-
-    except requests.exceptions.RequestException as e:
-        print(f"Error fetching NewsAPI headlines for category '{category}': {e}")
-        return None
-    except Exception as e:
-        print(f"Error parsing NewsAPI headlines for category '{category}': {e}")
-        return None
 
 
 if __name__ == "__main__":

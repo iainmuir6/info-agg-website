@@ -7,10 +7,7 @@
 
 from typing import Dict, List, Optional, Any
 from supabase import create_client, Client
-try:
-    from supabase.lib.client_options import ClientOptions
-except ImportError:
-    ClientOptions = None
+from supabase import ClientOptions
 import os
 from dotenv import load_dotenv
 
@@ -124,16 +121,10 @@ def insert_reddit_posts(supabase: Client, posts: List[Dict[str, Any]]) -> int:
 
     for post in posts:
         try:
-            # Extract post ID from permalink
+            post_id = post.get('post_id')
             permalink = post.get('permalink', '')
-            # post_id from Reddit's 'name' field (t3_XXXXX) or derive from permalink
-            parts = permalink.rstrip('/').split('/')
-            post_id = None
-            if len(parts) >= 6:
-                post_id = parts[-3] if len(parts) > 3 else parts[-1]
             if not post_id:
-                # Fallback: hash the URL
-                post_id = str(hash(permalink))[:10]
+                continue
 
             # Handle thumbnail URL
             thumbnail = post.get('thumbnail')

@@ -1,0 +1,427 @@
+#!/usr/bin/env python3
+"""
+generate_snippets.py — Capture live API response samples for each ETL data source.
+
+Writes JSON files to /data/snippets/{domain}/ with:
+  - endpoint: the URL called
+  - fetched_at: ISO timestamp
+  - raw_sample: up to 2 items from any list field
+  - stored_shape: the dict actually passed to Supabase upsert
+
+Usage:
+    source _agg_venv/bin/activate
+    python src/api/generate_snippets.py
+"""
+
+import json
+import os
+import sys
+import time
+from datetime import datetime, timezone
+from pathlib import Path
+
+# Allow imports from each domain's subfolder
+ROOT = Path(__file__).resolve().parent
+sys.path.insert(0, str(ROOT))
+sys.path.insert(0, str(ROOT / 'news'))
+sys.path.insert(0, str(ROOT / 'sports'))
+sys.path.insert(0, str(ROOT / 'markets'))
+sys.path.insert(0, str(ROOT / 'media'))
+
+# Load .env.local / .env
+from dotenv import load_dotenv
+for env_file in [ROOT.parent.parent / '.env.local', ROOT.parent.parent / '.env']:
+    if env_file.exists():
+        load_dotenv(env_file)
+        break
+
+SNIPPETS_DIR = ROOT.parent.parent / 'data' / 'snippets'
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def truncate_lists(obj, max_items: int = 2):
+    """Recursively truncate any list longer than max_items to first max_items elements."""
+    if isinstance(obj, list):
+        return [truncate_lists(item, max_items) for item in obj[:max_items]]
+    if isinstance(obj, dict):
+        return {k: truncate_lists(v, max_items) for k, v in obj.items()}
+    return obj
+
+
+def save_snippet(domain: str, name: str, endpoint: str, raw_sample, stored_shape):
+    out_dir = SNIPPETS_DIR / domain
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out_path = out_dir / f"{name}.json"
+    data = {
+        "endpoint": endpoint,
+        "fetched_at": datetime.now(timezone.utc).isoformat(),
+        "raw_sample": truncate_lists(raw_sample),
+        "stored_shape": truncate_lists(stored_shape),
+    }
+    with open(out_path, 'w') as f:
+        json.dump(data, f, indent=2, default=str)
+    return out_path
+
+
+# ---------------------------------------------------------------------------
+# NEWS
+# ---------------------------------------------------------------------------
+
+def snippet_nyt_top_stories():
+    from news_fetcher import fetch_nyt_top_stories
+    result = fetch_nyt_top_stories(section='technology')
+    if not result:
+        return None, "fetch returned None"
+    articles = result.get('articles', [])
+    raw_sample = result.copy()
+    raw_sample['articles'] = articles[:2]
+    # stored_shape mirrors news_db_helper insert_data
+    stored_shapes = []
+    for a in articles[:2]:
+        stored_shapes.append({
+            'title': a.get('title'),
+            'abstract': a.get('abstract'),
+            'url': a.get('url'),
+            'byline': a.get('byline'),
+            'section': a.get('section'),
+            'published_date': a.get('published_date'),
+            'image_url': a.get('multimedia', [{}])[0].get('url') if a.get('multimedia') else None,
+            'source': 'NYT',
+        })
+    return save_snippet(
+        'news', 'nyt_top_stories',
+        'GET https://api.nytimes.com/svc/topstories/v2/technology.json',
+        raw_sample, stored_shapes
+    ), None
+
+
+# ---------------------------------------------------------------------------
+# SPORTS
+# ---------------------------------------------------------------------------
+
+def snippet_espn_news():
+    from sports_fetcher import fetch_espn_news
+    articles = fetch_espn_news('basketball', 'nba', limit=5)
+    if not articles:
+        return None, "fetch returned empty list"
+    stored_shapes = []
+    for a in articles[:2]:
+        stored_shapes.append({
+            'league_id': '<looked up from leagues table>',
+            'title': a.get('title'),
+            'description': a.get('description'),
+            'url': a.get('url'),
+            'published_at': a.get('published_at'),
+            'source': a.get('source', 'ESPN'),
+            'image_url': a.get('image'),
+        })
+    return save_snippet(
+        'sports', 'espn_news',
+        'GET https://site.api.espn.com/apis/site/v2/sports/basketball/nba/news',
+        articles[:2], stored_shapes
+    ), None
+
+
+def snippet_espn_scoreboard():
+    from sports_fetcher import fetch_espn_scores
+    games = fetch_espn_scores('basketball', 'nba')
+    if not games:
+        return None, "fetch returned empty list"
+    stored_shapes = []
+    for g in games[:2]:
+        stored_shapes.append({
+            'league_id': '<looked up from leagues table>',
+            'event_id': str(g.get('event_id')),
+            'home_team': g.get('home_team'),
+            'away_team': g.get('away_team'),
+            'home_score': g.get('home_score'),
+            'away_score': g.get('away_score'),
+            'home_record': g.get('home_record'),
+            'away_record': g.get('away_record'),
+            'status': g.get('status'),
+            'status_detail': g.get('status_detail'),
+            'game_date': g.get('date'),
+            'venue': g.get('venue'),
+            'broadcast': g.get('broadcast'),
+            'week': g.get('week'),
+            'season': g.get('season'),
+        })
+    return save_snippet(
+        'sports', 'espn_scoreboard',
+        'GET https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard',
+        games[:2], stored_shapes
+    ), None
+
+
+# ---------------------------------------------------------------------------
+# MARKETS
+# ---------------------------------------------------------------------------
+
+def snippet_finnhub_quote():
+    from markets_fetcher import fetch_stock_quote, get_finnhub_api_key
+    api_key = get_finnhub_api_key()
+    quote = fetch_stock_quote('AAPL', api_key=api_key)
+    if not quote:
+        return None, "fetch returned None"
+    quote_timestamp = quote.get('timestamp') or int(time.time())
+    stored_shape = {
+        'stock_id': '<looked up from stocks table>',
+        'current_price': quote.get('current_price'),
+        'change_amount': quote.get('change'),
+        'percent_change': quote.get('percent_change'),
+        'high_price': quote.get('high_price'),
+        'low_price': quote.get('low_price'),
+        'open_price': quote.get('open_price'),
+        'previous_close': quote.get('previous_close'),
+        'quote_timestamp': quote_timestamp,
+    }
+    return save_snippet(
+        'markets', 'finnhub_quote',
+        'GET https://finnhub.io/api/v1/quote?symbol=AAPL',
+        quote, stored_shape
+    ), None
+
+
+def snippet_av_candles():
+    from markets_fetcher import fetch_stock_candles_av
+    candles = fetch_stock_candles_av('AAPL', days_back=7)
+    if not candles:
+        return None, "fetch returned None"
+    raw_sample = {k: (v[:2] if isinstance(v, list) else v) for k, v in candles.items()}
+    timestamps = candles.get('timestamps', [])
+    stored_shapes = []
+    for i in range(min(2, len(timestamps))):
+        stored_shapes.append({
+            'stock_id': '<looked up from stocks table>',
+            'resolution': candles.get('resolution'),
+            'candle_timestamp': timestamps[i],
+            'open_price': candles.get('open', [])[i] if i < len(candles.get('open', [])) else None,
+            'high_price': candles.get('high', [])[i] if i < len(candles.get('high', [])) else None,
+            'low_price': candles.get('low', [])[i] if i < len(candles.get('low', [])) else None,
+            'close_price': candles.get('close', [])[i] if i < len(candles.get('close', [])) else None,
+            'volume': candles.get('volume', [])[i] if i < len(candles.get('volume', [])) else None,
+        })
+    return save_snippet(
+        'markets', 'av_candles',
+        'GET https://www.alphavantage.co/query?function=TIME_SERIES_DAILY&symbol=AAPL',
+        raw_sample, stored_shapes
+    ), None
+
+
+def snippet_finnhub_profile():
+    from markets_fetcher import fetch_company_profile, get_finnhub_api_key
+    api_key = get_finnhub_api_key()
+    profile = fetch_company_profile('AAPL', api_key=api_key)
+    if not profile:
+        return None, "fetch returned None"
+    stored_shape = {
+        'ticker': profile.get('ticker'),
+        'name': profile.get('name'),
+        'country': profile.get('country'),
+        'currency': profile.get('currency'),
+        'exchange': profile.get('exchange'),
+        'ipo_date': profile.get('ipo_date'),
+        'market_cap': profile.get('market_cap'),
+        'share_outstanding': profile.get('share_outstanding'),
+        'logo_url': profile.get('logo'),
+        'website': profile.get('website'),
+        'industry': profile.get('industry'),
+    }
+    return save_snippet(
+        'markets', 'finnhub_profile',
+        'GET https://finnhub.io/api/v1/stock/profile2?symbol=AAPL',
+        profile, stored_shape
+    ), None
+
+
+def snippet_finnhub_company_news():
+    from markets_fetcher import fetch_company_news, get_finnhub_api_key
+    api_key = get_finnhub_api_key()
+    articles = fetch_company_news('AAPL', days_back=7, api_key=api_key)
+    if not articles:
+        return None, "fetch returned empty list"
+    stored_shapes = []
+    for a in articles[:2]:
+        stored_shapes.append({
+            'stock_id': '<looked up from stocks table>',
+            'headline': a.get('headline'),
+            'summary': a.get('summary'),
+            'url': a.get('url'),
+            'image_url': a.get('image_url'),
+            'source': a.get('source'),
+            'published_at': a.get('published_at'),
+            'related_tickers': a.get('related_tickers', []),
+        })
+    return save_snippet(
+        'markets', 'finnhub_company_news',
+        'GET https://finnhub.io/api/v1/company-news?symbol=AAPL',
+        articles[:2], stored_shapes
+    ), None
+
+
+def snippet_finnhub_market_news():
+    from markets_fetcher import fetch_market_news, get_finnhub_api_key
+    api_key = get_finnhub_api_key()
+    articles = fetch_market_news('crypto', api_key=api_key)
+    if not articles:
+        return None, "fetch returned empty list"
+    stored_shapes = []
+    for a in articles[:2]:
+        stored_shapes.append({
+            'category': a.get('category'),
+            'headline': a.get('headline'),
+            'summary': a.get('summary'),
+            'url': a.get('url'),
+            'image_url': a.get('image_url'),
+            'source': a.get('source'),
+            'published_at': a.get('published_at'),
+            'related_tickers': a.get('related_tickers', []),
+        })
+    return save_snippet(
+        'markets', 'finnhub_market_news',
+        'GET https://finnhub.io/api/v1/news?category=crypto',
+        articles[:2], stored_shapes
+    ), None
+
+
+# ---------------------------------------------------------------------------
+# MEDIA
+# ---------------------------------------------------------------------------
+
+def snippet_spotify_new_releases():
+    from media_fetcher import fetch_spotify_new_releases, get_spotify_access_token
+    token = get_spotify_access_token()
+    if not token:
+        return None, "failed to get Spotify access token"
+    result = fetch_spotify_new_releases(country='US', limit=5, access_token=token)
+    if not result:
+        return None, "fetch returned None"
+    albums = result.get('albums', [])
+    raw_sample = result.copy()
+    raw_sample['albums'] = albums[:2]
+    stored_shapes = []
+    for album in albums[:2]:
+        images = album.get('images', [])
+        image_url = None
+        for img in images:
+            if img.get('width', 0) >= 300:
+                image_url = img.get('url')
+                break
+        if not image_url and images:
+            image_url = images[0].get('url')
+        release_date = album.get('release_date')
+        precision = album.get('release_date_precision', 'day')
+        if release_date and precision == 'year':
+            release_date = f"{release_date}-01-01"
+        elif release_date and precision == 'month':
+            release_date = f"{release_date}-01"
+        stored_shapes.append({
+            'spotify_id': album.get('album_id') or album.get('id'),
+            'name': album.get('name'),
+            'artists': [a.get('name') for a in album.get('artists', []) if a.get('name')],
+            'album_type': album.get('album_type'),
+            'release_date': release_date,
+            'image_url': image_url,
+            'external_url': album.get('external_urls', {}).get('spotify'),
+            'total_tracks': album.get('total_tracks'),
+        })
+    return save_snippet(
+        'media', 'spotify_new_releases',
+        'GET https://api.spotify.com/v1/browse/new-releases?country=US',
+        raw_sample, stored_shapes
+    ), None
+
+
+def snippet_reddit_hot_posts():
+    from media_fetcher import fetch_reddit_hot
+    posts = fetch_reddit_hot('technology', limit=5)
+    if not posts:
+        return None, "fetch returned None or empty"
+    stored_shapes = []
+    for post in posts[:2]:
+        created_utc = post.get('created_utc')
+        posted_at = None
+        if created_utc:
+            posted_at = datetime.fromtimestamp(created_utc, tz=timezone.utc).isoformat()
+        thumbnail = post.get('thumbnail')
+        thumbnail_url = thumbnail if thumbnail and thumbnail.startswith('http') else None
+        stored_shapes.append({
+            'post_id': post.get('post_id'),
+            'subreddit': post.get('subreddit'),
+            'title': post.get('title'),
+            'author': post.get('author'),
+            'score': post.get('score', 0),
+            'upvote_ratio': post.get('upvote_ratio'),
+            'num_comments': post.get('num_comments', 0),
+            'url': post.get('url'),
+            'permalink': post.get('permalink'),
+            'selftext': (post.get('selftext') or '')[:200],
+            'thumbnail_url': thumbnail_url,
+            'is_self': post.get('is_self', False),
+            'flair': post.get('link_flair_text'),
+            'posted_at': posted_at,
+        })
+    return save_snippet(
+        'media', 'reddit_hot_posts',
+        'GET https://www.reddit.com/r/technology/hot.json',
+        posts[:2], stored_shapes
+    ), None
+
+
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
+
+SNIPPETS = [
+    ('news',    'nyt_top_stories',        snippet_nyt_top_stories),
+    ('sports',  'espn_news',              snippet_espn_news),
+    ('sports',  'espn_scoreboard',        snippet_espn_scoreboard),
+    ('markets', 'finnhub_quote',          snippet_finnhub_quote),
+    ('markets', 'av_candles',             snippet_av_candles),
+    ('markets', 'finnhub_profile',        snippet_finnhub_profile),
+    ('markets', 'finnhub_company_news',   snippet_finnhub_company_news),
+    ('markets', 'finnhub_market_news',    snippet_finnhub_market_news),
+    ('media',   'spotify_new_releases',   snippet_spotify_new_releases),
+    ('media',   'reddit_hot_posts',       snippet_reddit_hot_posts),
+]
+
+
+def main():
+    print("=" * 60)
+    print("Generating API snippets...")
+    print("=" * 60)
+
+    col_w = 30
+    results = []
+
+    for domain, name, fn in SNIPPETS:
+        label = f"{domain}/{name}"
+        print(f"  {label}...", end=' ', flush=True)
+        try:
+            path, err = fn()
+            if path:
+                status = "OK"
+                detail = str(path.relative_to(ROOT.parent.parent))
+            else:
+                status = "SKIP"
+                detail = err or "no data"
+        except Exception as exc:
+            status = "ERROR"
+            detail = str(exc)
+        print(status)
+        results.append((label, status, detail))
+
+    print()
+    print(f"{'Snippet':<40} {'Status':<8} Detail")
+    print("-" * 80)
+    for label, status, detail in results:
+        print(f"{label:<40} {status:<8} {detail}")
+
+    ok = sum(1 for _, s, _ in results if s == 'OK')
+    print(f"\n{ok}/{len(results)} snippets written successfully.")
+
+
+if __name__ == '__main__':
+    main()

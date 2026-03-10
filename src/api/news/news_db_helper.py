@@ -7,10 +7,7 @@
 
 from typing import Dict, List, Optional, Any
 from supabase import create_client, Client
-try:
-    from supabase.lib.client_options import ClientOptions
-except ImportError:
-    ClientOptions = None
+from supabase import ClientOptions
 import os
 from dotenv import load_dotenv
 
@@ -32,7 +29,7 @@ def get_supabase_client() -> Client:
 
 def _extract_nyt_image(article: Dict[str, Any]) -> Optional[str]:
     """Extract the best available image URL from a NYT article."""
-    multimedia = article.get('multimedia', [])
+    multimedia = article.get('multimedia') or []
     if not multimedia:
         return None
     # Prefer 'mediumThreeByTwo440' or first available
@@ -114,51 +111,6 @@ def insert_nyt_articles(supabase: Client, articles: List[Dict[str, Any]], source
     return inserted_count
 
 
-def insert_newsapi_articles(supabase: Client, articles: List[Dict[str, Any]]) -> int:
-    """
-    Insert NewsAPI article records into the news_articles table.
-
-    Args:
-        supabase: Supabase client instance
-        articles: List of article dicts from fetch_newsapi_top_headlines()
-
-    Returns:
-        Number of articles inserted/updated
-    """
-    if not articles:
-        return 0
-
-    inserted_count = 0
-
-    for article in articles:
-        try:
-            insert_data = {
-                'source': 'newsapi',
-                'section': article.get('category'),
-                'title': article.get('title'),
-                'abstract': article.get('description'),
-                'byline': article.get('author'),
-                'url': article.get('url'),
-                'image_url': article.get('image_url') or article.get('urlToImage'),
-                'published_at': article.get('published_at') or article.get('publishedAt'),
-            }
-
-            if not insert_data.get('url') or not insert_data.get('title'):
-                continue
-
-            response = supabase.table('news_articles').upsert(
-                insert_data,
-                on_conflict='url'
-            ).execute()
-
-            if response.data:
-                inserted_count += 1
-
-        except Exception as e:
-            print(f"Error inserting NewsAPI article '{article.get('title', 'unknown')}': {e}")
-
-    return inserted_count
-
 
 def sync_nyt_data(supabase: Client, sections: Optional[List[str]] = None) -> Dict[str, Any]:
     """
@@ -199,7 +151,7 @@ def sync_nyt_data(supabase: Client, sections: Optional[List[str]] = None) -> Dic
                 stats['sections_processed'] += 1
                 print(f"  Inserted {count} articles for '{section}'")
             import time
-            time.sleep(0.15)  # Respect NYT rate limits
+            time.sleep(7.0)  # NYT rate limit: 10 req/min; 7s ensures 10th call lands after 63s
         except Exception as e:
             error_msg = f"Error fetching NYT section '{section}': {e}"
             stats['errors'].append(error_msg)
@@ -219,50 +171,6 @@ def sync_nyt_data(supabase: Client, sections: Optional[List[str]] = None) -> Dic
     return stats
 
 
-def sync_newsapi_data(supabase: Client) -> Dict[str, Any]:
-    """
-    Sync top headlines from NewsAPI to the database.
-
-    Args:
-        supabase: Supabase client instance
-
-    Returns:
-        Dictionary with sync statistics
-    """
-    try:
-        from .news_fetcher import fetch_newsapi_top_headlines
-    except ImportError:
-        import sys
-        current_dir = os.path.dirname(os.path.abspath(__file__))
-        if current_dir not in sys.path:
-            sys.path.insert(0, current_dir)
-        from news_fetcher import fetch_newsapi_top_headlines
-
-    stats = {
-        'categories_processed': 0,
-        'articles_inserted': 0,
-        'errors': []
-    }
-
-    categories = ['general', 'technology', 'business', 'science', 'health', 'sports', 'entertainment']
-
-    for category in categories:
-        try:
-            print(f"Fetching NewsAPI headlines for category: {category}...")
-            articles = fetch_newsapi_top_headlines(category=category)
-            if articles:
-                count = insert_newsapi_articles(supabase, articles)
-                stats['articles_inserted'] += count
-                stats['categories_processed'] += 1
-                print(f"  Inserted {count} articles for '{category}'")
-        except Exception as e:
-            error_msg = f"Error fetching NewsAPI category '{category}': {e}"
-            stats['errors'].append(error_msg)
-            print(error_msg)
-
-    return stats
-
-
 if __name__ == "__main__":
     print("=" * 60)
     print("Syncing news data to database...")
@@ -277,16 +185,9 @@ if __name__ == "__main__":
         print(f"  Sections processed: {nyt_stats['sections_processed']}")
         print(f"  Articles inserted: {nyt_stats['articles_inserted']}")
 
-        print("\n--- Syncing NewsAPI Data ---")
-        newsapi_stats = sync_newsapi_data(supabase)
-        print(f"\nNewsAPI Sync Complete:")
-        print(f"  Categories processed: {newsapi_stats['categories_processed']}")
-        print(f"  Articles inserted: {newsapi_stats['articles_inserted']}")
-
-        all_errors = nyt_stats.get('errors', []) + newsapi_stats.get('errors', [])
-        if all_errors:
+        if nyt_stats.get('errors'):
             print(f"\nErrors encountered:")
-            for error in all_errors:
+            for error in nyt_stats['errors']:
                 print(f"  - {error}")
 
     except Exception as e:

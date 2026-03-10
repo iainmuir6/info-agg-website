@@ -7,11 +7,9 @@
 
 from typing import Dict, List, Optional, Any
 from supabase import create_client, Client
-try:
-    from supabase.lib.client_options import ClientOptions
-except ImportError:
-    ClientOptions = None
+from supabase import ClientOptions
 import os
+import time
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -48,21 +46,23 @@ def get_or_create_stock(supabase: Client, ticker: str, profile_data: Optional[Di
         Stock ID if found/created, None otherwise
     """
     try:
-        # Try to get existing stock
-        response = supabase.table('stocks').select('id').eq('ticker', ticker).single().execute()
-        stock_id = response.data.get('id') if response.data else None
+        # Try to get existing stock (maybe_single returns None on 0 rows in supabase 2.x)
+        response = supabase.table('stocks').select('id').eq('ticker', ticker).maybe_single().execute()
+        stock_id = response.data.get('id') if (response and response.data) else None
         
         if stock_id:
             # Update if profile data provided
             if profile_data:
+                _mc = profile_data.get('market_cap')
+                _so = profile_data.get('share_outstanding')
                 update_data = {
                     'name': profile_data.get('name'),
                     'country': profile_data.get('country'),
                     'currency': profile_data.get('currency'),
                     'exchange': profile_data.get('exchange'),
                     'ipo_date': profile_data.get('ipo_date'),
-                    'market_cap': profile_data.get('market_cap'),
-                    'share_outstanding': profile_data.get('share_outstanding'),
+                    'market_cap': int(round(_mc)) if _mc is not None else None,
+                    'share_outstanding': int(round(_so)) if _so is not None else None,
                     'logo_url': profile_data.get('logo'),
                     'website': profile_data.get('website'),
                     'industry': profile_data.get('industry')
@@ -74,6 +74,8 @@ def get_or_create_stock(supabase: Client, ticker: str, profile_data: Optional[Di
             return stock_id
         else:
             # Create new stock
+            _mc = profile_data.get('market_cap') if profile_data else None
+            _so = profile_data.get('share_outstanding') if profile_data else None
             insert_data = {
                 'ticker': ticker,
                 'name': profile_data.get('name') if profile_data else None,
@@ -81,8 +83,8 @@ def get_or_create_stock(supabase: Client, ticker: str, profile_data: Optional[Di
                 'currency': profile_data.get('currency') if profile_data else None,
                 'exchange': profile_data.get('exchange') if profile_data else None,
                 'ipo_date': profile_data.get('ipo_date') if profile_data else None,
-                'market_cap': profile_data.get('market_cap') if profile_data else None,
-                'share_outstanding': profile_data.get('share_outstanding') if profile_data else None,
+                'market_cap': int(round(_mc)) if _mc is not None else None,
+                'share_outstanding': int(round(_so)) if _so is not None else None,
                 'logo_url': profile_data.get('logo') if profile_data else None,
                 'website': profile_data.get('website') if profile_data else None,
                 'industry': profile_data.get('industry') if profile_data else None
@@ -90,7 +92,10 @@ def get_or_create_stock(supabase: Client, ticker: str, profile_data: Optional[Di
             # Remove None values
             insert_data = {k: v for k, v in insert_data.items() if v is not None}
             
-            response = supabase.table('stocks').insert(insert_data).execute()
+            response = supabase.table('stocks').upsert(
+                insert_data,
+                on_conflict='ticker'
+            ).execute()
             return response.data[0].get('id') if response.data else None
             
     except Exception as e:
@@ -111,6 +116,7 @@ def insert_stock_quote(supabase: Client, stock_id: int, quote_data: Dict[str, An
         True if successful, False otherwise
     """
     try:
+        quote_timestamp = quote_data.get('timestamp') or int(time.time())
         insert_data = {
             'stock_id': stock_id,
             'current_price': quote_data.get('current_price'),
@@ -120,7 +126,7 @@ def insert_stock_quote(supabase: Client, stock_id: int, quote_data: Dict[str, An
             'low_price': quote_data.get('low_price'),
             'open_price': quote_data.get('open_price'),
             'previous_close': quote_data.get('previous_close'),
-            'quote_timestamp': quote_data.get('timestamp')
+            'quote_timestamp': quote_timestamp
         }
         
         # Use upsert to handle duplicates
@@ -310,7 +316,7 @@ def sync_stock_data(
     # Import from markets_fetcher module
     try:
         from .markets_fetcher import (
-            fetch_stock_quote, fetch_stock_candles, fetch_company_profile,
+            fetch_stock_quote, fetch_stock_candles_av, fetch_company_profile,
             fetch_company_news, get_finnhub_api_key
         )
     except ImportError:
@@ -321,7 +327,7 @@ def sync_stock_data(
         if current_dir not in sys.path:
             sys.path.insert(0, current_dir)
         from markets_fetcher import (
-            fetch_stock_quote, fetch_stock_candles, fetch_company_profile,
+            fetch_stock_quote, fetch_stock_candles_av, fetch_company_profile,
             fetch_company_news, get_finnhub_api_key
         )
     
@@ -363,10 +369,10 @@ def sync_stock_data(
                 if insert_stock_quote(supabase, stock_id, quote):
                     stats['quotes_inserted'] = 1
         
-        # Fetch and insert candles
+        # Fetch and insert candles (Alpha Vantage TIME_SERIES_DAILY)
         if fetch_candles:
             print(f"Fetching candles for {ticker}...")
-            candles = fetch_stock_candles(ticker, resolution='D', days_back=365, api_key=api_key)
+            candles = fetch_stock_candles_av(ticker, days_back=365)
             if candles:
                 count = insert_stock_candles(supabase, stock_id, candles)
                 stats['candles_inserted'] = count
