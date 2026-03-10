@@ -10,17 +10,17 @@ pnpm dev          # Start Next.js dev server with Turbopack (localhost:3000)
 pnpm build        # Production build
 pnpm lint         # ESLint
 
-# ETL (Python — run from repo root or src/api/)
+# ETL (Python — run from repo root)
 source _agg_venv/bin/activate
-python src/api/run_etl.py                          # Full ETL (all domains)
+python src/api/run_etl.py                          # Full ETL (all domains; FMP runs inside markets)
 python src/api/run_etl.py --sports-only
-python src/api/run_etl.py --markets-only
+python src/api/run_etl.py --markets-only           # Includes FMP
 python src/api/run_etl.py --news-only
 python src/api/run_etl.py --media-only
 python src/api/run_etl.py --skip-markets --skip-media
-python src/api/run_etl.py --fmp-only               # Run FMP ETL only
-python src/api/run_etl.py --fmp-etf-only           # FMP for ETF tickers only (saves budget)
-python src/api/run_etl.py --skip-fmp               # Skip FMP entirely
+python src/api/run_etl.py --fmp-etf-only           # Within markets: FMP for ETF tickers only (saves budget)
+python src/api/run_etl.py --markets-only --backfill-quotes 90   # Seed: backfill 90d of history
+# See src/api/RUNBOOK.md for full seed vs. daily run guide
 ```
 
 ## Rate Limits
@@ -70,7 +70,7 @@ Each domain follows the same pattern:
 
 **Domain → data sources:**
 - `sports/` → ESPN API (scores + news for NFL, NBA, NHL, MLB, EPL, etc.)
-- `markets/` → Finnhub API (stock quotes, company news, market news) + FMP API (company profiles, ETF holdings)
+- `markets/` → Finnhub API (daily quotes, company news, market news) + FMP API (company profiles, ETF holdings, historical backfill) + Alpha Vantage (news sentiment)
 - `news/` → NYT Top Stories API + NewsAPI
 - `media/` → Spotify API (new releases) + Reddit API (hot posts)
 - `misc/` — placeholder for additional sources
@@ -87,7 +87,7 @@ All tables live in the `info_agg` schema. Apply migrations in order:
 
 **Key tables:**
 - Sports: `leagues`, `sports_news`, `sports_scores`
-- Markets: `stocks`, `stock_quotes`, `etf_holdings`, `company_news`, `market_news`
+- Markets: `stocks`, `stock_quotes`, `etf_holdings`, `company_news`, `market_news`, `news_sentiment`
 - News: `news_articles`
 - Media: `spotify_releases`, `reddit_posts`
 

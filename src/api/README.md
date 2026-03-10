@@ -1,52 +1,191 @@
-# API Directory
+# ETL Pipeline
 
-This directory contains Python scripts for fetching data from various APIs and external sources.
+Python ETL orchestrator for the Info Aggregator. Fetches data from external APIs and upserts it into Supabase (`info_agg` schema).
 
-## Structure
+All commands below assume you are in the **repo root** and the venv is active:
 
-- `news/` - Scripts for news APIs (NewsAPI, RSS feeds, etc.)
-- `sports/` - Scripts for sports data (ESPN, sports APIs, etc.)
-- `markets/` - Scripts for financial data (Alpha Vantage, Yahoo Finance, etc.)
-- `media/` - Scripts for media content (YouTube API, social media APIs, etc.)
-- `misc/` - Scripts for miscellaneous data sources
+```bash
+source _agg_venv/bin/activate
+```
+
+---
+
+## Directory Structure
+
+```
+src/api/
+├── run_etl.py               # Orchestrator — entry point for all ETL runs
+├── requirements.txt         # Python dependencies
+├── RATE_LIMITS.md           # Per-API rate limits and budget notes
+│
+├── markets/
+│   ├── baskets.json         # Watchlist: 5 groups, 36 tickers (stocks, ETFs, crypto)
+│   ├── alpha_vantage.py     # AV fetcher: candles, crypto candles, news sentiment
+│   ├── finnhub.py           # Finnhub fetcher: quotes, crypto quotes, company/market news
+│   ├── fmp.py               # FMP fetcher: ETF info, ETF holdings, company profiles, backfill
+│   └── markets_db_helper.py # DB layer: upserts for all markets tables
+│
+├── sports/
+│   ├── sports_fetcher.py    # ESPN fetcher: scores + news for all configured leagues
+│   └── sports_db_helper.py  # DB layer: upserts for leagues, sports_news, sports_scores
+│
+├── news/
+│   ├── nyt.py               # NYT Top Stories + Most Popular fetcher
+│   └── news_db_helper.py    # DB layer: upserts for news_articles
+│
+└── media/
+    ├── spotify.py           # Spotify new releases fetcher
+    ├── reddit.py            # Reddit hot posts fetcher (unauthenticated)
+    └── media_db_helper.py   # DB layer: upserts for spotify_releases, reddit_posts
+```
+
+---
 
 ## Setup
 
-1. Install Python dependencies:
+1. **Install dependencies**
    ```bash
-   pip install -r requirements.txt
+   pip install -r src/api/requirements.txt
    ```
 
-2. Create a `.env` file in the root directory with your API keys:
+2. **Configure `.env.local`** in the repo root:
    ```
-   NEWS_API_KEY=your_news_api_key
-   ALPHA_VANTAGE_API_KEY=your_alpha_vantage_key
-   YOUTUBE_API_KEY=your_youtube_api_key
-   # Add other API keys as needed
+   NEXT_PUBLIC_SUPABASE_URL=https://<project>.supabase.co
+   SUPABASE_SERVICE_ROLE_KEY=<service-role-key>
+
+   # Markets
+   FINNHUB_API_KEY=<key>
+   FMP_API_KEY=<key>
+   ALPHA_VANTAGE_API_KEY=<key>
+   ALPHA_VANTAGE_API_KEY_1=<key>   # optional second key for rotation
+   ALPHA_VANTAGE_API_KEY_2=<key>   # optional third key
+
+   # News
+   NYT_API_KEY=<key>
+
+   # Media
+   SPOTIFY_CLIENT_ID=<id>
+   SPOTIFY_CLIENT_SECRET=<secret>
    ```
 
-## Usage
+3. **Apply DB migrations** (once, on a new environment):
+   ```bash
+   # Run in order via Supabase SQL editor or MCP
+   supabase/01_schema.sql
+   supabase/02_tables.sql
+   supabase/03_rls.sql
+   supabase/04_indexes.sql
+   ```
 
-Each script should be designed to:
-1. Fetch data from external APIs
-2. Process and clean the data
-3. Store data in Supabase or return structured data
-4. Handle errors gracefully
+---
 
-## Example Script Structure
+## Watchlist — `baskets.json`
 
-```python
-import os
-import requests
-from dotenv import load_dotenv
+All market ETL is driven by `markets/baskets.json`. Five groups determine which fetcher and `asset_type` each ticker uses:
 
-load_dotenv()
+| Group | Asset Type | Tickers (count) | Quote Source | Backfill Source |
+|-------|-----------|-----------------|--------------|-----------------|
+| `core_stocks` | `stock` | AAPL MSFT NVDA AMZN GOOGL META TSLA BRK.B JPM AVGO (10) | Finnhub `/quote` | AV `TIME_SERIES_DAILY` |
+| `core_market` | `etf` | VTI SPY QQQ IWM VXUS (5) | Finnhub `/quote` | AV `TIME_SERIES_DAILY` |
+| `sectors` | `etf` | XLC XLY XLP XLE XLF XLV XLI XLB XLRE XLK XLU (11) | Finnhub `/quote` | AV `TIME_SERIES_DAILY` |
+| `breadth` | `etf` | RSP VUG VTV (3) | Finnhub `/quote` | AV `TIME_SERIES_DAILY` |
+| `risk` | `etf` | TLT HYG GLD UUP (4) | Finnhub `/quote` | AV `TIME_SERIES_DAILY` |
+| `crypto` | `crypto` | BTC ETH XRP (3) | Finnhub `/crypto/candle` | AV `DIGITAL_CURRENCY_DAILY` |
 
-def fetch_data():
-    api_key = os.getenv('API_KEY')
-    # Your API logic here
-    pass
+To add or remove tickers, edit `baskets.json` — no code changes required.
 
-if __name__ == "__main__":
-    fetch_data()
+---
+
+## Running the ETL
+
+See **[`RUNBOOK.md`](RUNBOOK.md)** for the full guide, including:
+- Step-by-step initial seed instructions
+- What the daily run does per domain
+- Budget guidance and decision tree
+
+### Quick reference
+
+```bash
+# Initial seed (new environment) — backfill 90 days of history
+python src/api/run_etl.py --markets-only --backfill-quotes 90
+python src/api/run_etl.py --sports-only && python src/api/run_etl.py --news-only && python src/api/run_etl.py --media-only
+
+# Daily run
+python src/api/run_etl.py
+
+# Daily run — save FMP budget (ETF tickers only)
+python src/api/run_etl.py --fmp-etf-only
+
+# Markets only
+python src/api/run_etl.py --markets-only
 ```
+
+### All flags
+
+| Flag | Effect |
+|------|--------|
+| `--sports-only` | Run sports ETL only |
+| `--markets-only` | Run markets ETL only (includes FMP) |
+| `--news-only` | Run news ETL only |
+| `--media-only` | Run media ETL only |
+| `--skip-sports` | Skip sports ETL |
+| `--skip-markets` | Skip markets ETL (includes FMP) |
+| `--skip-news` | Skip news ETL |
+| `--skip-media` | Skip media ETL |
+| `--backfill-quotes DAYS` | Backfill N days of OHLCV history via AV (seed mode; company news skipped) |
+| `--fmp-etf-only` | Within markets: restrict FMP to ETF tickers only |
+| `--all-sentiment-topics` | Fetch all 10 AV sentiment topics (default: 5) |
+| `--watchlist TICKER ...` | Override basket watchlist with a custom ticker list |
+| `--output FILE` | Write results JSON to FILE |
+
+---
+
+## Data Flow
+
+```
+baskets.json
+    │
+    ├─ core_stocks (stock) ──► Finnhub /quote ──────────────────► stock_quotes
+    ├─ core_market (etf)   ──► Finnhub /quote ──────────────────► stock_quotes
+    ├─ sectors (etf)       ──► Finnhub /quote ──────────────────► stock_quotes
+    ├─ breadth (etf)       ──► Finnhub /quote ──────────────────► stock_quotes
+    ├─ risk (etf)          ──► Finnhub /quote ──────────────────► stock_quotes
+    └─ crypto (crypto)     ──► Finnhub /crypto/candle ──────────► stock_quotes
+
+    Profiles:
+    ├─ stocks  ──► Finnhub /stock/profile2 ──────────────────────► stocks
+    ├─ etfs    ──► FMP /etf/information ────────────────────────► stocks
+    │              FMP /etf/holdings ───────────────────────────► etf_holdings
+    └─ stocks  ──► FMP /api/v3/profile ─────────────────────────► stocks (sector, CEO, etc.)
+
+    Backfill (--backfill-quotes N):
+    ├─ stocks/etfs ──► AV TIME_SERIES_DAILY ─────────────────────► stock_quotes (bulk)
+    └─ crypto      ──► AV DIGITAL_CURRENCY_DAILY ────────────────► stock_quotes (bulk)
+
+Finnhub /company-news ───────────────────────────────────────────► company_news
+Finnhub /news (general/forex/crypto/merger) ─────────────────────► market_news
+AV NEWS_SENTIMENT (5–10 topics) ─────────────────────────────────► news_sentiment
+
+ESPN /news, /scoreboard ─────────────────────────────────────────► sports_news, sports_scores
+
+NYT /topstories, /mostpopular ───────────────────────────────────► news_articles
+
+Spotify /browse/new-releases ────────────────────────────────────► spotify_releases
+Reddit /r/{sub}/hot ─────────────────────────────────────────────► reddit_posts
+```
+
+---
+
+## Rate Limits Summary
+
+See [`RATE_LIMITS.md`](RATE_LIMITS.md) for full details. Quick reference:
+
+| API | Window | Limit | Strategy |
+|-----|--------|-------|----------|
+| Finnhub | 60 s | 60 req | Sliding-window deque — burst then sleep |
+| Alpha Vantage | 60 s / key | 5 req | Sliding-window deque per key — burst then sleep |
+| FMP | 1 day | 250 req | Daily counter; warns at 220, raises at 250 |
+| NYT | 60 s | 10 req | Fixed 7 s sleep between section calls |
+| Reddit | 60 s | 60 req | 1 s sleep between subreddit calls |
+| Spotify | — | ~30/s | No explicit limiting needed at current volume |
+| ESPN | — | Unknown | No limiting applied (unofficial API, low call count) |
