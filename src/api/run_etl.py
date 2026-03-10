@@ -38,6 +38,7 @@ DEFAULT_SUBREDDITS = [
 ]
 
 MARKET_NEWS_CATEGORIES = ['general', 'forex', 'crypto', 'merger']
+ETF_TICKERS = ['SPY', 'QQQ', 'DIA']
 
 
 def get_supabase_client() -> Client:
@@ -75,10 +76,9 @@ def run_sports_etl(supabase: Client) -> Dict[str, Any]:
 def run_markets_etl(
     supabase: Client,
     watchlist: Optional[List[str]] = None,
-    fetch_candles: bool = True,
     quote_days_back: int = 0
 ) -> Dict[str, Any]:
-    """Run markets ETL: stock quotes, candles, company news, and market news."""
+    """Run markets ETL: stock quotes, company news, and market news."""
     print("\n" + "=" * 60)
     print("MARKETS ETL")
     print("=" * 60)
@@ -93,7 +93,6 @@ def run_markets_etl(
         total_stats = {
             'stocks_processed': 0,
             'quotes_inserted': 0,
-            'candles_inserted': 0,
             'news_inserted': 0,
             'market_news_inserted': 0,
             'errors': []
@@ -105,14 +104,12 @@ def run_markets_etl(
                 supabase,
                 ticker,
                 fetch_quotes=True,
-                fetch_candles=fetch_candles,
                 fetch_news=(quote_days_back == 0),  # skip company news during backfill
                 fetch_profile=True,
                 quote_days_back=quote_days_back
             )
             total_stats['stocks_processed'] += 1
             total_stats['quotes_inserted'] += stats.get('quotes_inserted', 0)
-            total_stats['candles_inserted'] += stats.get('candles_inserted', 0)
             total_stats['news_inserted'] += stats.get('news_inserted', 0)
             total_stats['errors'].extend(stats.get('errors', []))
 
@@ -125,7 +122,6 @@ def run_markets_etl(
         print(f"\nMarkets ETL Complete:")
         print(f"  Stocks processed: {total_stats['stocks_processed']}")
         print(f"  Quotes inserted: {total_stats['quotes_inserted']}")
-        print(f"  Candles inserted: {total_stats['candles_inserted']}")
         print(f"  Company news inserted: {total_stats['news_inserted']}")
         print(f"  Market news inserted: {total_stats['market_news_inserted']}")
 
@@ -208,13 +204,56 @@ def run_media_etl(
         return {'success': False, 'error': str(e)}
 
 
+def run_fmp_etl(
+    supabase: Client,
+    watchlist: Optional[List[str]] = None,
+    etf_only: bool = False,
+    skip_holdings: bool = False
+) -> Dict[str, Any]:
+    """Run FMP ETL: enrich company profiles and upsert ETF holdings."""
+    print("\n" + "=" * 60)
+    print("FMP ETL")
+    print("=" * 60)
+
+    if watchlist is None:
+        watchlist = DEFAULT_WATCHLIST
+
+    etf_tickers = [t for t in watchlist if t in ETF_TICKERS]
+    tickers_to_process = etf_tickers if etf_only else watchlist
+
+    try:
+        sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'markets'))
+        from markets.markets_db_helper import sync_fmp_data
+
+        stats = sync_fmp_data(
+            supabase,
+            watchlist=tickers_to_process,
+            etf_tickers=etf_tickers,
+            skip_holdings=skip_holdings
+        )
+
+        print(f"\nFMP ETL Complete:")
+        print(f"  Company profiles updated: {stats['profiles_updated']}")
+        print(f"  ETF info updated:         {stats['etf_info_updated']}")
+        print(f"  ETF holdings upserted:    {stats['etf_holdings_upserted']}")
+        if stats.get('errors'):
+            print(f"  Errors: {len(stats['errors'])}")
+
+        return {'success': True, 'stats': stats}
+
+    except Exception as e:
+        print(f"FMP ETL failed: {e}")
+        return {'success': False, 'error': str(e)}
+
+
 def run_full_etl(
     watchlist: Optional[List[str]] = None,
     skip_sports: bool = False,
     skip_markets: bool = False,
     skip_news: bool = False,
     skip_media: bool = False,
-    fetch_candles: bool = True,
+    skip_fmp: bool = False,
+    fmp_etf_only: bool = False,
     quote_days_back: int = 0
 ) -> Dict[str, Any]:
     """
@@ -226,7 +265,8 @@ def run_full_etl(
         skip_markets: Skip markets ETL
         skip_news: Skip news ETL
         skip_media: Skip media ETL
-        fetch_candles: Whether to fetch historical candle data (slow)
+        skip_fmp: Skip FMP ETL
+        fmp_etf_only: Run FMP for ETF tickers only (saves daily budget)
         quote_days_back: If > 0, backfill this many days of daily quotes per ticker
 
     Returns:
@@ -246,6 +286,7 @@ def run_full_etl(
         'markets': None,
         'news': None,
         'media': None,
+        'fmp': None,
     }
 
     if not skip_sports:
@@ -253,7 +294,7 @@ def run_full_etl(
 
     if not skip_markets:
         results['markets'] = run_markets_etl(
-            supabase, watchlist=watchlist, fetch_candles=fetch_candles, quote_days_back=quote_days_back
+            supabase, watchlist=watchlist, quote_days_back=quote_days_back
         )
 
     if not skip_news:
@@ -261,6 +302,9 @@ def run_full_etl(
 
     if not skip_media:
         results['media'] = run_media_etl(supabase)
+
+    if not skip_fmp:
+        results['fmp'] = run_fmp_etl(supabase, watchlist=watchlist, etf_only=fmp_etf_only)
 
     end_time = datetime.now()
     duration = (end_time - start_time).total_seconds()
@@ -272,7 +316,7 @@ def run_full_etl(
     print("=" * 60)
 
     # Summary
-    for domain in ['sports', 'markets', 'news', 'media']:
+    for domain in ['sports', 'markets', 'news', 'media', 'fmp']:
         result = results.get(domain)
         if result:
             status = "OK" if result.get('success') else "FAILED"
@@ -289,7 +333,7 @@ def main():
     parser.add_argument('--skip-markets', action='store_true', help='Skip markets ETL')
     parser.add_argument('--skip-news', action='store_true', help='Skip news ETL')
     parser.add_argument('--skip-media', action='store_true', help='Skip media ETL')
-    parser.add_argument('--no-candles', action='store_true', help='Skip historical candle data (faster)')
+    parser.add_argument('--skip-fmp', action='store_true', help='Skip FMP ETL (saves daily budget)')
     parser.add_argument('--backfill-quotes', type=int, default=0, metavar='DAYS',
                         help='Backfill N days of daily quote history per ticker (e.g. 30)')
     parser.add_argument('--watchlist', nargs='+', help='Custom stock ticker list')
@@ -298,18 +342,23 @@ def main():
     parser.add_argument('--markets-only', action='store_true')
     parser.add_argument('--news-only', action='store_true')
     parser.add_argument('--media-only', action='store_true')
+    parser.add_argument('--fmp-only', action='store_true', help='Run FMP ETL only')
+    parser.add_argument('--fmp-etf-only', action='store_true',
+                        help='Run FMP for ETF tickers only (minimal budget use)')
 
     args = parser.parse_args()
 
     # Handle "only" flags
     if args.sports_only:
-        args.skip_markets = args.skip_news = args.skip_media = True
+        args.skip_markets = args.skip_news = args.skip_media = args.skip_fmp = True
     elif args.markets_only:
-        args.skip_sports = args.skip_news = args.skip_media = True
+        args.skip_sports = args.skip_news = args.skip_media = args.skip_fmp = True
     elif args.news_only:
-        args.skip_sports = args.skip_markets = args.skip_media = True
+        args.skip_sports = args.skip_markets = args.skip_media = args.skip_fmp = True
     elif args.media_only:
-        args.skip_sports = args.skip_markets = args.skip_news = True
+        args.skip_sports = args.skip_markets = args.skip_news = args.skip_fmp = True
+    elif args.fmp_only:
+        args.skip_sports = args.skip_markets = args.skip_news = args.skip_media = True
 
     results = run_full_etl(
         watchlist=args.watchlist,
@@ -317,7 +366,8 @@ def main():
         skip_markets=args.skip_markets,
         skip_news=args.skip_news,
         skip_media=args.skip_media,
-        fetch_candles=not args.no_candles,
+        skip_fmp=args.skip_fmp,
+        fmp_etf_only=args.fmp_etf_only,
         quote_days_back=args.backfill_quotes,
     )
 
@@ -329,7 +379,7 @@ def main():
     # Exit with non-zero if any domain failed
     any_failed = any(
         r and not r.get('success')
-        for r in [results['sports'], results['markets'], results['news'], results['media']]
+        for r in [results['sports'], results['markets'], results['news'], results['media'], results['fmp']]
         if r is not None
     )
     sys.exit(1 if any_failed else 0)

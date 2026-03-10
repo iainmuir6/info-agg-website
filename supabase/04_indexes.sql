@@ -77,25 +77,14 @@ CREATE INDEX IF NOT EXISTS idx_stock_quotes_fetched_at
 CREATE INDEX IF NOT EXISTS idx_stock_quotes_quote_timestamp
     ON info_agg.stock_quotes (quote_timestamp DESC);
 
--- Unique: one quote per stock per timestamp (dedup guard)
-CREATE UNIQUE INDEX IF NOT EXISTS idx_stock_quotes_stock_timestamp
-    ON info_agg.stock_quotes (stock_id, quote_timestamp);
 
+-- ── MARKETS — etf_holdings ──────────────────────────────────
 
--- ── MARKETS — stock_candles ─────────────────────────────────
+CREATE INDEX IF NOT EXISTS idx_etf_holdings_etf_stock_id
+    ON info_agg.etf_holdings (etf_stock_id);
 
-CREATE INDEX IF NOT EXISTS idx_stock_candles_stock_id
-    ON info_agg.stock_candles (stock_id);
-
-CREATE INDEX IF NOT EXISTS idx_stock_candles_resolution
-    ON info_agg.stock_candles (resolution);
-
-CREATE INDEX IF NOT EXISTS idx_stock_candles_timestamp
-    ON info_agg.stock_candles (candle_timestamp DESC);
-
--- Unique: one candle per stock / resolution / timestamp (dedup guard)
-CREATE UNIQUE INDEX IF NOT EXISTS idx_stock_candles_stock_resolution_timestamp
-    ON info_agg.stock_candles (stock_id, resolution, candle_timestamp);
+CREATE INDEX IF NOT EXISTS idx_etf_holdings_asset_symbol
+    ON info_agg.etf_holdings (asset_symbol);
 
 
 -- ── MARKETS — company_news ──────────────────────────────────

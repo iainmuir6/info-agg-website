@@ -51,11 +51,11 @@ CREATE POLICY "sports_scores: anon read"
 
 -- ── MARKETS ─────────────────────────────────────────────────
 
-ALTER TABLE info_agg.stocks       ENABLE ROW LEVEL SECURITY;
-ALTER TABLE info_agg.stock_quotes ENABLE ROW LEVEL SECURITY;
-ALTER TABLE info_agg.stock_candles ENABLE ROW LEVEL SECURITY;
-ALTER TABLE info_agg.company_news ENABLE ROW LEVEL SECURITY;
-ALTER TABLE info_agg.market_news  ENABLE ROW LEVEL SECURITY;
+ALTER TABLE info_agg.stocks        ENABLE ROW LEVEL SECURITY;
+ALTER TABLE info_agg.stock_quotes  ENABLE ROW LEVEL SECURITY;
+ALTER TABLE info_agg.company_news  ENABLE ROW LEVEL SECURITY;
+ALTER TABLE info_agg.market_news   ENABLE ROW LEVEL SECURITY;
+ALTER TABLE info_agg.etf_holdings  ENABLE ROW LEVEL SECURITY;
 
 CREATE POLICY "stocks: anon read"
     ON info_agg.stocks FOR SELECT
@@ -67,11 +67,6 @@ CREATE POLICY "stock_quotes: anon read"
     TO anon, authenticated
     USING (true);
 
-CREATE POLICY "stock_candles: anon read"
-    ON info_agg.stock_candles FOR SELECT
-    TO anon, authenticated
-    USING (true);
-
 CREATE POLICY "company_news: anon read"
     ON info_agg.company_news FOR SELECT
     TO anon, authenticated
@@ -79,6 +74,11 @@ CREATE POLICY "company_news: anon read"
 
 CREATE POLICY "market_news: anon read"
     ON info_agg.market_news FOR SELECT
+    TO anon, authenticated
+    USING (true);
+
+CREATE POLICY "etf_holdings: anon read"
+    ON info_agg.etf_holdings FOR SELECT
     TO anon, authenticated
     USING (true);
 

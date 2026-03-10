@@ -116,6 +116,48 @@ Access token expires after **3600 s** and is re-fetched at the start of each ETL
 
 ---
 
+## Financial Modeling Prep / FMP (Markets — ETF profiles, holdings, fundamentals)
+
+| Tier | Requests/day | Notes |
+|------|-------------|-------|
+| Free | **250** | Hard daily cap; resets at midnight |
+
+**Implementation:** daily counter `_FMP_DAILY_COUNT` + `_FMP_DAILY_DATE` in `markets/fmp.py`.
+- Issues a `warnings.warn` at 220 calls (configurable via `_FMP_WARN_THRESHOLD`)
+- Raises `RuntimeError` at 250 — callers catch this and abort remaining FMP calls gracefully
+- Counter resets automatically when `date.today()` differs from `_FMP_DAILY_DATE`
+
+**Env var:** `FMP_API_KEY`
+
+**Endpoints actively used in daily ETL:**
+- `GET /stable/etf/information?symbol=` — ETF name, expense ratio, AUM, asset class (fills Finnhub 403 gap)
+- `GET /stable/etf/holdings?symbol=` — per-holding weight %, shares, market value → `etf_holdings` table
+- `GET /api/v3/profile/{symbol}` — enriched company profile (sector, description, CEO, HQ, beta)
+
+**Endpoints available but NOT wired into daily ETL (future fundamentals):**
+- `/api/v3/income-statement/{symbol}` — income statements
+- `/api/v3/balance-sheet-statement/{symbol}` — balance sheets
+- `/api/v3/cash-flow-statement/{symbol}` — cash flow statements
+- `/api/v3/key-metrics/{symbol}` — P/E, EPS, ROE, margins
+- `/api/v3/financial-ratios/{symbol}` — financial ratios
+- `/api/v3/analyst-estimates/{symbol}` — analyst estimates
+- `/api/v3/insider-trading/{symbol}` — insider trades
+- `/api/v3/press-releases/{symbol}` — press releases
+
+**Daily budget plan (13-ticker watchlist):**
+
+| Data | Tickers | Calls | Cadence |
+|------|---------|-------|---------|
+| ETF info (SPY, QQQ, DIA) | 3 | 3 | Daily |
+| ETF holdings | 3 | 3 | Weekly |
+| Company profiles | 10 stocks | 10 | Weekly |
+| **Daily average** | | **~6** | — |
+| **Budget headroom** | | **~244/day** | — |
+
+**Auth:** `?apikey=KEY` query param appended to all requests (no header required).
+
+---
+
 ## NewsAPI — NOT CURRENTLY USED
 
 Referenced in old SQL migrations and `src/api/README.md` but **not called by any active fetcher**.

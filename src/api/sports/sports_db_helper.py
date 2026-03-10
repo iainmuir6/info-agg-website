@@ -32,7 +32,7 @@ def get_supabase_client() -> Client:
     return create_client(supabase_url, supabase_key)
 
 
-def get_league_id(supabase: Client, sport: str, league: str) -> Optional[int]:
+def get_league_id(supabase: Client, sport: str, league: str) -> Optional[str]:
     """
     Get the league ID for a given sport/league combination
     
@@ -52,7 +52,7 @@ def get_league_id(supabase: Client, sport: str, league: str) -> Optional[int]:
         return None
 
 
-def insert_news_articles(supabase: Client, league_id: int, articles: List[Dict[str, Any]]) -> int:
+def insert_news_articles(supabase: Client, league_id: str, articles: List[Dict[str, Any]]) -> int:
     """
     Insert news articles into the database
     
@@ -95,7 +95,7 @@ def insert_news_articles(supabase: Client, league_id: int, articles: List[Dict[s
     return inserted_count
 
 
-def insert_scores(supabase: Client, league_id: int, games: List[Dict[str, Any]]) -> int:
+def insert_scores(supabase: Client, league_id: str, games: List[Dict[str, Any]]) -> int:
     """
     Insert game scores/schedule into the database
     

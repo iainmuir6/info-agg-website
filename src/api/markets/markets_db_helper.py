@@ -8,6 +8,7 @@
 from typing import Dict, List, Optional, Any
 from supabase import create_client, Client
 from supabase import ClientOptions
+from datetime import datetime, timezone
 import os
 import time
 from dotenv import load_dotenv
@@ -33,7 +34,7 @@ def get_supabase_client() -> Client:
     return create_client(supabase_url, supabase_key)
 
 
-def get_or_create_stock(supabase: Client, ticker: str, profile_data: Optional[Dict[str, Any]] = None) -> Optional[int]:
+def get_or_create_stock(supabase: Client, ticker: str, profile_data: Optional[Dict[str, Any]] = None) -> Optional[str]:
     """
     Get stock ID, creating the stock record if it doesn't exist
     
@@ -103,7 +104,7 @@ def get_or_create_stock(supabase: Client, ticker: str, profile_data: Optional[Di
         return None
 
 
-def insert_stock_quote(supabase: Client, stock_id: int, quote_data: Dict[str, Any]) -> bool:
+def insert_stock_quote(supabase: Client, stock_id: str, quote_data: Dict[str, Any]) -> bool:
     """
     Insert stock quote data
     
@@ -116,7 +117,11 @@ def insert_stock_quote(supabase: Client, stock_id: int, quote_data: Dict[str, An
         True if successful, False otherwise
     """
     try:
-        quote_timestamp = quote_data.get('timestamp') or int(time.time())
+        ts = quote_data.get('timestamp')
+        quote_timestamp = (
+            datetime.fromtimestamp(ts, tz=timezone.utc).isoformat() if ts
+            else datetime.now(timezone.utc).isoformat()
+        )
         insert_data = {
             'stock_id': stock_id,
             'current_price': quote_data.get('current_price'),
@@ -126,6 +131,7 @@ def insert_stock_quote(supabase: Client, stock_id: int, quote_data: Dict[str, An
             'low_price': quote_data.get('low_price'),
             'open_price': quote_data.get('open_price'),
             'previous_close': quote_data.get('previous_close'),
+            'volume': quote_data.get('volume'),
             'quote_timestamp': quote_timestamp
         }
         
@@ -142,67 +148,8 @@ def insert_stock_quote(supabase: Client, stock_id: int, quote_data: Dict[str, An
         return False
 
 
-def insert_stock_candles(supabase: Client, stock_id: int, candles_data: Dict[str, Any]) -> int:
-    """
-    Insert stock candle data
-    
-    Args:
-        supabase: Supabase client instance
-        stock_id: Stock ID from stocks table
-        candles_data: Candles data dictionary from fetch_stock_candles()
-    
-    Returns:
-        Number of candles inserted
-    """
-    if not candles_data or not candles_data.get('timestamps'):
-        return 0
-    
-    inserted_count = 0
-    timestamps = candles_data.get('timestamps', [])
-    opens = candles_data.get('open', [])
-    highs = candles_data.get('high', [])
-    lows = candles_data.get('low', [])
-    closes = candles_data.get('close', [])
-    volumes = candles_data.get('volume', [])
-    resolution = candles_data.get('resolution', 'D')
-    
-    # Prepare batch insert data
-    batch_data = []
-    for i, timestamp in enumerate(timestamps):
-        if i < len(opens) and i < len(highs) and i < len(lows) and i < len(closes):
-            batch_data.append({
-                'stock_id': stock_id,
-                'resolution': resolution,
-                'candle_timestamp': timestamp,
-                'open_price': opens[i] if i < len(opens) else None,
-                'high_price': highs[i] if i < len(highs) else None,
-                'low_price': lows[i] if i < len(lows) else None,
-                'close_price': closes[i] if i < len(closes) else None,
-                'volume': volumes[i] if i < len(volumes) else None
-            })
-    
-    if not batch_data:
-        return 0
-    
-    try:
-        # Insert in batches to avoid overwhelming the database
-        batch_size = 100
-        for i in range(0, len(batch_data), batch_size):
-            batch = batch_data[i:i + batch_size]
-            response = supabase.table('stock_candles').upsert(
-                batch,
-                on_conflict='stock_id,resolution,candle_timestamp'
-            ).execute()
-            inserted_count += len(batch)
-        
-        return inserted_count
-        
-    except Exception as e:
-        print(f"Error inserting stock candles: {e}")
-        return 0
 
-
-def insert_stock_quotes_batch(supabase: Client, stock_id: int, quotes: List[Dict[str, Any]]) -> int:
+def insert_stock_quotes_batch(supabase: Client, stock_id: str, quotes: List[Dict[str, Any]]) -> int:
     """
     Bulk-upsert a list of quote records (e.g. from fetch_historical_quotes()).
 
@@ -213,7 +160,15 @@ def insert_stock_quotes_batch(supabase: Client, stock_id: int, quotes: List[Dict
 
     batch_data = []
     for q in quotes:
-        ts = q.get('timestamp') or int(time.time())
+        ts = q.get('timestamp')
+        # Alpha Vantage returns date strings (e.g. '2025-03-01') — valid TIMESTAMPTZ for Postgres.
+        # Finnhub returns Unix epoch integers — convert to ISO string.
+        if ts and isinstance(ts, (int, float)):
+            quote_timestamp = datetime.fromtimestamp(ts, tz=timezone.utc).isoformat()
+        elif ts:
+            quote_timestamp = ts  # already a date/datetime string
+        else:
+            quote_timestamp = datetime.now(timezone.utc).isoformat()
         batch_data.append({
             'stock_id': stock_id,
             'current_price': q.get('current_price'),
@@ -223,7 +178,8 @@ def insert_stock_quotes_batch(supabase: Client, stock_id: int, quotes: List[Dict
             'low_price': q.get('low_price'),
             'open_price': q.get('open_price'),
             'previous_close': q.get('previous_close'),
-            'quote_timestamp': ts
+            'volume': q.get('volume'),
+            'quote_timestamp': quote_timestamp
         })
 
     try:
@@ -242,7 +198,7 @@ def insert_stock_quotes_batch(supabase: Client, stock_id: int, quotes: List[Dict
         return 0
 
 
-def insert_company_news(supabase: Client, stock_id: int, articles: List[Dict[str, Any]]) -> int:
+def insert_company_news(supabase: Client, stock_id: str, articles: List[Dict[str, Any]]) -> int:
     """
     Insert company news articles
     
@@ -335,7 +291,6 @@ def sync_stock_data(
     supabase: Client,
     ticker: str,
     fetch_quotes: bool = True,
-    fetch_candles: bool = True,
     fetch_news: bool = True,
     fetch_profile: bool = True,
     quote_days_back: int = 0
@@ -347,7 +302,6 @@ def sync_stock_data(
         supabase: Supabase client instance
         ticker: Stock ticker symbol
         fetch_quotes: Whether to fetch and insert the latest quote
-        fetch_candles: Whether to fetch and insert candles (Alpha Vantage)
         fetch_news: Whether to fetch and insert company news
         fetch_profile: Whether to fetch and insert company/ETF profile
         quote_days_back: If > 0, backfill this many days of daily quotes using
@@ -359,9 +313,10 @@ def sync_stock_data(
     try:
         from .finnhub import (
             fetch_stock_quote, fetch_company_profile,
-            fetch_etf_profile, fetch_company_news, get_finnhub_api_key
+            fetch_company_news, get_finnhub_api_key
         )
-        from .alpha_vantage import fetch_stock_candles_av, fetch_historical_quotes
+        from .alpha_vantage import fetch_historical_quotes
+        from .fmp import fetch_etf_info as fmp_fetch_etf_info, get_fmp_api_key
     except ImportError:
         import sys
         import os
@@ -370,15 +325,15 @@ def sync_stock_data(
             sys.path.insert(0, current_dir)
         from finnhub import (
             fetch_stock_quote, fetch_company_profile,
-            fetch_etf_profile, fetch_company_news, get_finnhub_api_key
+            fetch_company_news, get_finnhub_api_key
         )
-        from alpha_vantage import fetch_stock_candles_av, fetch_historical_quotes
+        from alpha_vantage import fetch_historical_quotes
+        from fmp import fetch_etf_info as fmp_fetch_etf_info, get_fmp_api_key
 
     stats = {
         'ticker': ticker,
         'profile_updated': False,
         'quotes_inserted': 0,
-        'candles_inserted': 0,
         'news_inserted': 0,
         'errors': []
     }
@@ -386,13 +341,18 @@ def sync_stock_data(
     try:
         api_key = get_finnhub_api_key()
 
-        # Fetch and insert profile — try company profile first, fall back to ETF profile
+        # Fetch and insert profile — try company profile first, fall back to FMP ETF info
         if fetch_profile:
             print(f"Fetching profile for {ticker}...")
             profile = fetch_company_profile(ticker, api_key)
             if not profile:
-                print(f"  No company profile for {ticker}, trying ETF profile...")
-                profile = fetch_etf_profile(ticker, api_key)
+                print(f"  No company profile for {ticker}, trying FMP ETF info...")
+                try:
+                    fmp_key = get_fmp_api_key()
+                    profile = fmp_fetch_etf_info(ticker, fmp_key)
+                except Exception as fmp_err:
+                    print(f"  FMP ETF info unavailable for {ticker}: {fmp_err}")
+                    profile = None
             if profile:
                 stock_id = get_or_create_stock(supabase, ticker, profile)
                 if stock_id:
@@ -422,15 +382,6 @@ def sync_stock_data(
                 count = insert_stock_quotes_batch(supabase, stock_id, historical)
                 stats['quotes_inserted'] += count
                 print(f"  Backfilled {count} historical quotes")
-
-        # Fetch and insert candles (Alpha Vantage TIME_SERIES_DAILY)
-        if fetch_candles:
-            print(f"Fetching candles for {ticker}...")
-            candles = fetch_stock_candles_av(ticker, days_back=365)
-            if candles:
-                count = insert_stock_candles(supabase, stock_id, candles)
-                stats['candles_inserted'] = count
-                print(f"  Inserted {count} candles")
 
         # Fetch and insert company news
         if fetch_news:
@@ -497,6 +448,150 @@ def sync_market_news(supabase: Client, categories: List[str] = ['general'], api_
     return stats
 
 
+def upsert_etf_holdings(supabase: Client, etf_stock_id: str, holdings: List[Dict[str, Any]]) -> int:
+    """
+    Batch upsert ETF holdings into etf_holdings table.
+
+    Args:
+        supabase: Supabase client instance
+        etf_stock_id: Stock ID of the ETF from the stocks table
+        holdings: List of holding dicts from fmp.fetch_etf_holdings()
+
+    Returns:
+        Number of rows upserted
+    """
+    if not holdings:
+        return 0
+
+    batch_data = []
+    for h in holdings:
+        row = {
+            'etf_stock_id': etf_stock_id,
+            'asset_symbol': h.get('asset_symbol'),
+            'asset_name': h.get('asset_name'),
+            'weight_pct': h.get('weight_percentage'),
+            'shares': h.get('shares'),
+            'market_value': h.get('market_value'),
+            'as_of_date': h.get('as_of_date'),
+        }
+        # Drop None-only rows (must have at least a symbol)
+        if row['asset_symbol']:
+            batch_data.append(row)
+
+    if not batch_data:
+        return 0
+
+    try:
+        upserted = 0
+        batch_size = 100
+        for i in range(0, len(batch_data), batch_size):
+            batch = batch_data[i:i + batch_size]
+            supabase.table('etf_holdings').upsert(
+                batch,
+                on_conflict='etf_stock_id,asset_symbol,as_of_date'
+            ).execute()
+            upserted += len(batch)
+        return upserted
+    except Exception as e:
+        print(f"Error upserting ETF holdings for stock_id={etf_stock_id}: {e}")
+        return 0
+
+
+def sync_fmp_data(
+    supabase: Client,
+    watchlist: List[str],
+    etf_tickers: Optional[List[str]] = None,
+    skip_holdings: bool = False
+) -> Dict[str, Any]:
+    """
+    Master FMP sync function — enriches stocks and upserts ETF holdings.
+
+    Args:
+        supabase: Supabase client instance
+        watchlist: All tickers to enrich with FMP company profiles
+        etf_tickers: Subset of watchlist that are ETFs (gets info + optional holdings)
+        skip_holdings: If True, skip ETF holdings fetch (use on non-weekly days)
+
+    Returns:
+        Stats dict
+    """
+    try:
+        from .fmp import fetch_company_profile as fmp_profile, fetch_etf_info, fetch_etf_holdings, get_fmp_api_key
+    except ImportError:
+        import sys
+        import os
+        current_dir = os.path.dirname(os.path.abspath(__file__))
+        if current_dir not in sys.path:
+            sys.path.insert(0, current_dir)
+        from fmp import fetch_company_profile as fmp_profile, fetch_etf_info, fetch_etf_holdings, get_fmp_api_key
+
+    stats: Dict[str, Any] = {
+        'profiles_updated': 0,
+        'etf_info_updated': 0,
+        'etf_holdings_upserted': 0,
+        'errors': []
+    }
+
+    try:
+        api_key = get_fmp_api_key()
+    except ValueError as e:
+        stats['errors'].append(str(e))
+        print(f"FMP sync skipped: {e}")
+        return stats
+
+    if etf_tickers is None:
+        etf_tickers = []
+
+    etf_set = set(etf_tickers)
+
+    for ticker in watchlist:
+        try:
+            if ticker in etf_set:
+                print(f"  [{ticker}] Fetching FMP ETF info...")
+                info = fetch_etf_info(ticker, api_key)
+                if info:
+                    stock_id = get_or_create_stock(supabase, ticker, info)
+                    if stock_id:
+                        stats['etf_info_updated'] += 1
+
+                        if not skip_holdings:
+                            print(f"  [{ticker}] Fetching FMP ETF holdings...")
+                            holdings = fetch_etf_holdings(ticker, api_key)
+                            if holdings:
+                                count = upsert_etf_holdings(supabase, stock_id, holdings)
+                                stats['etf_holdings_upserted'] += count
+                                print(f"    Upserted {count} holdings")
+            else:
+                print(f"  [{ticker}] Fetching FMP company profile...")
+                profile = fmp_profile(ticker, api_key)
+                if profile:
+                    # Enrich existing stocks row with FMP extras
+                    stock_id = get_or_create_stock(supabase, ticker, profile)
+                    if stock_id:
+                        # Write FMP-only fields that get_or_create_stock doesn't cover
+                        extra_fields = {k: profile[k] for k in
+                                        ('sector', 'description', 'ceo', 'city', 'state', 'beta')
+                                        if profile.get(k) is not None}
+                        if extra_fields:
+                            try:
+                                supabase.table('stocks').update(extra_fields).eq('id', stock_id).execute()
+                            except Exception:
+                                pass  # columns may not exist yet — non-fatal
+                        stats['profiles_updated'] += 1
+
+        except RuntimeError as e:
+            # Daily limit hit — abort remaining FMP calls
+            print(f"FMP rate limit: {e}")
+            stats['errors'].append(str(e))
+            break
+        except Exception as e:
+            msg = f"FMP error for {ticker}: {e}"
+            print(msg)
+            stats['errors'].append(msg)
+
+    return stats
+
+
 if __name__ == "__main__":
     print("=" * 60)
     print("Syncing market data to database...")
@@ -507,11 +602,10 @@ if __name__ == "__main__":
         
         # Example: Sync data for a specific stock
         print("\n--- Syncing Stock Data ---")
-        stats = sync_stock_data(supabase, 'AAPL', fetch_quotes=True, fetch_candles=True, fetch_news=True)
+        stats = sync_stock_data(supabase, 'AAPL', fetch_quotes=True, fetch_news=True)
         print(f"\nSync Complete for {stats['ticker']}:")
         print(f"  Profile updated: {stats['profile_updated']}")
         print(f"  Quotes inserted: {stats['quotes_inserted']}")
-        print(f"  Candles inserted: {stats['candles_inserted']}")
         print(f"  News inserted: {stats['news_inserted']}")
         
         # Example: Sync market news

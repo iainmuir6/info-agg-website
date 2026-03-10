@@ -10,7 +10,7 @@
 -- SPORTS — leagues
 -- ============================================================
 CREATE TABLE IF NOT EXISTS info_agg.leagues (
-    id           SERIAL PRIMARY KEY,
+    id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     sport        TEXT    NOT NULL,
     league       TEXT    NOT NULL,
     display_name TEXT    NOT NULL,
@@ -43,8 +43,8 @@ ON CONFLICT (sport, league) DO NOTHING;
 -- SPORTS — sports_news
 -- ============================================================
 CREATE TABLE IF NOT EXISTS info_agg.sports_news (
-    id           SERIAL PRIMARY KEY,
-    league_id    INTEGER NOT NULL REFERENCES info_agg.leagues(id) ON DELETE CASCADE,
+    id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    league_id    UUID    NOT NULL REFERENCES info_agg.leagues(id) ON DELETE CASCADE,
     title        TEXT    NOT NULL,
     description  TEXT,
     url          TEXT    NOT NULL,
@@ -65,8 +65,8 @@ CREATE TRIGGER trg_sports_news_updated_at
 -- SPORTS — sports_scores
 -- ============================================================
 CREATE TABLE IF NOT EXISTS info_agg.sports_scores (
-    id            SERIAL PRIMARY KEY,
-    league_id     INTEGER NOT NULL REFERENCES info_agg.leagues(id) ON DELETE CASCADE,
+    id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    league_id     UUID    NOT NULL REFERENCES info_agg.leagues(id) ON DELETE CASCADE,
     event_id      TEXT    NOT NULL,
     home_team     TEXT    NOT NULL,
     away_team     TEXT    NOT NULL,
@@ -95,7 +95,7 @@ CREATE TRIGGER trg_sports_scores_updated_at
 -- MARKETS — stocks
 -- ============================================================
 CREATE TABLE IF NOT EXISTS info_agg.stocks (
-    id                SERIAL PRIMARY KEY,
+    id                UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     ticker            TEXT    NOT NULL UNIQUE,
     name              TEXT,
     country           TEXT,
@@ -107,6 +107,12 @@ CREATE TABLE IF NOT EXISTS info_agg.stocks (
     logo_url          TEXT,
     website           TEXT,
     industry          TEXT,
+    sector            TEXT,
+    description       TEXT,
+    ceo               TEXT,
+    city              TEXT,
+    state             TEXT,
+    beta              DECIMAL(8,4),
     is_active         BOOLEAN NOT NULL DEFAULT true,
     created_at        TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
     updated_at        TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
@@ -121,8 +127,8 @@ CREATE TRIGGER trg_stocks_updated_at
 -- MARKETS — stock_quotes
 -- ============================================================
 CREATE TABLE IF NOT EXISTS info_agg.stock_quotes (
-    id              SERIAL PRIMARY KEY,
-    stock_id        INTEGER NOT NULL REFERENCES info_agg.stocks(id) ON DELETE CASCADE,
+    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    stock_id        UUID    NOT NULL REFERENCES info_agg.stocks(id) ON DELETE CASCADE,
     current_price   DECIMAL(15, 4),
     change_amount   DECIMAL(15, 4),
     percent_change  DECIMAL(10, 4),
@@ -130,26 +136,11 @@ CREATE TABLE IF NOT EXISTS info_agg.stock_quotes (
     low_price       DECIMAL(15, 4),
     open_price      DECIMAL(15, 4),
     previous_close  DECIMAL(15, 4),
-    quote_timestamp BIGINT,
+    volume          BIGINT,
+    quote_timestamp TIMESTAMP WITH TIME ZONE NOT NULL,
     fetched_at      TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
-    created_at      TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
-);
-
-
--- ============================================================
--- MARKETS — stock_candles
--- ============================================================
-CREATE TABLE IF NOT EXISTS info_agg.stock_candles (
-    id               SERIAL PRIMARY KEY,
-    stock_id         INTEGER NOT NULL REFERENCES info_agg.stocks(id) ON DELETE CASCADE,
-    resolution       TEXT    NOT NULL,  -- 1, 5, 15, 30, 60, D, W, M
-    candle_timestamp BIGINT  NOT NULL,
-    open_price       DECIMAL(15, 4) NOT NULL,
-    high_price       DECIMAL(15, 4) NOT NULL,
-    low_price        DECIMAL(15, 4) NOT NULL,
-    close_price      DECIMAL(15, 4) NOT NULL,
-    volume           BIGINT,
-    created_at       TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
+    created_at      TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+    UNIQUE (stock_id, quote_timestamp)
 );
 
 
@@ -157,8 +148,8 @@ CREATE TABLE IF NOT EXISTS info_agg.stock_candles (
 -- MARKETS — company_news
 -- ============================================================
 CREATE TABLE IF NOT EXISTS info_agg.company_news (
-    id              SERIAL PRIMARY KEY,
-    stock_id        INTEGER NOT NULL REFERENCES info_agg.stocks(id) ON DELETE CASCADE,
+    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    stock_id        UUID    NOT NULL REFERENCES info_agg.stocks(id) ON DELETE CASCADE,
     headline        TEXT    NOT NULL,
     summary         TEXT,
     url             TEXT    NOT NULL,
@@ -181,7 +172,7 @@ CREATE TRIGGER trg_company_news_updated_at
 -- MARKETS — market_news
 -- ============================================================
 CREATE TABLE IF NOT EXISTS info_agg.market_news (
-    id              SERIAL PRIMARY KEY,
+    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     category        TEXT NOT NULL,  -- general, forex, crypto, merger
     headline        TEXT NOT NULL,
     summary         TEXT,
@@ -202,10 +193,32 @@ CREATE TRIGGER trg_market_news_updated_at
 
 
 -- ============================================================
+-- MARKETS — etf_holdings
+-- ============================================================
+CREATE TABLE IF NOT EXISTS info_agg.etf_holdings (
+    id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    etf_stock_id UUID    NOT NULL REFERENCES info_agg.stocks(id) ON DELETE CASCADE,
+    asset_symbol TEXT    NOT NULL,
+    asset_name   TEXT,
+    weight_pct   DECIMAL(8,4),
+    shares       BIGINT,
+    market_value DECIMAL(20,4),
+    as_of_date   DATE,
+    fetched_at   TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+    updated_at   TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+    UNIQUE (etf_stock_id, asset_symbol, as_of_date)
+);
+
+CREATE TRIGGER trg_etf_holdings_updated_at
+    BEFORE UPDATE ON info_agg.etf_holdings
+    FOR EACH ROW EXECUTE FUNCTION info_agg.set_updated_at();
+
+
+-- ============================================================
 -- NEWS — news_articles
 -- ============================================================
 CREATE TABLE IF NOT EXISTS info_agg.news_articles (
-    id           SERIAL PRIMARY KEY,
+    id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     source       TEXT NOT NULL,   -- 'nyt', 'newsapi'
     section      TEXT,            -- section / category
     title        TEXT NOT NULL,
@@ -229,7 +242,7 @@ CREATE TRIGGER trg_news_articles_updated_at
 -- MEDIA — spotify_releases
 -- ============================================================
 CREATE TABLE IF NOT EXISTS info_agg.spotify_releases (
-    id           SERIAL PRIMARY KEY,
+    id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     spotify_id   TEXT    NOT NULL,
     name         TEXT    NOT NULL,
     artists      TEXT[]  NOT NULL DEFAULT '{}',
@@ -248,22 +261,27 @@ CREATE TABLE IF NOT EXISTS info_agg.spotify_releases (
 -- MEDIA — reddit_posts
 -- ============================================================
 CREATE TABLE IF NOT EXISTS info_agg.reddit_posts (
-    id           SERIAL PRIMARY KEY,
-    post_id      TEXT    NOT NULL,
-    subreddit    TEXT    NOT NULL,
-    title        TEXT    NOT NULL,
-    author       TEXT,
-    score        INTEGER NOT NULL DEFAULT 0,
-    upvote_ratio DECIMAL(5, 4),
-    num_comments INTEGER NOT NULL DEFAULT 0,
-    url          TEXT,
-    permalink    TEXT,
-    selftext     TEXT,
+    id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    post_id       TEXT    NOT NULL,
+    subreddit     TEXT    NOT NULL,
+    title         TEXT    NOT NULL,
+    author        TEXT,
+    score         INTEGER NOT NULL DEFAULT 0,
+    upvote_ratio  DECIMAL(5, 4),
+    num_comments  INTEGER NOT NULL DEFAULT 0,
+    url           TEXT,
+    permalink     TEXT,
+    selftext      TEXT,
     thumbnail_url TEXT,
-    is_self      BOOLEAN NOT NULL DEFAULT FALSE,
-    flair        TEXT,
-    posted_at    TIMESTAMP WITH TIME ZONE,
-    fetched_at   TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
-    created_at   TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+    is_self       BOOLEAN NOT NULL DEFAULT FALSE,
+    flair         TEXT,
+    posted_at     TIMESTAMP WITH TIME ZONE,
+    fetched_at    TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+    created_at    TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+    updated_at    TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
     UNIQUE (post_id)
 );
+
+CREATE TRIGGER trg_reddit_posts_updated_at
+    BEFORE UPDATE ON info_agg.reddit_posts
+    FOR EACH ROW EXECUTE FUNCTION info_agg.set_updated_at();
