@@ -25,6 +25,12 @@ STOCK_INDICES = {
     'russell2000': '^RUT'
 }
 
+CRYPTO_SYMBOL_MAP = {
+    'BTC': 'BINANCE:BTCUSDT',
+    'ETH': 'BINANCE:ETHUSDT',
+    'XRP': 'BINANCE:XRPUSDT',
+}
+
 # Finnhub free tier: 60 API calls/minute — sliding-window rate limiter
 _FH_CALL_TIMES: deque = deque()
 _FH_RATE_LIMIT = 60
@@ -90,6 +96,80 @@ def fetch_stock_quote(ticker: str, api_key: Optional[str] = None) -> Optional[Di
         return None
     except Exception as e:
         print(f"Error parsing quote data for {ticker}: {e}")
+        return None
+
+
+def fetch_crypto_quote(symbol: str, api_key: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    """
+    Fetch daily quote for a crypto asset via Finnhub /crypto/candle.
+
+    Args:
+        symbol: Basket symbol (e.g. 'BTC', 'ETH', 'XRP')
+        api_key: Optional API key
+
+    Returns:
+        Quote-shaped dict matching fetch_stock_quote() output, or None on error.
+    """
+    if symbol not in CRYPTO_SYMBOL_MAP:
+        print(f"  Finnhub crypto: unknown symbol {symbol}")
+        return None
+
+    if api_key is None:
+        api_key = get_finnhub_api_key()
+
+    fh_symbol = CRYPTO_SYMBOL_MAP[symbol]
+    now_ts = int(datetime.now().timestamp())
+    yesterday_ts = int((datetime.now() - timedelta(days=2)).timestamp())
+
+    url = f"{FINNHUB_BASE_URL}/crypto/candle"
+    params = {
+        'symbol': fh_symbol,
+        'resolution': 'D',
+        'from': yesterday_ts,
+        'to': now_ts,
+        'token': api_key,
+    }
+
+    try:
+        _fh_rate_limit()
+        response = requests.get(url, params=params, timeout=10)
+        response.raise_for_status()
+        data = response.json()
+
+        if data.get('s') == 'no_data' or not data.get('c'):
+            print(f"  Finnhub crypto: no data for {symbol}")
+            return None
+
+        c = data['c']
+        o = data['o']
+        h = data['h']
+        l = data['l']
+        v = data['v']
+        t = data['t']
+
+        prev_close = c[-2] if len(c) >= 2 else None
+        change = c[-1] - o[-1]
+        pct_change = (change / o[-1] * 100) if o[-1] else None
+
+        return {
+            'ticker': symbol,
+            'current_price': c[-1],
+            'change': change,
+            'percent_change': pct_change,
+            'high_price': h[-1],
+            'low_price': l[-1],
+            'open_price': o[-1],
+            'previous_close': prev_close,
+            'volume': v[-1],
+            'timestamp': t[-1],
+            'fetched_at': datetime.now().isoformat(),
+        }
+
+    except requests.exceptions.RequestException as e:
+        print(f"Error fetching crypto quote for {symbol}: {e}")
+        return None
+    except Exception as e:
+        print(f"Error parsing crypto quote for {symbol}: {e}")
         return None
 
 

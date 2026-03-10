@@ -184,29 +184,57 @@ def snippet_finnhub_quote():
     ), None
 
 
-def snippet_av_candles():
-    from alpha_vantage import fetch_stock_candles_av
-    candles = fetch_stock_candles_av('AAPL', days_back=7)
-    if not candles:
-        return None, "fetch returned None"
-    raw_sample = {k: (v[:2] if isinstance(v, list) else v) for k, v in candles.items()}
-    timestamps = candles.get('timestamps', [])
+def snippet_fmp_historical_prices():
+    from fmp import fetch_historical_prices, get_fmp_api_key
+    api_key = get_fmp_api_key()
+    rows = fetch_historical_prices('AAPL', days_back=5, api_key=api_key)
+    if not rows:
+        return None, "fetch returned empty list"
     stored_shapes = []
-    for i in range(min(2, len(timestamps))):
+    for row in rows[:2]:
         stored_shapes.append({
             'stock_id': '<looked up from stocks table>',
-            'resolution': candles.get('resolution'),
-            'candle_timestamp': timestamps[i],
-            'open_price': candles.get('open', [])[i] if i < len(candles.get('open', [])) else None,
-            'high_price': candles.get('high', [])[i] if i < len(candles.get('high', [])) else None,
-            'low_price': candles.get('low', [])[i] if i < len(candles.get('low', [])) else None,
-            'close_price': candles.get('close', [])[i] if i < len(candles.get('close', [])) else None,
-            'volume': candles.get('volume', [])[i] if i < len(candles.get('volume', [])) else None,
+            'current_price': row.get('current_price'),
+            'change_amount': row.get('change_amount'),
+            'percent_change': row.get('percent_change'),
+            'high_price': row.get('high_price'),
+            'low_price': row.get('low_price'),
+            'open_price': row.get('open_price'),
+            'previous_close': row.get('previous_close'),
+            'volume': row.get('volume'),
+            'quote_timestamp': row.get('quote_timestamp'),
         })
     return save_snippet(
-        'markets', 'av_candles',
-        'GET https://www.alphavantage.co/query?function=TIME_SERIES_DAILY&symbol=AAPL',
-        raw_sample, stored_shapes
+        'markets', 'fmp_historical_prices',
+        'GET https://financialmodelingprep.com/api/v3/historical-price-full/AAPL',
+        rows[:2], stored_shapes
+    ), None
+
+
+def snippet_av_news_sentiment():
+    from alpha_vantage import fetch_news_sentiment
+    articles = fetch_news_sentiment(topic='earnings')
+    if not articles:
+        return None, "fetch returned empty list"
+    stored_shapes = []
+    for a in articles[:2]:
+        stored_shapes.append({
+            'title': a.get('title'),
+            'url': a.get('url'),
+            'source': a.get('source'),
+            'source_domain': a.get('source_domain'),
+            'summary': a.get('summary'),
+            'banner_image': a.get('banner_image'),
+            'published_at': a.get('time_published'),
+            'topics': [t.get('topic') for t in a.get('topics', []) if t.get('topic')],
+            'overall_sentiment_score': a.get('overall_sentiment_score'),
+            'overall_sentiment_label': a.get('overall_sentiment_label'),
+            'ticker_sentiments': a.get('ticker_sentiments'),
+        })
+    return save_snippet(
+        'markets', 'av_news_sentiment',
+        'GET https://www.alphavantage.co/query?function=NEWS_SENTIMENT&topics=earnings',
+        articles[:2], stored_shapes
     ), None
 
 
@@ -379,7 +407,8 @@ SNIPPETS = [
     ('sports',  'espn_news',              snippet_espn_news),
     ('sports',  'espn_scoreboard',        snippet_espn_scoreboard),
     ('markets', 'finnhub_quote',          snippet_finnhub_quote),
-    ('markets', 'av_candles',             snippet_av_candles),
+    ('markets', 'fmp_historical_prices',  snippet_fmp_historical_prices),
+    ('markets', 'av_news_sentiment',      snippet_av_news_sentiment),
     ('markets', 'finnhub_profile',        snippet_finnhub_profile),
     ('markets', 'finnhub_company_news',   snippet_finnhub_company_news),
     ('markets', 'finnhub_market_news',    snippet_finnhub_market_news),

@@ -212,6 +212,68 @@ def sync_all_sports_data(supabase: Client, news_limit_per_sport: int = 20) -> Di
     return stats
 
 
+def backfill_sports_scores(
+    supabase: Client,
+    days_back: int = 30,
+) -> Dict[str, Any]:
+    """
+    Backfill sports_scores by fetching ESPN scoreboard for each day in the window.
+
+    Iterates each calendar date from `days_back` days ago through yesterday,
+    fetching all configured sport/league scoreboards for that date.
+
+    Args:
+        supabase: Supabase client instance
+        days_back: Number of days back to backfill (default 30)
+
+    Returns:
+        Stats dict: dates_processed, scores_inserted, errors
+    """
+    try:
+        from .espn import SPORT_CONFIGS, fetch_espn_scores
+    except ImportError:
+        import sys
+        import os
+        current_dir = os.path.dirname(os.path.abspath(__file__))
+        if current_dir not in sys.path:
+            sys.path.insert(0, current_dir)
+        from espn import SPORT_CONFIGS, fetch_espn_scores
+
+    from datetime import datetime, timedelta
+    import time
+
+    stats: Dict[str, Any] = {
+        'dates_processed': 0,
+        'scores_inserted': 0,
+        'errors': [],
+    }
+
+    today = datetime.now().date()
+    dates = [today - timedelta(days=d) for d in range(days_back, 0, -1)]  # oldest → newest
+
+    for date in dates:
+        date_str = date.strftime('%Y%m%d')
+        day_count = 0
+        for sport, league in SPORT_CONFIGS:
+            try:
+                games = fetch_espn_scores(sport, league, dates=date_str)
+                if games:
+                    league_id = get_league_id(supabase, sport, league)
+                    if league_id:
+                        count = insert_scores(supabase, league_id, games)
+                        day_count += count
+            except Exception as e:
+                msg = f"Error fetching {sport}/{league} scores for {date_str}: {e}"
+                stats['errors'].append(msg)
+        if day_count:
+            print(f"  {date_str}: inserted {day_count} scores")
+        stats['scores_inserted'] += day_count
+        stats['dates_processed'] += 1
+        time.sleep(0.3)  # light throttle — ESPN has no published rate limit
+
+    return stats
+
+
 if __name__ == "__main__":
     print("=" * 60)
     print("Syncing sports data to database...")

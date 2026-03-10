@@ -18,12 +18,16 @@ load_dotenv()
 # API base URLs
 NYT_BASE_URL = "https://api.nytimes.com/svc"
 # NYT Top Stories sections
-NYT_SECTIONS = [
+ALL_NYT_SECTIONS = [
     'arts', 'automobiles', 'books', 'business', 'fashion', 'food',
     'health', 'home', 'insider', 'magazine', 'movies', 'nyregion',
     'obituaries', 'opinion', 'politics', 'realestate', 'science',
     'sports', 'sundayreview', 'technology', 'theater', 't-magazine',
     'travel', 'upshot', 'us', 'world'
+]
+NYT_SECTIONS = [
+    'arts', 'business', 'opinion', 'politics', 'realestate', 
+    'science', 'sports', 'technology', 'us', 'world'
 ]
 
 # NYT Most Popular types
@@ -236,6 +240,126 @@ def fetch_nyt_most_popular(
     except Exception as e:
         print(f"Error parsing NYT most popular ({type}): {e}")
         return None
+
+
+def fetch_nyt_archive(
+    year: int,
+    month: int,
+    sections: Optional[List[str]] = None,
+    since_date: Optional[str] = None,
+    max_per_section_per_day: int = 5,
+    api_key: Optional[str] = None,
+) -> List[Dict[str, Any]]:
+    """
+    Fetch articles for a given year/month from the NYT Archive API.
+
+    Args:
+        year: e.g. 2026
+        month: 1–12
+        sections: Slug list to include (defaults to NYT_SECTIONS). Filters on
+                  section_name from the archive response.
+        since_date: ISO date string 'YYYY-MM-DD'; articles before this date are dropped.
+        max_per_section_per_day: Cap on articles per section per calendar day (approximates
+                                  "most popular" since archive has no popularity signal).
+        api_key: Optional NYT API key.
+
+    Returns:
+        List of article dicts shaped to match insert_nyt_articles() expectations.
+    """
+    if api_key is None:
+        api_key = get_nyt_api_key()
+    if sections is None:
+        sections = NYT_SECTIONS
+
+    # Map archive section_name (title-case) → our slugs
+    _SECTION_MAP: Dict[str, str] = {
+        'arts': 'arts',
+        'books': 'arts',
+        'business': 'business',
+        'business day': 'business',
+        'dealbook': 'business',
+        'opinion': 'opinion',
+        'editorial': 'opinion',
+        'politics': 'politics',
+        'real estate': 'realestate',
+        'science': 'science',
+        'health': 'science',
+        'sports': 'sports',
+        'technology': 'technology',
+        'u.s.': 'us',
+        'us': 'us',
+        'national': 'us',
+        'world': 'world',
+        'international': 'world',
+    }
+    target_sections = set(sections)
+
+    url = f"{NYT_BASE_URL}/archive/v1/{year}/{month}.json"
+    params = {'api-key': api_key}
+
+    try:
+        response = requests.get(url, params=params, timeout=30)
+        response.raise_for_status()
+        data = response.json()
+    except requests.exceptions.RequestException as e:
+        print(f"Error fetching NYT archive {year}/{month}: {e}")
+        return []
+    except Exception as e:
+        print(f"Error parsing NYT archive {year}/{month}: {e}")
+        return []
+
+    docs = data.get('response', {}).get('docs', [])
+
+    # Group by (section_slug, date_str) for per-section-per-day cap
+    from collections import defaultdict
+    bucket: Dict[str, int] = defaultdict(int)
+    articles = []
+
+    for doc in docs:
+        pub_date = doc.get('pub_date', '')  # ISO: '2026-02-10T12:00:00+0000'
+        date_str = pub_date[:10] if pub_date else ''
+
+        if since_date and date_str < since_date:
+            continue
+        if doc.get('document_type') != 'article':
+            continue
+
+        raw_section = (doc.get('section_name') or '').lower().strip()
+        slug = _SECTION_MAP.get(raw_section)
+        if slug not in target_sections:
+            continue
+
+        bucket_key = f"{slug}:{date_str}"
+        if bucket[bucket_key] >= max_per_section_per_day:
+            continue
+        bucket[bucket_key] += 1
+
+        # Extract best image — archive multimedia URLs may be relative
+        image_url = None
+        for m in doc.get('multimedia') or []:
+            if m.get('type') == 'image':
+                raw_url = m.get('url', '')
+                image_url = (
+                    raw_url if raw_url.startswith('http')
+                    else f"https://static01.nyt.com/{raw_url.lstrip('/')}"
+                )
+                break
+
+        headline = doc.get('headline') or {}
+        byline = doc.get('byline') or {}
+
+        articles.append({
+            'source': 'nyt',
+            'section': slug,
+            'title': headline.get('main') or headline.get('print_headline'),
+            'abstract': doc.get('abstract') or doc.get('snippet'),
+            'byline': byline.get('original'),
+            'url': doc.get('web_url'),
+            'image_url': image_url,
+            'published_at': pub_date,
+        })
+
+    return articles
 
 
 def fetch_all_nyt_top_stories(api_key: Optional[str] = None) -> Dict[str, Optional[Dict[str, Any]]]:

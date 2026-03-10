@@ -7,6 +7,7 @@
 #       ---> Supports daily OHLCV candles, economic indicators, sentiment, earnings
 
 from typing import Dict, List, Optional, Any
+from collections import deque
 from datetime import datetime, timedelta
 import requests
 import os
@@ -17,9 +18,25 @@ load_dotenv()
 
 ALPHA_VANTAGE_BASE_URL = "https://www.alphavantage.co/query"
 
-# Free tier: 5 req/min, 25 req/day per key — enforce 12.5s minimum between calls per key
-_AV_LAST_CALL: Dict[str, float] = {}
-_AV_MIN_INTERVAL = 12.5  # seconds between calls per key
+# Free tier: 5 req/min per key — sliding-window rate limiter (same pattern as Finnhub)
+_AV_CALL_TIMES: Dict[str, deque] = {}
+_AV_RATE_LIMIT = 5     # calls per window
+_AV_WINDOW     = 60.0  # seconds
+
+
+def _av_rate_limit(key: str) -> None:
+    """Block only when the per-key 5 req/60 s window is full."""
+    if key not in _AV_CALL_TIMES:
+        _AV_CALL_TIMES[key] = deque()
+    times = _AV_CALL_TIMES[key]
+    now = time.time()
+    while times and now - times[0] >= _AV_WINDOW:
+        times.popleft()
+    if len(times) >= _AV_RATE_LIMIT:
+        sleep_for = _AV_WINDOW - (now - times[0]) + 0.05
+        if sleep_for > 0:
+            time.sleep(sleep_for)
+    times.append(time.time())
 
 
 def get_alphavantage_api_key() -> str:
@@ -62,10 +79,7 @@ def fetch_stock_candles_av(
 
     last_err = None
     for key in keys:
-        elapsed = time.time() - _AV_LAST_CALL.get(key, 0)
-        if elapsed < _AV_MIN_INTERVAL:
-            time.sleep(_AV_MIN_INTERVAL - elapsed)
-        _AV_LAST_CALL[key] = time.time()
+        _av_rate_limit(key)
 
         params = {
             'function': 'TIME_SERIES_DAILY',
@@ -180,6 +194,105 @@ def fetch_historical_quotes(
     return quotes
 
 
+def fetch_crypto_candles_av(
+    symbol: str,
+    market: str = 'USD',
+    days_back: int = 100,
+    api_key: Optional[str] = None
+) -> List[Dict[str, Any]]:
+    """
+    Fetch daily OHLCV candle data for a crypto asset via Alpha Vantage DIGITAL_CURRENCY_DAILY.
+    Returns a list of quote-shaped dicts (same shape as fetch_historical_quotes) ordered oldest→newest.
+
+    Args:
+        symbol: Crypto symbol (e.g. 'BTC', 'ETH')
+        market: Market currency (default 'USD')
+        days_back: Calendar days of history to keep
+        api_key: Optional specific key; if None, rotates across all configured keys
+    """
+    keys = [api_key] if api_key else get_alphavantage_api_keys()
+    last_err = None
+
+    for key in keys:
+        _av_rate_limit(key)
+
+        params = {
+            'function': 'DIGITAL_CURRENCY_DAILY',
+            'symbol': symbol,
+            'market': market,
+            'apikey': key,
+        }
+        try:
+            response = requests.get(ALPHA_VANTAGE_BASE_URL, params=params, timeout=15)
+            response.raise_for_status()
+            data = response.json()
+
+            if 'Note' in data or 'Information' in data:
+                msg = data.get('Note') or data.get('Information', '')
+                print(f"  Alpha Vantage key rotation triggered for {symbol}: {msg[:80]}")
+                last_err = msg
+                continue
+
+            if 'Error Message' in data:
+                print(f"  Alpha Vantage error for {symbol}: {data['Error Message']}")
+                return []
+
+            ts = data.get('Time Series (Digital Currency Daily)')
+            if not ts:
+                print(f"  Alpha Vantage: no crypto time-series data for {symbol}")
+                return []
+
+            cutoff = datetime.now() - timedelta(days=days_back)
+            rows = []
+            for date_str in sorted(ts.keys(), reverse=True):
+                dt = datetime.strptime(date_str, '%Y-%m-%d')
+                if dt < cutoff:
+                    break
+                bar = ts[date_str]
+                rows.append((int(dt.timestamp()), bar))
+
+            # Reverse to oldest-first
+            rows.reverse()
+
+            quotes = []
+            for i, (ts_val, bar) in enumerate(rows):
+                close = float(bar.get('4a. close (USD)', 0) or bar.get('4. close', 0))
+                open_ = float(bar.get('1a. open (USD)', 0) or bar.get('1. open', 0))
+                high  = float(bar.get('2a. high (USD)', 0) or bar.get('2. high', 0))
+                low   = float(bar.get('3a. low (USD)', 0) or bar.get('3. low', 0))
+                vol   = int(float(bar.get('5. volume', 0)))
+                prev_close = float(rows[i - 1][1].get('4a. close (USD)', 0) or
+                                   rows[i - 1][1].get('4. close', 0)) if i > 0 else None
+                change = (close - prev_close) if prev_close is not None else None
+                pct_change = (change / prev_close * 100) if prev_close else None
+                quotes.append({
+                    'ticker': symbol,
+                    'current_price': close,
+                    'change': change,
+                    'percent_change': pct_change,
+                    'high_price': high,
+                    'low_price': low,
+                    'open_price': open_,
+                    'previous_close': prev_close,
+                    'volume': vol,
+                    'timestamp': ts_val,
+                    'fetched_at': datetime.now().isoformat(),
+                })
+
+            return quotes
+
+        except requests.exceptions.RequestException as e:
+            last_err = str(e)
+            print(f"  Alpha Vantage request error for {symbol}: {e}")
+            continue
+        except Exception as e:
+            print(f"  Alpha Vantage parse error for {symbol}: {e}")
+            return []
+
+    print(f"  All Alpha Vantage keys exhausted for {symbol}. Last error: {last_err}")
+    return []
+
+
 def fetch_index_constituents(symbol: str = 'VOO', api_key: Optional[str] = None) -> Optional[Dict[str, Any]]:
     """Fetch ETF constituents via Alpha Vantage ETF_PROFILE (premium endpoint)."""
     if api_key is None:
@@ -199,60 +312,87 @@ def fetch_index_constituents(symbol: str = 'VOO', api_key: Optional[str] = None)
         return None
 
 
-def fetch_news_sentiment(tickers: Optional[List[str]] = None, api_key: Optional[str] = None) -> List[Dict[str, Any]]:
-    """Fetch news sentiment analysis from Alpha Vantage (max 50 tickers)."""
-    if api_key is None:
-        api_key = get_alphavantage_api_key()
+def fetch_news_sentiment(
+    tickers: Optional[List[str]] = None,
+    topic: Optional[str] = None,
+    api_key: Optional[str] = None
+) -> List[Dict[str, Any]]:
+    """Fetch news sentiment analysis from Alpha Vantage NEWS_SENTIMENT endpoint.
 
-    params = {'function': 'NEWS_SENTIMENT', 'apikey': api_key}
-    if tickers:
-        params['tickers'] = ','.join(tickers[:50])
+    Uses the same key-rotation + per-key rate limiting as fetch_stock_candles_av.
 
-    try:
-        response = requests.get(ALPHA_VANTAGE_BASE_URL, params=params, timeout=10)
-        response.raise_for_status()
-        data = response.json()
+    Args:
+        tickers: Optional list of ticker symbols to filter by (max 50).
+        topic: Optional single topic filter (e.g. 'earnings', 'technology').
+        api_key: Optional specific key; if None, rotates across all configured keys.
+    """
+    keys = [api_key] if api_key else get_alphavantage_api_keys()
 
-        if 'Error Message' in data or 'Note' in data:
-            print(f"Alpha Vantage API error: {data.get('Error Message', data.get('Note'))}")
+    last_err = None
+    for key in keys:
+        _av_rate_limit(key)
+
+        params: Dict[str, Any] = {'function': 'NEWS_SENTIMENT', 'apikey': key}
+        if tickers:
+            params['tickers'] = ','.join(tickers[:50])
+        if topic:
+            params['topics'] = topic
+
+        try:
+            response = requests.get(ALPHA_VANTAGE_BASE_URL, params=params, timeout=15)
+            response.raise_for_status()
+            data = response.json()
+
+            if 'Note' in data or 'Information' in data:
+                msg = data.get('Note') or data.get('Information', '')
+                print(f"  Alpha Vantage key rotation triggered (sentiment): {msg[:80]}")
+                last_err = msg
+                continue
+
+            if 'Error Message' in data:
+                print(f"  Alpha Vantage error (sentiment): {data['Error Message']}")
+                return []
+
+            articles = []
+            for article in data.get('feed', []):
+                ticker_sentiments = [
+                    {
+                        'ticker': td.get('ticker'),
+                        'relevance_score': td.get('relevance_score'),
+                        'sentiment_score': td.get('ticker_sentiment_score'),
+                        'sentiment_label': td.get('ticker_sentiment_label')
+                    }
+                    for td in article.get('ticker_sentiment', [])
+                ]
+                articles.append({
+                    'title': article.get('title'),
+                    'url': article.get('url'),
+                    'time_published': article.get('time_published'),
+                    'authors': article.get('authors', []),
+                    'summary': article.get('summary'),
+                    'banner_image': article.get('banner_image'),
+                    'source': article.get('source'),
+                    'category_within_source': article.get('category_within_source'),
+                    'source_domain': article.get('source_domain'),
+                    'topics': article.get('topics', []),
+                    'overall_sentiment_score': article.get('overall_sentiment_score', 0),
+                    'overall_sentiment_label': article.get('overall_sentiment_label', 'Neutral'),
+                    'ticker_sentiments': ticker_sentiments,
+                    'fetched_at': datetime.now().isoformat()
+                })
+
+            return articles
+
+        except requests.exceptions.RequestException as e:
+            last_err = str(e)
+            print(f"  Alpha Vantage request error (sentiment): {e}")
+            continue
+        except Exception as e:
+            print(f"  Alpha Vantage parse error (sentiment): {e}")
             return []
 
-        articles = []
-        for article in data.get('feed', []):
-            ticker_sentiments = [
-                {
-                    'ticker': td.get('ticker'),
-                    'relevance_score': td.get('relevance_score'),
-                    'sentiment_score': td.get('ticker_sentiment_score'),
-                    'sentiment_label': td.get('ticker_sentiment_label')
-                }
-                for td in article.get('ticker_sentiment', [])
-            ]
-            articles.append({
-                'title': article.get('title'),
-                'url': article.get('url'),
-                'time_published': article.get('time_published'),
-                'authors': article.get('authors', []),
-                'summary': article.get('summary'),
-                'banner_image': article.get('banner_image'),
-                'source': article.get('source'),
-                'category_within_source': article.get('category_within_source'),
-                'source_domain': article.get('source_domain'),
-                'topics': article.get('topics', []),
-                'overall_sentiment_score': article.get('overall_sentiment_score', 0),
-                'overall_sentiment_label': article.get('overall_sentiment_label', 'Neutral'),
-                'ticker_sentiments': ticker_sentiments,
-                'fetched_at': datetime.now().isoformat()
-            })
-
-        return articles
-
-    except requests.exceptions.RequestException as e:
-        print(f"Error fetching news sentiment: {e}")
-        return []
-    except Exception as e:
-        print(f"Error parsing news sentiment: {e}")
-        return []
+    print(f"  All Alpha Vantage keys exhausted (sentiment). Last error: {last_err}")
+    return []
 
 
 def fetch_top_gainers_losers(api_key: Optional[str] = None) -> Optional[Dict[str, Any]]:
@@ -402,6 +542,12 @@ if __name__ == "__main__":
     print("\n--- Historical Quotes (AAPL, 30d) ---")
     quotes = fetch_historical_quotes('AAPL', days_back=30)
     print(f"  {len(quotes)} quote records")
+
+    print("\n--- News Sentiment (topic=earnings) ---")
+    sentiment = fetch_news_sentiment(topic='earnings')
+    print(f"  {len(sentiment)} articles")
+    if sentiment:
+        print(f"  First: {sentiment[0]['title'][:60]}")
 
     print("\n--- Top Gainers/Losers ---")
     gl = fetch_top_gainers_losers()

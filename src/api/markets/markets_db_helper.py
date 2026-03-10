@@ -34,7 +34,7 @@ def get_supabase_client() -> Client:
     return create_client(supabase_url, supabase_key)
 
 
-def get_or_create_stock(supabase: Client, ticker: str, profile_data: Optional[Dict[str, Any]] = None) -> Optional[str]:
+def get_or_create_stock(supabase: Client, ticker: str, profile_data: Optional[Dict[str, Any]] = None, asset_type: str = 'stock') -> Optional[str]:
     """
     Get stock ID, creating the stock record if it doesn't exist
     
@@ -79,6 +79,7 @@ def get_or_create_stock(supabase: Client, ticker: str, profile_data: Optional[Di
             _so = profile_data.get('share_outstanding') if profile_data else None
             insert_data = {
                 'ticker': ticker,
+                'asset_type': asset_type,
                 'name': profile_data.get('name') if profile_data else None,
                 'country': profile_data.get('country') if profile_data else None,
                 'currency': profile_data.get('currency') if profile_data else None,
@@ -293,19 +294,20 @@ def sync_stock_data(
     fetch_quotes: bool = True,
     fetch_news: bool = True,
     fetch_profile: bool = True,
-    quote_days_back: int = 0
+    quote_days_back: int = 0,
+    asset_type: str = 'stock'
 ) -> Dict[str, Any]:
     """
-    Sync all data for a specific stock.
+    Sync all data for a specific stock, ETF, or crypto asset.
 
     Args:
         supabase: Supabase client instance
-        ticker: Stock ticker symbol
+        ticker: Stock/ETF/crypto ticker symbol
         fetch_quotes: Whether to fetch and insert the latest quote
         fetch_news: Whether to fetch and insert company news
         fetch_profile: Whether to fetch and insert company/ETF profile
-        quote_days_back: If > 0, backfill this many days of daily quotes using
-                         Finnhub candles (in addition to the latest quote).
+        quote_days_back: If > 0, backfill this many days of daily quotes using AV candles.
+        asset_type: 'stock', 'etf', or 'crypto' — controls which fetcher is used.
 
     Returns:
         Dictionary with sync statistics
@@ -313,9 +315,9 @@ def sync_stock_data(
     try:
         from .finnhub import (
             fetch_stock_quote, fetch_company_profile,
-            fetch_company_news, get_finnhub_api_key
+            fetch_company_news, fetch_crypto_quote, get_finnhub_api_key
         )
-        from .alpha_vantage import fetch_historical_quotes
+        from .alpha_vantage import fetch_historical_quotes, fetch_crypto_candles_av
         from .fmp import fetch_etf_info as fmp_fetch_etf_info, get_fmp_api_key
     except ImportError:
         import sys
@@ -325,9 +327,9 @@ def sync_stock_data(
             sys.path.insert(0, current_dir)
         from finnhub import (
             fetch_stock_quote, fetch_company_profile,
-            fetch_company_news, get_finnhub_api_key
+            fetch_company_news, fetch_crypto_quote, get_finnhub_api_key
         )
-        from alpha_vantage import fetch_historical_quotes
+        from alpha_vantage import fetch_historical_quotes, fetch_crypto_candles_av
         from fmp import fetch_etf_info as fmp_fetch_etf_info, get_fmp_api_key
 
     stats = {
@@ -341,8 +343,10 @@ def sync_stock_data(
     try:
         api_key = get_finnhub_api_key()
 
-        # Fetch and insert profile — try company profile first, fall back to FMP ETF info
-        if fetch_profile:
+        # Crypto assets: skip profile fetch (no Finnhub/FMP profile) — just ensure row exists
+        if asset_type == 'crypto':
+            stock_id = get_or_create_stock(supabase, ticker, asset_type=asset_type)
+        elif fetch_profile:
             print(f"Fetching profile for {ticker}...")
             profile = fetch_company_profile(ticker, api_key)
             if not profile:
@@ -354,13 +358,13 @@ def sync_stock_data(
                     print(f"  FMP ETF info unavailable for {ticker}: {fmp_err}")
                     profile = None
             if profile:
-                stock_id = get_or_create_stock(supabase, ticker, profile)
+                stock_id = get_or_create_stock(supabase, ticker, profile, asset_type=asset_type)
                 if stock_id:
                     stats['profile_updated'] = True
             else:
-                stock_id = get_or_create_stock(supabase, ticker)
+                stock_id = get_or_create_stock(supabase, ticker, asset_type=asset_type)
         else:
-            stock_id = get_or_create_stock(supabase, ticker)
+            stock_id = get_or_create_stock(supabase, ticker, asset_type=asset_type)
 
         if not stock_id:
             stats['errors'].append(f"Failed to get/create stock for {ticker}")
@@ -369,22 +373,28 @@ def sync_stock_data(
         # Fetch and insert latest quote
         if fetch_quotes:
             print(f"Fetching quote for {ticker}...")
-            quote = fetch_stock_quote(ticker, api_key)
+            if asset_type == 'crypto':
+                quote = fetch_crypto_quote(ticker, api_key)
+            else:
+                quote = fetch_stock_quote(ticker, api_key)
             if quote:
                 if insert_stock_quote(supabase, stock_id, quote):
                     stats['quotes_inserted'] = 1
 
-        # Backfill historical quotes from Finnhub daily candles
+        # Backfill historical quotes via AV (works for both stocks and crypto)
         if quote_days_back > 0:
-            print(f"Backfilling {quote_days_back}-day quote history for {ticker}...")
-            historical = fetch_historical_quotes(ticker, days_back=quote_days_back, api_key=api_key)
+            print(f"Backfilling {quote_days_back}-day quote history for {ticker} via AV...")
+            if asset_type == 'crypto':
+                historical = fetch_crypto_candles_av(ticker, days_back=quote_days_back)
+            else:
+                historical = fetch_historical_quotes(ticker, days_back=quote_days_back)
             if historical:
                 count = insert_stock_quotes_batch(supabase, stock_id, historical)
                 stats['quotes_inserted'] += count
                 print(f"  Backfilled {count} historical quotes")
 
-        # Fetch and insert company news
-        if fetch_news:
+        # Fetch and insert company news (skip for crypto)
+        if fetch_news and asset_type != 'crypto':
             print(f"Fetching company news for {ticker}...")
             news = fetch_company_news(ticker, days_back=7, api_key=api_key)
             if news:
@@ -586,6 +596,128 @@ def sync_fmp_data(
             break
         except Exception as e:
             msg = f"FMP error for {ticker}: {e}"
+            print(msg)
+            stats['errors'].append(msg)
+
+    return stats
+
+
+def insert_news_sentiment(supabase: Client, articles: List[Dict[str, Any]]) -> int:
+    """
+    Upsert AV news sentiment articles into info_agg.news_sentiment.
+
+    On conflict (url) all fields are overwritten; topics from AV already
+    contain the full topic list for each article so no merge is needed.
+
+    Returns the number of rows upserted.
+    """
+    if not articles:
+        return 0
+
+    batch_data = []
+    for article in articles:
+        # Parse AV time_published: '20240101T120000' → ISO timestamp
+        time_published = article.get('time_published')
+        published_at = None
+        if time_published:
+            try:
+                published_at = datetime.strptime(time_published, '%Y%m%dT%H%M%S').isoformat()
+            except ValueError:
+                published_at = None
+
+        # Extract topic strings from AV topic dicts
+        raw_topics = article.get('topics', [])
+        topic_strings = [t.get('topic') for t in raw_topics if t.get('topic')]
+
+        url = article.get('url')
+        if not url:
+            continue
+
+        batch_data.append({
+            'title': article.get('title'),
+            'url': url,
+            'source': article.get('source'),
+            'source_domain': article.get('source_domain'),
+            'summary': article.get('summary'),
+            'banner_image': article.get('banner_image'),
+            'published_at': published_at,
+            'topics': topic_strings,
+            'overall_sentiment_score': article.get('overall_sentiment_score'),
+            'overall_sentiment_label': article.get('overall_sentiment_label'),
+            'ticker_sentiments': article.get('ticker_sentiments'),
+        })
+
+    if not batch_data:
+        return 0
+
+    try:
+        upserted = 0
+        batch_size = 100
+        for i in range(0, len(batch_data), batch_size):
+            batch = batch_data[i:i + batch_size]
+            supabase.table('news_sentiment').upsert(
+                batch,
+                on_conflict='url'
+            ).execute()
+            upserted += len(batch)
+        return upserted
+    except Exception as e:
+        print(f"Error upserting news sentiment articles: {e}")
+        return 0
+
+
+def sync_news_sentiment(
+    supabase: Client,
+    topics: List[str],
+    tickers: Optional[List[str]] = None
+) -> Dict[str, Any]:
+    """
+    Fetch and store AV news sentiment for each topic in the list.
+
+    Args:
+        supabase: Supabase client instance
+        topics: List of AV topic strings (e.g. ['earnings', 'technology'])
+        tickers: Optional list of tickers to include as additional filter
+
+    Returns:
+        Stats dict: topics_processed, articles_upserted, errors
+    """
+    try:
+        from .alpha_vantage import fetch_news_sentiment, get_alphavantage_api_keys
+    except ImportError:
+        import sys
+        import os
+        current_dir = os.path.dirname(os.path.abspath(__file__))
+        if current_dir not in sys.path:
+            sys.path.insert(0, current_dir)
+        from alpha_vantage import fetch_news_sentiment, get_alphavantage_api_keys
+
+    stats: Dict[str, Any] = {
+        'topics_processed': 0,
+        'articles_upserted': 0,
+        'errors': []
+    }
+
+    try:
+        get_alphavantage_api_keys()  # validate at least one key exists before looping
+    except ValueError as e:
+        stats['errors'].append(str(e))
+        print(f"AV sentiment sync skipped: {e}")
+        return stats
+
+    for topic in topics:
+        try:
+            print(f"  Fetching AV sentiment for topic={topic}...")
+            articles = fetch_news_sentiment(tickers=tickers, topic=topic)  # rotation handled internally
+            if articles:
+                count = insert_news_sentiment(supabase, articles)
+                stats['articles_upserted'] += count
+                stats['topics_processed'] += 1
+                print(f"    Upserted {count} articles")
+            else:
+                stats['topics_processed'] += 1
+        except Exception as e:
+            msg = f"Error fetching sentiment for topic={topic}: {e}"
             print(msg)
             stats['errors'].append(msg)
 

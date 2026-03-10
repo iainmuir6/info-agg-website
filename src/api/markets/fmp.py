@@ -8,7 +8,7 @@
 #            ETF profiles/holdings, richer company profiles (sector, CEO, description)
 
 from typing import Dict, List, Optional, Any
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 import requests
 import warnings
 import os
@@ -227,6 +227,65 @@ def fetch_etf_holdings(ticker: str, api_key: Optional[str] = None) -> List[Dict[
         return []
 
 
+def fetch_historical_prices(
+    ticker: str,
+    days_back: int = 30,
+    api_key: Optional[str] = None
+) -> List[Dict[str, Any]]:
+    """
+    Fetch historical daily OHLCV prices from FMP /api/v3/historical-price-full/{symbol}.
+
+    Returns a list of quote-shaped dicts (oldest → newest) matching the stock_quotes
+    insert format. Counts as a single FMP rate-limit call per ticker.
+    """
+    if api_key is None:
+        api_key = get_fmp_api_key()
+
+    from_date = (date.today() - timedelta(days=days_back)).isoformat()
+    to_date = date.today().isoformat()
+
+    url = f"{FMP_BASE_V3}/historical-price-full/{ticker}"
+    params = {'from': from_date, 'to': to_date, 'apikey': api_key}
+
+    try:
+        _fmp_rate_check()
+        response = requests.get(url, params=params, timeout=10)
+        response.raise_for_status()
+        data = response.json()
+
+        historical = data.get('historical', [])
+        if not historical:
+            return []
+
+        # FMP returns newest-first — reverse to oldest-first
+        historical = list(reversed(historical))
+
+        quotes = []
+        for row in historical:
+            quotes.append({
+                'current_price': row.get('close'),
+                'change_amount': row.get('change'),
+                'percent_change': row.get('changePercent'),
+                'high_price': row.get('high'),
+                'low_price': row.get('low'),
+                'open_price': row.get('open'),
+                'previous_close': None,  # not available per-row from FMP historical
+                'volume': row.get('volume'),
+                'quote_timestamp': row.get('date'),  # ISO date string, valid TIMESTAMPTZ
+            })
+
+        return quotes
+
+    except RuntimeError:
+        raise
+    except requests.exceptions.RequestException as e:
+        print(f"Error fetching FMP historical prices for {ticker}: {e}")
+        return []
+    except Exception as e:
+        print(f"Error parsing FMP historical prices for {ticker}: {e}")
+        return []
+
+
 # ---------------------------------------------------------------------------
 # Future fundamentals — wired in but NOT called by daily ETL
 # ---------------------------------------------------------------------------
@@ -410,5 +469,11 @@ if __name__ == "__main__":
         print(f"  HQ:        {profile['city']}, {profile['state']}")
     else:
         print("  No data returned")
+
+    print("\n--- Historical Prices: AAPL (5 days) ---")
+    hist = fetch_historical_prices('AAPL', days_back=5, api_key=key)
+    print(f"  Rows returned: {len(hist)}")
+    if hist:
+        print(f"  First row: {hist[0]}")
 
     print(f"\nTotal FMP calls made: {_FMP_DAILY_COUNT}")
