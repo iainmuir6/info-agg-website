@@ -11,8 +11,13 @@ Writes JSON files to /data/snippets/{domain}/ with:
 Usage:
     source _agg_venv/bin/activate
     python src/api/generate_snippets.py
+
+Flags:
+    --domain DOMAIN   Only run snippets for a specific domain
+                      (e.g. markets, sports, news, media, misc).
 """
 
+import argparse
 import json
 import os
 import sys
@@ -27,6 +32,7 @@ sys.path.insert(0, str(ROOT / 'news'))
 sys.path.insert(0, str(ROOT / 'sports'))
 sys.path.insert(0, str(ROOT / 'markets'))
 sys.path.insert(0, str(ROOT / 'media'))
+sys.path.insert(0, str(ROOT / 'misc'))
 
 # Load .env.local / .env
 from dotenv import load_dotenv
@@ -399,6 +405,180 @@ def snippet_reddit_hot_posts():
 
 
 # ---------------------------------------------------------------------------
+# MISC
+# ---------------------------------------------------------------------------
+
+def snippet_misc_weather():
+    from weather import fetch_weather_timeline
+
+    result = fetch_weather_timeline("New York,US")
+    if not result:
+        return None, "fetch returned None"
+
+    # stored_shape: likely future misc_weather_observations
+    current = result.get('currentConditions', {}) or {}
+    stored_shape = {
+        'location': result.get('resolvedAddress'),
+        'timezone': result.get('timezone'),
+        'temp': current.get('temp'),
+        'feels_like': current.get('feelslike'),
+        'humidity': current.get('humidity'),
+        'conditions': current.get('conditions'),
+        'icon': current.get('icon'),
+        'wind_speed': current.get('windspeed'),
+        'wind_dir': current.get('winddir'),
+        'observation_time': current.get('datetimeEpoch'),
+    }
+
+    raw_sample = {
+        'resolvedAddress': result.get('resolvedAddress'),
+        'timezone': result.get('timezone'),
+        'currentConditions': current,
+        'days': (result.get('days') or [])[:2],
+    }
+
+    return save_snippet(
+        'misc', 'weather_new_york',
+        'GET https://weather.visualcrossing.com/VisualCrossingWebServices/rest/services/timeline/New%20York,US',
+        raw_sample,
+        stored_shape,
+    ), None
+
+
+def snippet_misc_holidays():
+    from holidays import fetch_upcoming_holidays
+
+    holidays = fetch_upcoming_holidays(country='US', limit=5)
+    if not holidays:
+        return None, "fetch returned empty list"
+
+    stored_shapes = []
+    for h in holidays[:2]:
+        stored_shapes.append({
+            'name': h.get('name'),
+            'description': h.get('description'),
+            'country': h.get('country'),
+            'location': h.get('location'),
+            'types': h.get('types'),
+            'date': h.get('date'),
+            'week_day': h.get('week_day'),
+        })
+
+    return save_snippet(
+        'misc', 'holidays_us',
+        'GET https://holidays.abstractapi.com/v1/',
+        holidays[:2],
+        stored_shapes,
+    ), None
+
+
+def snippet_misc_wikipedia_random():
+    from wikipedia import fetch_random_wikipedia_summary
+
+    page = fetch_random_wikipedia_summary()
+    if not page:
+        return None, "fetch returned None"
+
+    stored_shape = {
+        'title': page.get('title'),
+        'description': page.get('description'),
+        'extract': page.get('extract'),
+        'lang': page.get('lang'),
+        'page_url': (page.get('content_urls') or {}).get('desktop', {}).get('page'),
+        'thumbnail_url': (page.get('thumbnail') or {}).get('source'),
+    }
+
+    return save_snippet(
+        'misc', 'wikipedia_random',
+        'GET https://en.wikipedia.org/api/rest_v1/page/random/summary',
+        page,
+        stored_shape,
+    ), None
+
+
+def snippet_misc_country_us():
+    from countries import fetch_country_by_code, fetch_all_countries
+
+    country = fetch_country_by_code('US')
+    if not country:
+        return None, "fetch returned None"
+
+    stored_shape = {
+        'cca2': country.get('cca2'),
+        'cca3': country.get('cca3'),
+        'common': country.get('name', {}).get('common'),
+        'official': country.get('name', {}).get('official'),
+        'region': country.get('region'),
+        'subregion': country.get('subregion'),
+        'capital': country.get('capital'),
+        'population': country.get('population'),
+        'area': country.get('area'),
+        'currencies': country.get('currencies'),
+        'languages': country.get('languages'),
+    }
+
+    countries = fetch_all_countries()
+    if countries:
+        with open(f'{SNIPPETS_DIR}/misc/countries.json', 'w') as f:
+            json.dump(countries, f, indent=2)
+
+    return save_snippet(
+        'misc', 'country_us',
+        'GET https://restcountries.com/v3.1/alpha/US',
+        country,
+        stored_shape,
+    ), None
+
+
+def snippet_misc_wotd():
+    from words import fetch_merriam_webster_wotd
+
+    items = fetch_merriam_webster_wotd(limit=2)
+    if not items:
+        return None, "fetch returned empty list"
+
+    stored_shapes = []
+    for item in items:
+        stored_shapes.append({
+            'title': item.get('title'),
+            'link': item.get('link'),
+            'pub_date': item.get('pub_date'),
+            'description': item.get('description'),
+            'source': item.get('source'),
+        })
+
+    return save_snippet(
+        'misc', 'merriam_webster_wotd',
+        'GET https://www.merriam-webster.com/wotd/feed/rss2',
+        items,
+        stored_shapes,
+    ), None
+
+
+def snippet_misc_useless_fact():
+    from facts import fetch_useless_fact
+
+    fact = fetch_useless_fact()
+    if not fact:
+        return None, "fetch returned None"
+
+    stored_shape = {
+        'text': fact.get('text'),
+        'source': fact.get('source'),
+        'source_url': fact.get('source_url'),
+        'permalink': fact.get('permalink'),
+        'language': fact.get('language'),
+    }
+
+    return save_snippet(
+        'misc', 'useless_fact',
+        'GET https://uselessfacts.jsph.pl/random.json?language=en',
+        fact,
+        stored_shape,
+    ), None
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
@@ -414,6 +594,12 @@ SNIPPETS = [
     ('markets', 'finnhub_market_news',    snippet_finnhub_market_news),
     ('media',   'spotify_new_releases',   snippet_spotify_new_releases),
     ('media',   'reddit_hot_posts',       snippet_reddit_hot_posts),
+    ('misc',    'weather_new_york',       snippet_misc_weather),
+    ('misc',    'holidays_us',            snippet_misc_holidays),
+    ('misc',    'wikipedia_random',       snippet_misc_wikipedia_random),
+    ('misc',    'country_us',             snippet_misc_country_us),
+    ('misc',    'merriam_webster_wotd',   snippet_misc_wotd),
+    ('misc',    'useless_fact',           snippet_misc_useless_fact),
 ]
 
 
@@ -422,10 +608,20 @@ def main():
     print("Generating API snippets...")
     print("=" * 60)
 
+    parser = argparse.ArgumentParser(description="Generate API response snippets.")
+    parser.add_argument(
+        "--domain",
+        dest="domain",
+        help="Only run snippets for this domain (e.g. markets, sports, news, media, misc).",
+    )
+    args = parser.parse_args()
+
     col_w = 30
     results = []
 
     for domain, name, fn in SNIPPETS:
+        if args.domain and domain != args.domain:
+            continue
         label = f"{domain}/{name}"
         print(f"  {label}...", end=' ', flush=True)
         try:
