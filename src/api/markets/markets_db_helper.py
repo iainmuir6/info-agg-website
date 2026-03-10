@@ -357,22 +357,22 @@ def sync_stock_data(
         Dictionary with sync statistics
     """
     try:
-        from .markets_fetcher import (
-            fetch_stock_quote, fetch_stock_candles_av, fetch_company_profile,
-            fetch_etf_profile, fetch_company_news, fetch_historical_quotes,
-            get_finnhub_api_key
+        from .finnhub import (
+            fetch_stock_quote, fetch_company_profile,
+            fetch_etf_profile, fetch_company_news, get_finnhub_api_key
         )
+        from .alpha_vantage import fetch_stock_candles_av, fetch_historical_quotes
     except ImportError:
         import sys
         import os
         current_dir = os.path.dirname(os.path.abspath(__file__))
         if current_dir not in sys.path:
             sys.path.insert(0, current_dir)
-        from markets_fetcher import (
-            fetch_stock_quote, fetch_stock_candles_av, fetch_company_profile,
-            fetch_etf_profile, fetch_company_news, fetch_historical_quotes,
-            get_finnhub_api_key
+        from finnhub import (
+            fetch_stock_quote, fetch_company_profile,
+            fetch_etf_profile, fetch_company_news, get_finnhub_api_key
         )
+        from alpha_vantage import fetch_stock_candles_av, fetch_historical_quotes
 
     stats = {
         'ticker': ticker,
@@ -462,14 +462,14 @@ def sync_market_news(supabase: Client, categories: List[str] = ['general'], api_
         Dictionary with sync statistics
     """
     try:
-        from .markets_fetcher import fetch_market_news, get_finnhub_api_key
+        from .finnhub import fetch_market_news, get_finnhub_api_key
     except ImportError:
         import sys
         import os
         current_dir = os.path.dirname(os.path.abspath(__file__))
         if current_dir not in sys.path:
             sys.path.insert(0, current_dir)
-        from markets_fetcher import fetch_market_news, get_finnhub_api_key
+        from finnhub import fetch_market_news, get_finnhub_api_key
     
     if api_key is None:
         api_key = get_finnhub_api_key()

@@ -22,9 +22,9 @@ load_dotenv()
 # WATCHLIST — Curated list of stocks to track (Mag 7 + indices)
 # ============================================================
 DEFAULT_WATCHLIST = [
-    'AAPL', 'GOOGL', 'MSFT', 'AMZN', 'NVDA', 'META', 'TSLA',  # Magnificent 7
-    'SPY', 'QQQ', 'DIA',                                          # Major ETF indices
-    'JPM', 'BAC', 'BRK.B',                                        # Financials
+    'AAPL', 'GOOGL', 'MSFT', 'AMZN', 'NVDA', 'META', 'TSLA',        # Magnificent 7
+    'SPY', 'QQQ', 'DIA',                                            # Major ETF indices
+    'JPM', 'BAC', 'BRK.B',                                          # Financials
 ]
 
 DEFAULT_NEWS_SECTIONS = [

@@ -160,10 +160,10 @@ def sync_all_sports_data(supabase: Client, news_limit_per_sport: int = 20) -> Di
     Returns:
         Dictionary with sync statistics
     """
-    # Import from sports_fetcher module (same directory)
+    # Import from espn module (same directory)
     # When running as script, import directly; when imported as module, use relative import
     try:
-        from .sports_fetcher import SPORT_CONFIGS, fetch_espn_news, fetch_espn_scores
+        from .espn import SPORT_CONFIGS, fetch_espn_news, fetch_espn_scores
     except ImportError:
         # Fallback for when running as standalone script
         import sys
@@ -171,7 +171,7 @@ def sync_all_sports_data(supabase: Client, news_limit_per_sport: int = 20) -> Di
         current_dir = os.path.dirname(os.path.abspath(__file__))
         if current_dir not in sys.path:
             sys.path.insert(0, current_dir)
-        from sports_fetcher import SPORT_CONFIGS, fetch_espn_news, fetch_espn_scores
+        from espn import SPORT_CONFIGS, fetch_espn_news, fetch_espn_scores
     
     stats = {
         'leagues_processed': 0,

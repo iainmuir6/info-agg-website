@@ -70,7 +70,7 @@ def save_snippet(domain: str, name: str, endpoint: str, raw_sample, stored_shape
 # ---------------------------------------------------------------------------
 
 def snippet_nyt_top_stories():
-    from news_fetcher import fetch_nyt_top_stories
+    from nyt import fetch_nyt_top_stories
     result = fetch_nyt_top_stories(section='technology')
     if not result:
         return None, "fetch returned None"
@@ -102,7 +102,7 @@ def snippet_nyt_top_stories():
 # ---------------------------------------------------------------------------
 
 def snippet_espn_news():
-    from sports_fetcher import fetch_espn_news
+    from espn import fetch_espn_news
     articles = fetch_espn_news('basketball', 'nba', limit=5)
     if not articles:
         return None, "fetch returned empty list"
@@ -125,7 +125,7 @@ def snippet_espn_news():
 
 
 def snippet_espn_scoreboard():
-    from sports_fetcher import fetch_espn_scores
+    from espn import fetch_espn_scores
     games = fetch_espn_scores('basketball', 'nba')
     if not games:
         return None, "fetch returned empty list"
@@ -160,7 +160,7 @@ def snippet_espn_scoreboard():
 # ---------------------------------------------------------------------------
 
 def snippet_finnhub_quote():
-    from markets_fetcher import fetch_stock_quote, get_finnhub_api_key
+    from finnhub import fetch_stock_quote, get_finnhub_api_key
     api_key = get_finnhub_api_key()
     quote = fetch_stock_quote('AAPL', api_key=api_key)
     if not quote:
@@ -185,7 +185,7 @@ def snippet_finnhub_quote():
 
 
 def snippet_av_candles():
-    from markets_fetcher import fetch_stock_candles_av
+    from alpha_vantage import fetch_stock_candles_av
     candles = fetch_stock_candles_av('AAPL', days_back=7)
     if not candles:
         return None, "fetch returned None"
@@ -211,7 +211,7 @@ def snippet_av_candles():
 
 
 def snippet_finnhub_profile():
-    from markets_fetcher import fetch_company_profile, get_finnhub_api_key
+    from finnhub import fetch_company_profile, get_finnhub_api_key
     api_key = get_finnhub_api_key()
     profile = fetch_company_profile('AAPL', api_key=api_key)
     if not profile:
@@ -237,7 +237,7 @@ def snippet_finnhub_profile():
 
 
 def snippet_finnhub_company_news():
-    from markets_fetcher import fetch_company_news, get_finnhub_api_key
+    from finnhub import fetch_company_news, get_finnhub_api_key
     api_key = get_finnhub_api_key()
     articles = fetch_company_news('AAPL', days_back=7, api_key=api_key)
     if not articles:
@@ -262,7 +262,7 @@ def snippet_finnhub_company_news():
 
 
 def snippet_finnhub_market_news():
-    from markets_fetcher import fetch_market_news, get_finnhub_api_key
+    from finnhub import fetch_market_news, get_finnhub_api_key
     api_key = get_finnhub_api_key()
     articles = fetch_market_news('crypto', api_key=api_key)
     if not articles:
@@ -291,7 +291,7 @@ def snippet_finnhub_market_news():
 # ---------------------------------------------------------------------------
 
 def snippet_spotify_new_releases():
-    from media_fetcher import fetch_spotify_new_releases, get_spotify_access_token
+    from spotify import fetch_spotify_new_releases, get_spotify_access_token
     token = get_spotify_access_token()
     if not token:
         return None, "failed to get Spotify access token"
@@ -335,7 +335,7 @@ def snippet_spotify_new_releases():
 
 
 def snippet_reddit_hot_posts():
-    from media_fetcher import fetch_reddit_hot
+    from reddit import fetch_reddit_hot
     posts = fetch_reddit_hot('technology', limit=5)
     if not posts:
         return None, "fetch returned None or empty"

@@ -124,13 +124,13 @@ def sync_nyt_data(supabase: Client, sections: Optional[List[str]] = None) -> Dic
         Dictionary with sync statistics
     """
     try:
-        from .news_fetcher import fetch_nyt_top_stories, fetch_nyt_most_popular
+        from .nyt import fetch_nyt_top_stories, fetch_nyt_most_popular
     except ImportError:
         import sys
         current_dir = os.path.dirname(os.path.abspath(__file__))
         if current_dir not in sys.path:
             sys.path.insert(0, current_dir)
-        from news_fetcher import fetch_nyt_top_stories, fetch_nyt_most_popular
+        from nyt import fetch_nyt_top_stories, fetch_nyt_most_popular
 
     if sections is None:
         sections = ['home', 'technology', 'business', 'science', 'health', 'sports', 'arts', 'world', 'politics', 'us']
