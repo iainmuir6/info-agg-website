@@ -75,7 +75,8 @@ def run_sports_etl(supabase: Client) -> Dict[str, Any]:
 def run_markets_etl(
     supabase: Client,
     watchlist: Optional[List[str]] = None,
-    fetch_candles: bool = True
+    fetch_candles: bool = True,
+    quote_days_back: int = 0
 ) -> Dict[str, Any]:
     """Run markets ETL: stock quotes, candles, company news, and market news."""
     print("\n" + "=" * 60)
@@ -105,8 +106,9 @@ def run_markets_etl(
                 ticker,
                 fetch_quotes=True,
                 fetch_candles=fetch_candles,
-                fetch_news=True,
-                fetch_profile=True
+                fetch_news=(quote_days_back == 0),  # skip company news during backfill
+                fetch_profile=True,
+                quote_days_back=quote_days_back
             )
             total_stats['stocks_processed'] += 1
             total_stats['quotes_inserted'] += stats.get('quotes_inserted', 0)
@@ -212,7 +214,8 @@ def run_full_etl(
     skip_markets: bool = False,
     skip_news: bool = False,
     skip_media: bool = False,
-    fetch_candles: bool = True
+    fetch_candles: bool = True,
+    quote_days_back: int = 0
 ) -> Dict[str, Any]:
     """
     Run the full ETL pipeline for all data sources.
@@ -224,6 +227,7 @@ def run_full_etl(
         skip_news: Skip news ETL
         skip_media: Skip media ETL
         fetch_candles: Whether to fetch historical candle data (slow)
+        quote_days_back: If > 0, backfill this many days of daily quotes per ticker
 
     Returns:
         Summary dictionary with all ETL results
@@ -248,7 +252,9 @@ def run_full_etl(
         results['sports'] = run_sports_etl(supabase)
 
     if not skip_markets:
-        results['markets'] = run_markets_etl(supabase, watchlist=watchlist, fetch_candles=fetch_candles)
+        results['markets'] = run_markets_etl(
+            supabase, watchlist=watchlist, fetch_candles=fetch_candles, quote_days_back=quote_days_back
+        )
 
     if not skip_news:
         results['news'] = run_news_etl(supabase)
@@ -284,6 +290,8 @@ def main():
     parser.add_argument('--skip-news', action='store_true', help='Skip news ETL')
     parser.add_argument('--skip-media', action='store_true', help='Skip media ETL')
     parser.add_argument('--no-candles', action='store_true', help='Skip historical candle data (faster)')
+    parser.add_argument('--backfill-quotes', type=int, default=0, metavar='DAYS',
+                        help='Backfill N days of daily quote history per ticker (e.g. 30)')
     parser.add_argument('--watchlist', nargs='+', help='Custom stock ticker list')
     parser.add_argument('--output', help='Write results JSON to file')
     parser.add_argument('--sports-only', action='store_true')
@@ -310,6 +318,7 @@ def main():
         skip_news=args.skip_news,
         skip_media=args.skip_media,
         fetch_candles=not args.no_candles,
+        quote_days_back=args.backfill_quotes,
     )
 
     if args.output:

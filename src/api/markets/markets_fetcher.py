@@ -7,6 +7,7 @@
 #       ---> Supports stock quotes, candles, company profiles, news, sentiments, and more
 
 from typing import Dict, List, Optional, Any
+from collections import deque
 from datetime import datetime, timedelta
 import requests
 import os
@@ -18,6 +19,24 @@ load_dotenv()
 
 FINNHUB_BASE_URL = "https://finnhub.io/api/v1"
 ALPHA_VANTAGE_BASE_URL = "https://www.alphavantage.co/query"
+
+# Finnhub free tier: 60 API calls/minute — track with a sliding window
+_FH_CALL_TIMES: deque = deque()
+_FH_RATE_LIMIT = 60
+_FH_WINDOW = 60.0
+
+
+def _fh_rate_limit() -> None:
+    """Sleep only if we're about to exceed 60 req/min on Finnhub."""
+    now = time.time()
+    while _FH_CALL_TIMES and now - _FH_CALL_TIMES[0] >= _FH_WINDOW:
+        _FH_CALL_TIMES.popleft()
+    if len(_FH_CALL_TIMES) >= _FH_RATE_LIMIT:
+        sleep_for = _FH_WINDOW - (now - _FH_CALL_TIMES[0]) + 0.05
+        if sleep_for > 0:
+            time.sleep(sleep_for)
+    _FH_CALL_TIMES.append(time.time())
+
 
 STOCK_INDICES = {
     'sp500': '^GSPC',
@@ -61,8 +80,9 @@ def fetch_stock_quote(ticker: str, api_key: Optional[str] = None) -> Optional[Di
         'symbol': ticker,
         'token': api_key
     }
-    
+
     try:
+        _fh_rate_limit()
         response = requests.get(url, params=params, timeout=10)
         response.raise_for_status()
         data = response.json()
@@ -92,70 +112,8 @@ def fetch_stock_quote(ticker: str, api_key: Optional[str] = None) -> Optional[Di
         return None
 
 
-def fetch_stock_candles(
-    ticker: str,
-    resolution: str = 'D',
-    days_back: int = 365,
-    api_key: Optional[str] = None
-) -> Optional[Dict[str, Any]]:
-    """
-    Fetch candlestick data (OHLCV) for a stock
-    
-    Args:
-        ticker: Stock symbol
-        resolution: Resolution of data (1, 5, 15, 30, 60, D, W, M)
-        days_back: Number of days of historical data to fetch
-        api_key: Optional API key
-    
-    Returns:
-        Dictionary with OHLCV data and timestamps
-    """
-    if api_key is None:
-        api_key = get_finnhub_api_key()
-    
-    # Calculate time range
-    end_time = datetime.now()
-    start_time = end_time - timedelta(days=days_back)
-    
-    from_timestamp = int(start_time.timestamp())
-    to_timestamp = int(end_time.timestamp())
-    
-    url = f"{FINNHUB_BASE_URL}/stock/candle"
-    params = {
-        'symbol': ticker,
-        'resolution': resolution,
-        'from': from_timestamp,
-        'to': to_timestamp,
-        'token': api_key
-    }
-    
-    try:
-        response = requests.get(url, params=params, timeout=10)
-        response.raise_for_status()
-        data = response.json()
-        
-        # Check for error response
-        if data.get('s') != 'ok':
-            return None
-        
-        return {
-            'ticker': ticker,
-            'resolution': resolution,
-            'open': data.get('o', []),  # Open prices
-            'high': data.get('h', []),  # High prices
-            'low': data.get('l', []),  # Low prices
-            'close': data.get('c', []),  # Close prices
-            'volume': data.get('v', []),  # Volumes
-            'timestamps': data.get('t', []),  # Unix timestamps
-            'fetched_at': datetime.now().isoformat()
-        }
-        
-    except requests.exceptions.RequestException as e:
-        print(f"Error fetching candles for {ticker}: {e}")
-        return None
-    except Exception as e:
-        print(f"Error parsing candles data for {ticker}: {e}")
-        return None
+# DEPRECATED: fetch_stock_candles (Finnhub /stock/candle) — use fetch_stock_candles_av instead.
+# def fetch_stock_candles(ticker, resolution='D', days_back=365, api_key=None): ...
 
 
 # Per-key rate-limit tracking (5 req/min on free tier)
@@ -294,8 +252,9 @@ def fetch_company_profile(ticker: str, api_key: Optional[str] = None) -> Optiona
         'symbol': ticker,
         'token': api_key
     }
-    
+
     try:
+        _fh_rate_limit()
         response = requests.get(url, params=params, timeout=10)
         response.raise_for_status()
         data = response.json()
@@ -327,6 +286,93 @@ def fetch_company_profile(ticker: str, api_key: Optional[str] = None) -> Optiona
         return None
 
 
+def fetch_etf_profile(ticker: str, api_key: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    """
+    Fetch ETF profile from Finnhub /etf/profile.
+    Returns data in the same shape as fetch_company_profile() for drop-in compatibility.
+    """
+    if api_key is None:
+        api_key = get_finnhub_api_key()
+
+    url = f"{FINNHUB_BASE_URL}/etf/profile"
+    params = {'symbol': ticker, 'token': api_key}
+
+    try:
+        _fh_rate_limit()
+        response = requests.get(url, params=params, timeout=10)
+        response.raise_for_status()
+        data = response.json()
+
+        if not data or not data.get('name'):
+            return None
+
+        return {
+            'ticker': ticker,
+            'name': data.get('name'),
+            'country': data.get('domicile'),
+            'currency': data.get('nav_currency'),
+            'exchange': None,
+            'ipo_date': data.get('inception_date'),
+            'market_cap': None,
+            'share_outstanding': None,
+            'logo': data.get('logo'),
+            'website': data.get('website'),
+            # asset_class (e.g. "Equity") used as the industry substitute for ETFs
+            'industry': data.get('asset_class'),
+            'fetched_at': datetime.now().isoformat()
+        }
+
+    except requests.exceptions.RequestException as e:
+        print(f"Error fetching ETF profile for {ticker}: {e}")
+        return None
+    except Exception as e:
+        print(f"Error parsing ETF profile for {ticker}: {e}")
+        return None
+
+
+def fetch_historical_quotes(
+    ticker: str,
+    days_back: int = 30,
+    api_key: Optional[str] = None
+) -> List[Dict[str, Any]]:
+    """
+    Fetch the last N days of daily OHLCV candles and convert each day to a
+    quote-shaped record (same fields as fetch_stock_quote()) for bulk backfill.
+
+    Returns a list of quote dicts ordered oldest → newest.
+    """
+    candles = fetch_stock_candles_av(ticker, days_back=days_back)
+    if not candles or not candles.get('timestamps'):
+        return []
+
+    timestamps = candles['timestamps']
+    closes = candles['close']
+    opens = candles['open']
+    highs = candles['high']
+    lows = candles['low']
+
+    quotes = []
+    for i, ts in enumerate(timestamps):
+        prev_close = closes[i - 1] if i > 0 else None
+        close = closes[i]
+        change = (close - prev_close) if prev_close is not None else None
+        pct_change = (change / prev_close * 100) if prev_close else None
+        quotes.append({
+            'ticker': ticker,
+            'current_price': close,
+            'change': change,
+            'percent_change': pct_change,
+            'high_price': highs[i],
+            'low_price': lows[i],
+            'open_price': opens[i],
+            'previous_close': prev_close,
+            'timestamp': ts,
+            'fetched_at': datetime.now().isoformat()
+        })
+
+    return quotes
+
+
 def fetch_company_news(
     ticker: str,
     days_back: int = 7,
@@ -356,8 +402,9 @@ def fetch_company_news(
         'to': end_date.strftime('%Y-%m-%d'),
         'token': api_key
     }
-    
+
     try:
+        _fh_rate_limit()
         response = requests.get(url, params=params, timeout=10)
         response.raise_for_status()
         data = response.json()
@@ -407,8 +454,9 @@ def fetch_market_news(category: str = 'general', min_id: int = 0, api_key: Optio
         'minId': min_id,
         'token': api_key
     }
-    
+
     try:
+        _fh_rate_limit()
         response = requests.get(url, params=params, timeout=10)
         response.raise_for_status()
         data = response.json()

@@ -21,6 +21,10 @@ python src/api/run_etl.py --no-candles             # Skip slow historical candle
 python src/api/run_etl.py --skip-markets --skip-media
 ```
 
+## Rate Limits
+
+See [`src/api/RATE_LIMITS.md`](src/api/RATE_LIMITS.md) for per-API limits, daily caps, and how rate limiting is implemented in each fetcher.
+
 ## Environment Variables
 
 `.env.local` (Next.js frontend + ETL):

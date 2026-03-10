@@ -202,6 +202,46 @@ def insert_stock_candles(supabase: Client, stock_id: int, candles_data: Dict[str
         return 0
 
 
+def insert_stock_quotes_batch(supabase: Client, stock_id: int, quotes: List[Dict[str, Any]]) -> int:
+    """
+    Bulk-upsert a list of quote records (e.g. from fetch_historical_quotes()).
+
+    Returns the number of rows upserted.
+    """
+    if not quotes:
+        return 0
+
+    batch_data = []
+    for q in quotes:
+        ts = q.get('timestamp') or int(time.time())
+        batch_data.append({
+            'stock_id': stock_id,
+            'current_price': q.get('current_price'),
+            'change_amount': q.get('change'),
+            'percent_change': q.get('percent_change'),
+            'high_price': q.get('high_price'),
+            'low_price': q.get('low_price'),
+            'open_price': q.get('open_price'),
+            'previous_close': q.get('previous_close'),
+            'quote_timestamp': ts
+        })
+
+    try:
+        inserted = 0
+        batch_size = 100
+        for i in range(0, len(batch_data), batch_size):
+            batch = batch_data[i:i + batch_size]
+            response = supabase.table('stock_quotes').upsert(
+                batch,
+                on_conflict='stock_id,quote_timestamp'
+            ).execute()
+            inserted += len(batch)
+        return inserted
+    except Exception as e:
+        print(f"Error batch-inserting quotes for stock_id={stock_id}: {e}")
+        return 0
+
+
 def insert_company_news(supabase: Client, stock_id: int, articles: List[Dict[str, Any]]) -> int:
     """
     Insert company news articles
@@ -297,30 +337,32 @@ def sync_stock_data(
     fetch_quotes: bool = True,
     fetch_candles: bool = True,
     fetch_news: bool = True,
-    fetch_profile: bool = True
+    fetch_profile: bool = True,
+    quote_days_back: int = 0
 ) -> Dict[str, Any]:
     """
-    Sync all data for a specific stock
-    
+    Sync all data for a specific stock.
+
     Args:
         supabase: Supabase client instance
         ticker: Stock ticker symbol
-        fetch_quotes: Whether to fetch and insert quotes
-        fetch_candles: Whether to fetch and insert candles
+        fetch_quotes: Whether to fetch and insert the latest quote
+        fetch_candles: Whether to fetch and insert candles (Alpha Vantage)
         fetch_news: Whether to fetch and insert company news
-        fetch_profile: Whether to fetch and insert company profile
-    
+        fetch_profile: Whether to fetch and insert company/ETF profile
+        quote_days_back: If > 0, backfill this many days of daily quotes using
+                         Finnhub candles (in addition to the latest quote).
+
     Returns:
         Dictionary with sync statistics
     """
-    # Import from markets_fetcher module
     try:
         from .markets_fetcher import (
             fetch_stock_quote, fetch_stock_candles_av, fetch_company_profile,
-            fetch_company_news, get_finnhub_api_key
+            fetch_etf_profile, fetch_company_news, fetch_historical_quotes,
+            get_finnhub_api_key
         )
     except ImportError:
-        # Fallback for when running as standalone script
         import sys
         import os
         current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -328,9 +370,10 @@ def sync_stock_data(
             sys.path.insert(0, current_dir)
         from markets_fetcher import (
             fetch_stock_quote, fetch_stock_candles_av, fetch_company_profile,
-            fetch_company_news, get_finnhub_api_key
+            fetch_etf_profile, fetch_company_news, fetch_historical_quotes,
+            get_finnhub_api_key
         )
-    
+
     stats = {
         'ticker': ticker,
         'profile_updated': False,
@@ -339,36 +382,47 @@ def sync_stock_data(
         'news_inserted': 0,
         'errors': []
     }
-    
+
     try:
         api_key = get_finnhub_api_key()
-        
-        # Fetch and insert profile
+
+        # Fetch and insert profile — try company profile first, fall back to ETF profile
         if fetch_profile:
             print(f"Fetching profile for {ticker}...")
             profile = fetch_company_profile(ticker, api_key)
+            if not profile:
+                print(f"  No company profile for {ticker}, trying ETF profile...")
+                profile = fetch_etf_profile(ticker, api_key)
             if profile:
                 stock_id = get_or_create_stock(supabase, ticker, profile)
                 if stock_id:
                     stats['profile_updated'] = True
             else:
-                # Still create stock record even if profile fetch fails
                 stock_id = get_or_create_stock(supabase, ticker)
         else:
             stock_id = get_or_create_stock(supabase, ticker)
-        
+
         if not stock_id:
             stats['errors'].append(f"Failed to get/create stock for {ticker}")
             return stats
-        
-        # Fetch and insert quote
+
+        # Fetch and insert latest quote
         if fetch_quotes:
             print(f"Fetching quote for {ticker}...")
             quote = fetch_stock_quote(ticker, api_key)
             if quote:
                 if insert_stock_quote(supabase, stock_id, quote):
                     stats['quotes_inserted'] = 1
-        
+
+        # Backfill historical quotes from Finnhub daily candles
+        if quote_days_back > 0:
+            print(f"Backfilling {quote_days_back}-day quote history for {ticker}...")
+            historical = fetch_historical_quotes(ticker, days_back=quote_days_back, api_key=api_key)
+            if historical:
+                count = insert_stock_quotes_batch(supabase, stock_id, historical)
+                stats['quotes_inserted'] += count
+                print(f"  Backfilled {count} historical quotes")
+
         # Fetch and insert candles (Alpha Vantage TIME_SERIES_DAILY)
         if fetch_candles:
             print(f"Fetching candles for {ticker}...")
@@ -377,7 +431,7 @@ def sync_stock_data(
                 count = insert_stock_candles(supabase, stock_id, candles)
                 stats['candles_inserted'] = count
                 print(f"  Inserted {count} candles")
-        
+
         # Fetch and insert company news
         if fetch_news:
             print(f"Fetching company news for {ticker}...")
@@ -386,12 +440,12 @@ def sync_stock_data(
                 count = insert_company_news(supabase, stock_id, news)
                 stats['news_inserted'] = count
                 print(f"  Inserted {count} news articles")
-        
+
     except Exception as e:
         error_msg = f"Error syncing data for {ticker}: {e}"
         stats['errors'].append(error_msg)
         print(error_msg)
-    
+
     return stats
 
 
