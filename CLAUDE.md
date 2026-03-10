@@ -17,8 +17,10 @@ python src/api/run_etl.py --sports-only
 python src/api/run_etl.py --markets-only
 python src/api/run_etl.py --news-only
 python src/api/run_etl.py --media-only
-python src/api/run_etl.py --no-candles             # Skip slow historical candle data
 python src/api/run_etl.py --skip-markets --skip-media
+python src/api/run_etl.py --fmp-only               # Run FMP ETL only
+python src/api/run_etl.py --fmp-etf-only           # FMP for ETF tickers only (saves budget)
+python src/api/run_etl.py --skip-fmp               # Skip FMP entirely
 ```
 
 ## Rate Limits
@@ -31,7 +33,7 @@ See [`src/api/RATE_LIMITS.md`](src/api/RATE_LIMITS.md) for per-API limits, daily
 - `NEXT_PUBLIC_SUPABASE_URL` — Supabase project URL
 - `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` — Supabase anon/publishable key (frontend)
 - `SUPABASE_SERVICE_ROLE_KEY` — Service role key (ETL writes only)
-- API keys for fetchers: `NYT_API_KEY`, `NEWS_API_KEY`, `FINNHUB_API_KEY`, `SPOTIFY_CLIENT_ID`, `SPOTIFY_CLIENT_SECRET`
+- API keys for fetchers: `NYT_API_KEY`, `NEWS_API_KEY`, `FINNHUB_API_KEY`, `FMP_API_KEY`, `SPOTIFY_CLIENT_ID`, `SPOTIFY_CLIENT_SECRET`
 
 ## Architecture
 
@@ -68,7 +70,7 @@ Each domain follows the same pattern:
 
 **Domain → data sources:**
 - `sports/` → ESPN API (scores + news for NFL, NBA, NHL, MLB, EPL, etc.)
-- `markets/` → Finnhub API (stock quotes, candles, company news, market news)
+- `markets/` → Finnhub API (stock quotes, company news, market news) + FMP API (company profiles, ETF holdings)
 - `news/` → NYT Top Stories API + NewsAPI
 - `media/` → Spotify API (new releases) + Reddit API (hot posts)
 - `misc/` — placeholder for additional sources
@@ -85,7 +87,7 @@ All tables live in the `info_agg` schema. Apply migrations in order:
 
 **Key tables:**
 - Sports: `leagues`, `sports_news`, `sports_scores`
-- Markets: `stocks`, `stock_quotes`, `stock_candles`, `company_news`, `market_news`
+- Markets: `stocks`, `stock_quotes`, `etf_holdings`, `company_news`, `market_news`
 - News: `news_articles`
 - Media: `spotify_releases`, `reddit_posts`
 
