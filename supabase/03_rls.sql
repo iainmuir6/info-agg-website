@@ -83,6 +83,13 @@ CREATE POLICY "etf_holdings: anon read"
     USING (true);
 
 
+ALTER TABLE info_agg.news_sentiment ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "news_sentiment: anon read"
+    ON info_agg.news_sentiment FOR SELECT
+    TO anon, authenticated
+    USING (true);
+
+
 -- ── NEWS ────────────────────────────────────────────────────
 
 ALTER TABLE info_agg.news_articles ENABLE ROW LEVEL SECURITY;

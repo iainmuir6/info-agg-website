@@ -113,6 +113,7 @@ CREATE TABLE IF NOT EXISTS info_agg.stocks (
     city              TEXT,
     state             TEXT,
     beta              DECIMAL(8,4),
+    asset_type        TEXT    NOT NULL DEFAULT 'stock',  -- 'stock' | 'etf' | 'crypto'
     is_active         BOOLEAN NOT NULL DEFAULT true,
     created_at        TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
     updated_at        TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
@@ -211,6 +212,32 @@ CREATE TABLE IF NOT EXISTS info_agg.etf_holdings (
 
 CREATE TRIGGER trg_etf_holdings_updated_at
     BEFORE UPDATE ON info_agg.etf_holdings
+    FOR EACH ROW EXECUTE FUNCTION info_agg.set_updated_at();
+
+
+-- ============================================================
+-- MARKETS — news_sentiment
+-- ============================================================
+CREATE TABLE IF NOT EXISTS info_agg.news_sentiment (
+    id                      UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    title                   TEXT NOT NULL,
+    url                     TEXT NOT NULL UNIQUE,
+    source                  TEXT,
+    source_domain           TEXT,
+    summary                 TEXT,
+    banner_image            TEXT,
+    published_at            TIMESTAMP WITH TIME ZONE,
+    topics                  TEXT[],
+    overall_sentiment_score DECIMAL(6,4),
+    overall_sentiment_label TEXT,
+    ticker_sentiments       JSONB,
+    fetched_at              TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+    created_at              TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+    updated_at              TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
+);
+
+CREATE TRIGGER trg_news_sentiment_updated_at
+    BEFORE UPDATE ON info_agg.news_sentiment
     FOR EACH ROW EXECUTE FUNCTION info_agg.set_updated_at();
 
 

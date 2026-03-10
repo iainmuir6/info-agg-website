@@ -123,6 +123,18 @@ CREATE INDEX IF NOT EXISTS idx_market_news_category_published
     ON info_agg.market_news (category, published_at DESC);
 
 
+-- ── MARKETS — news_sentiment ────────────────────────────────
+
+CREATE INDEX IF NOT EXISTS idx_news_sentiment_published_at
+    ON info_agg.news_sentiment (published_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_news_sentiment_sentiment_label
+    ON info_agg.news_sentiment (overall_sentiment_label);
+
+CREATE INDEX IF NOT EXISTS idx_news_sentiment_fetched_at
+    ON info_agg.news_sentiment (fetched_at DESC);
+
+
 -- ── NEWS — news_articles ────────────────────────────────────
 
 CREATE INDEX IF NOT EXISTS idx_news_articles_source
