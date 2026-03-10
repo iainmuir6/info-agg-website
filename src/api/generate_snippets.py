@@ -103,6 +103,25 @@ def snippet_nyt_top_stories():
     ), None
 
 
+def snippet_nyt_archive():
+    """Sample from the NYT Archive API for Feb 2025 (since Feb 1)."""
+    from nyt import fetch_nyt_archive, NYT_SECTIONS
+    articles = fetch_nyt_archive(
+        year=2025, month=2,
+        sections=NYT_SECTIONS,
+        # since_date='2025-02-01',
+        max_per_section_per_day=5,
+    )
+    if not articles:
+        return None, "fetch returned empty list"
+    stored_shapes = articles[:2]  # already DB-shaped
+    return save_snippet(
+        'news', 'nyt_archive_feb2025',
+        'GET https://api.nytimes.com/svc/archive/v1/2026/2.json',
+        articles[:2], stored_shapes
+    ), None
+
+
 # ---------------------------------------------------------------------------
 # SPORTS
 # ---------------------------------------------------------------------------
@@ -317,6 +336,59 @@ def snippet_finnhub_market_news():
         'markets', 'finnhub_market_news',
         'GET https://finnhub.io/api/v1/news?category=crypto',
         articles[:2], stored_shapes
+    ), None
+
+
+def snippet_etfdb_vti():
+    """Scrape VTI profile + holdings from etfdb.com and save as a markets snippet."""
+    import sys
+    sys.path.insert(0, str(ROOT / 'markets'))
+    from etfdb import scrape_all_etfs
+
+    results = scrape_all_etfs(['VTI'], headless=True)
+    if not results:
+        return None, "scrape_all_etfs returned empty list"
+
+    r = results[0]
+    info = r.get('info')
+    holdings = r.get('holdings', [])
+
+    if not info and not holdings:
+        return None, "no info or holdings returned for VTI"
+
+    raw_sample = {
+        'ticker': 'VTI',
+        'profile_url': 'https://etfdb.com/etf/VTI/#etf-ticker-profile',
+        'holdings_url': 'https://etfdb.com/etf/VTI/#holdings',
+        'info': info,
+        'holdings': holdings[:2],
+    }
+
+    stored_shape = {
+        'stocks_upsert': {
+            'ticker': 'VTI',
+            'asset_type': 'etf',
+            'name': info.get('name') if info else None,
+            'industry': info.get('industry') if info else None,
+        },
+        'etf_holdings_upsert': [
+            {
+                'etf_stock_id': '<looked up from stocks table>',
+                'asset_symbol': h.get('asset_symbol'),
+                'asset_name': h.get('asset_name'),
+                'weight_pct': h.get('weight_percentage'),
+                'shares': h.get('shares'),
+                'market_value': h.get('market_value'),
+                'as_of_date': h.get('as_of_date'),
+            }
+            for h in holdings[:2]
+        ],
+    }
+
+    return save_snippet(
+        'markets', 'etfdb_vti',
+        'Selenium https://etfdb.com/etf/VTI/#etf-ticker-profile + #holdings',
+        raw_sample, stored_shape
     ), None
 
 
@@ -584,6 +656,7 @@ def snippet_misc_useless_fact():
 
 SNIPPETS = [
     ('news',    'nyt_top_stories',        snippet_nyt_top_stories),
+    ('news',    'nyt_archive_feb2025',    snippet_nyt_archive),
     ('sports',  'espn_news',              snippet_espn_news),
     ('sports',  'espn_scoreboard',        snippet_espn_scoreboard),
     ('markets', 'finnhub_quote',          snippet_finnhub_quote),
@@ -592,6 +665,7 @@ SNIPPETS = [
     ('markets', 'finnhub_profile',        snippet_finnhub_profile),
     ('markets', 'finnhub_company_news',   snippet_finnhub_company_news),
     ('markets', 'finnhub_market_news',    snippet_finnhub_market_news),
+    ('markets', 'etfdb_vti',              snippet_etfdb_vti),
     ('media',   'spotify_new_releases',   snippet_spotify_new_releases),
     ('media',   'reddit_hot_posts',       snippet_reddit_hot_posts),
     ('misc',    'weather_new_york',       snippet_misc_weather),

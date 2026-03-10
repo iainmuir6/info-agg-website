@@ -13,13 +13,17 @@ python src/api/run_etl.py [flags]
 
 ## Initial Seed
 
-Run once when setting up a new environment. Goal: populate all tables with historical data so the frontend has something to display from day one.
-
-### Step 1 — Markets: profiles + quote history backfill
+Run once when setting up a new environment. One command does everything:
 
 ```bash
-python src/api/run_etl.py --markets-only --backfill-quotes 90
+python src/api/run_etl.py --seed
 ```
+
+This expands to `--backfill-quotes 30 --backfill-news 30 --backfill-sports 30` and runs all four domains in sequence.
+
+### What `--seed` does per domain
+
+#### Markets (Finnhub + FMP + AV)
 
 Per ticker (all 36 from `baskets.json`):
 
@@ -29,66 +33,63 @@ Per ticker (all 36 from `baskets.json`):
 | Fetch company profile | Finnhub `/stock/profile2` | `stocks` |
 | Fetch ETF info (if no Finnhub profile) | FMP `/stable/etf/information` | `stocks` |
 | Enrich stock profile (sector, CEO, beta, etc.) | FMP `/api/v3/profile` | `stocks` |
-| Backfill 90 days of daily OHLCV | AV `TIME_SERIES_DAILY` (stocks/ETFs) | `stock_quotes` |
-| Backfill 90 days of daily OHLCV | AV `DIGITAL_CURRENCY_DAILY` (crypto) | `stock_quotes` |
+| Backfill 30 days of daily OHLCV | AV `TIME_SERIES_DAILY` (stocks/ETFs) | `stock_quotes` |
+| Backfill 30 days of daily OHLCV | AV `DIGITAL_CURRENCY_DAILY` (crypto) | `stock_quotes` |
 | Fetch ETF holdings | FMP `/stable/etf/holdings` | `etf_holdings` |
 | Fetch market news (general/forex/crypto/merger) | Finnhub `/news` | `market_news` |
 | Fetch AV news sentiment (5 topics) | AV `NEWS_SENTIMENT` | `news_sentiment` |
 
-Company news is **skipped** during backfill to preserve API budget (only the latest 7-day window would be fetched anyway — not useful for historical seeding).
+Company news is **skipped** during backfill to preserve API budget.
 
-**AV budget note:** 36 tickers × 1 call = 36 AV calls for backfill. With 2 keys at 25 req/day each, this takes 2 days. Run the backfill across 2 days or reduce `--backfill-quotes` if budget is tight.
+> **AV budget note:** 36 tickers × 1 call = 36 AV calls for the quote backfill. With 2 keys at 25 req/day each (50 total), all 36 tickers fit in a single run with headroom to spare.
 
----
-
-### Step 2 — Sports: seed scores + news
-
-```bash
-python src/api/run_etl.py --sports-only
-```
+#### Sports
 
 | Action | Source | Table |
 |--------|--------|-------|
-| Fetch scores (all active leagues) | ESPN `/scoreboard` | `sports_scores` |
-| Fetch news (all active leagues) | ESPN `/news` | `sports_news` |
+| Backfill 30 days of scores for all leagues | ESPN `/scoreboard?dates=YYYYMMDD` | `sports_scores` |
+| Fetch current news for all leagues | ESPN `/news` | `sports_news` |
 
 Leagues seeded by `01_schema.sql` / `02_tables.sql`: NFL, NBA, NHL, MLB, EPL, WNBA, college football/basketball.
 
----
-
-### Step 3 — News: seed articles
-
-```bash
-python src/api/run_etl.py --news-only
-```
+#### News
 
 | Action | Source | Table |
 |--------|--------|-------|
-| Fetch top stories (10 sections) | NYT `/topstories/v2/{section}` | `news_articles` |
-| Fetch most popular | NYT `/mostpopular/v2/viewed/1` | `news_articles` |
+| Backfill 30 days via Archive API* | NYT `/archive/v1/{year}/{month}.json` | `news_articles` |
+| Fetch current top stories (10 sections) | NYT `/topstories/v2/{section}` | `news_articles` |
+| Fetch most popular (7-day viewed) | NYT `/mostpopular/v2/viewed/7` | `news_articles` |
 
----
+Archive results are filtered to the 10 configured sections, articles since the cutoff date, and capped at **5 articles per section per day** (approximates "most popular" since the Archive API has no popularity signal).
 
-### Step 4 — Media: seed releases + posts
+> **Archive API prerequisite:** The "Archive API" product must be enabled at [developer.nytimes.com/my-apps](https://developer.nytimes.com/my-apps) for your `NYT_API_KEY`. The default key (Top Stories + Most Popular) returns 401 on the archive endpoint. If not enabled, `--backfill-news` is silently skipped and only current top stories are fetched.
 
-```bash
-python src/api/run_etl.py --media-only
-```
+#### Media
 
 | Action | Source | Table |
 |--------|--------|-------|
 | Fetch new album releases | Spotify `/v1/browse/new-releases` | `spotify_releases` |
 | Fetch hot posts (8 subreddits) | Reddit `/r/{sub}/hot.json` | `reddit_posts` |
 
+No historical backfill available for media sources.
+
 ---
 
-### Full seed in one shot (if AV budget allows)
+### Seed with custom backfill depth
 
 ```bash
-python src/api/run_etl.py --backfill-quotes 90
-```
+# Deeper history (uses more AV budget)
+python src/api/run_etl.py --seed --backfill-quotes 180
 
-Runs all four domains in sequence with backfill enabled. Only viable with enough AV daily budget (36+ calls).
+# Shallow seed (AV budget-constrained)
+python src/api/run_etl.py --seed --backfill-quotes 30
+
+# Seed individual domains independently
+python src/api/run_etl.py --markets-only --backfill-quotes 30
+python src/api/run_etl.py --news-only    --backfill-news 30
+python src/api/run_etl.py --sports-only  --backfill-sports 30
+python src/api/run_etl.py --media-only
+```
 
 ---
 

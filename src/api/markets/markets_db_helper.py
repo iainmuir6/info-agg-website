@@ -318,7 +318,6 @@ def sync_stock_data(
             fetch_company_news, fetch_crypto_quote, get_finnhub_api_key
         )
         from .alpha_vantage import fetch_historical_quotes, fetch_crypto_candles_av
-        from .fmp import fetch_etf_info as fmp_fetch_etf_info, get_fmp_api_key
     except ImportError:
         import sys
         import os
@@ -330,7 +329,6 @@ def sync_stock_data(
             fetch_company_news, fetch_crypto_quote, get_finnhub_api_key
         )
         from alpha_vantage import fetch_historical_quotes, fetch_crypto_candles_av
-        from fmp import fetch_etf_info as fmp_fetch_etf_info, get_fmp_api_key
 
     stats = {
         'ticker': ticker,
@@ -350,13 +348,7 @@ def sync_stock_data(
             print(f"Fetching profile for {ticker}...")
             profile = fetch_company_profile(ticker, api_key)
             if not profile:
-                print(f"  No company profile for {ticker}, trying FMP ETF info...")
-                try:
-                    fmp_key = get_fmp_api_key()
-                    profile = fmp_fetch_etf_info(ticker, fmp_key)
-                except Exception as fmp_err:
-                    print(f"  FMP ETF info unavailable for {ticker}: {fmp_err}")
-                    profile = None
+                print(f"  No company profile for {ticker} — skipping profile update")
             if profile:
                 stock_id = get_or_create_stock(supabase, ticker, profile, asset_type=asset_type)
                 if stock_id:
@@ -393,8 +385,8 @@ def sync_stock_data(
                 stats['quotes_inserted'] += count
                 print(f"  Backfilled {count} historical quotes")
 
-        # Fetch and insert company news (skip for crypto)
-        if fetch_news and asset_type != 'crypto':
+        # Fetch and insert company news (stocks only — skip ETFs and crypto)
+        if fetch_news and asset_type not in ('crypto', 'etf'):
             print(f"Fetching company news for {ticker}...")
             news = fetch_company_news(ticker, days_back=7, api_key=api_key)
             if news:
@@ -526,14 +518,14 @@ def sync_fmp_data(
         Stats dict
     """
     try:
-        from .fmp import fetch_company_profile as fmp_profile, fetch_etf_info, fetch_etf_holdings, get_fmp_api_key
+        from .fmp import fetch_company_profile as fmp_profile, get_fmp_api_key
     except ImportError:
         import sys
         import os
         current_dir = os.path.dirname(os.path.abspath(__file__))
         if current_dir not in sys.path:
             sys.path.insert(0, current_dir)
-        from fmp import fetch_company_profile as fmp_profile, fetch_etf_info, fetch_etf_holdings, get_fmp_api_key
+        from fmp import fetch_company_profile as fmp_profile, get_fmp_api_key
 
     stats: Dict[str, Any] = {
         'profiles_updated': 0,
@@ -556,38 +548,26 @@ def sync_fmp_data(
 
     for ticker in watchlist:
         try:
+            # ETFs are now handled exclusively by sync_etfdb_data(); skip them here
             if ticker in etf_set:
-                print(f"  [{ticker}] Fetching FMP ETF info...")
-                info = fetch_etf_info(ticker, api_key)
-                if info:
-                    stock_id = get_or_create_stock(supabase, ticker, info)
-                    if stock_id:
-                        stats['etf_info_updated'] += 1
+                continue
 
-                        if not skip_holdings:
-                            print(f"  [{ticker}] Fetching FMP ETF holdings...")
-                            holdings = fetch_etf_holdings(ticker, api_key)
-                            if holdings:
-                                count = upsert_etf_holdings(supabase, stock_id, holdings)
-                                stats['etf_holdings_upserted'] += count
-                                print(f"    Upserted {count} holdings")
-            else:
-                print(f"  [{ticker}] Fetching FMP company profile...")
-                profile = fmp_profile(ticker, api_key)
-                if profile:
-                    # Enrich existing stocks row with FMP extras
-                    stock_id = get_or_create_stock(supabase, ticker, profile)
-                    if stock_id:
-                        # Write FMP-only fields that get_or_create_stock doesn't cover
-                        extra_fields = {k: profile[k] for k in
-                                        ('sector', 'description', 'ceo', 'city', 'state', 'beta')
-                                        if profile.get(k) is not None}
-                        if extra_fields:
-                            try:
-                                supabase.table('stocks').update(extra_fields).eq('id', stock_id).execute()
-                            except Exception:
-                                pass  # columns may not exist yet — non-fatal
-                        stats['profiles_updated'] += 1
+            print(f"  [{ticker}] Fetching FMP company profile...")
+            profile = fmp_profile(ticker, api_key)
+            if profile:
+                # Enrich existing stocks row with FMP extras
+                stock_id = get_or_create_stock(supabase, ticker, profile)
+                if stock_id:
+                    # Write FMP-only fields that get_or_create_stock doesn't cover
+                    extra_fields = {k: profile[k] for k in
+                                    ('sector', 'description', 'ceo', 'city', 'state', 'beta')
+                                    if profile.get(k) is not None}
+                    if extra_fields:
+                        try:
+                            supabase.table('stocks').update(extra_fields).eq('id', stock_id).execute()
+                        except Exception:
+                            pass  # columns may not exist yet — non-fatal
+                    stats['profiles_updated'] += 1
 
         except RuntimeError as e:
             # Daily limit hit — abort remaining FMP calls
@@ -597,6 +577,107 @@ def sync_fmp_data(
         except Exception as e:
             msg = f"FMP error for {ticker}: {e}"
             print(msg)
+            stats['errors'].append(msg)
+
+    return stats
+
+
+def sync_etfdb_data(supabase: Client, etf_tickers: List[str]) -> Dict[str, Any]:
+    """
+    Scrape all ETF pages in one Selenium session, then batch-upsert to Supabase.
+
+    Flow:
+      1. scrape_all_etfs(etf_tickers) — one browser session, one page visit per ticker,
+         returns [{ticker, info, holdings}] for all tickers
+      2. For each result: info None → FMP company profile fallback
+      3. get_or_create_stock() + upsert_etf_holdings() for every ticker
+
+    Trigger: manual only via --scrape-etf-info. Never called on daily/seed runs.
+
+    Returns:
+        Stats dict: etf_info_updated, etf_holdings_upserted, fmp_fallbacks, errors
+    """
+    try:
+        from .etfdb import scrape_all_etfs
+    except ImportError:
+        import sys
+        import os
+        current_dir = os.path.dirname(os.path.abspath(__file__))
+        if current_dir not in sys.path:
+            sys.path.insert(0, current_dir)
+        from etfdb import scrape_all_etfs
+
+    try:
+        from .fmp import fetch_company_profile as fmp_profile, get_fmp_api_key
+    except ImportError:
+        import sys
+        import os
+        current_dir = os.path.dirname(os.path.abspath(__file__))
+        if current_dir not in sys.path:
+            sys.path.insert(0, current_dir)
+        from fmp import fetch_company_profile as fmp_profile, get_fmp_api_key
+
+    stats: Dict[str, Any] = {
+        'etf_info_updated': 0,
+        'etf_holdings_upserted': 0,
+        'fmp_fallbacks': 0,
+        'errors': [],
+    }
+
+    fmp_key: Optional[str] = None
+    try:
+        fmp_key = get_fmp_api_key()
+    except ValueError:
+        pass  # FMP key optional — used only as fallback for info
+
+    # --- Phase 1: scrape all pages in one browser session ---
+    print(f"\nScraping {len(etf_tickers)} ETF pages via Selenium...")
+    scraped = scrape_all_etfs(etf_tickers)
+
+    # --- Phase 2: upsert results to Supabase ---
+    print(f"\nUpserting {len(scraped)} ETF results to Supabase...")
+    for result in scraped:
+        ticker = result['ticker']
+        info = result['info']
+        holdings = result['holdings']
+
+        try:
+            # Info: fall back to FMP company profile if etfdb returned nothing
+            if info is None:
+                print(f"  [{ticker}] etfdb info unavailable — trying FMP profile fallback...")
+                if fmp_key:
+                    try:
+                        info = fmp_profile(ticker, fmp_key)
+                        if info:
+                            stats['fmp_fallbacks'] += 1
+                    except Exception as fmp_err:
+                        print(f"  [{ticker}] FMP profile fallback failed: {fmp_err}")
+
+            if info:
+                stock_id = get_or_create_stock(supabase, ticker, info, asset_type='etf')
+                if stock_id:
+                    stats['etf_info_updated'] += 1
+                else:
+                    print(f"  [{ticker}] Warning: get_or_create_stock returned None")
+                    continue
+            else:
+                print(f"  [{ticker}] Warning: no info available — creating stub row")
+                stock_id = get_or_create_stock(supabase, ticker, asset_type='etf')
+                if not stock_id:
+                    stats['errors'].append(f"{ticker}: failed to get/create stock row")
+                    continue
+
+            # Holdings: no FMP fallback (holdings endpoint is premium)
+            if holdings:
+                count = upsert_etf_holdings(supabase, stock_id, holdings)
+                stats['etf_holdings_upserted'] += count
+                print(f"  [{ticker}] Upserted {count} holdings")
+            else:
+                print(f"  [{ticker}] No holdings to upsert")
+
+        except Exception as e:
+            msg = f"{ticker}: {e}"
+            print(f"  [etfdb] DB error for {ticker}: {e}")
             stats['errors'].append(msg)
 
     return stats

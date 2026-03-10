@@ -120,9 +120,13 @@ def run_markets_etl(
     watchlist: Optional[List[str]] = None,
     quote_days_back: int = 0,
     all_sentiment_topics: bool = False,
-    fmp_etf_only: bool = False,
+    skip_sentiment: bool = False,
 ) -> Dict[str, Any]:
-    """Run markets ETL: Finnhub quotes/news + FMP profiles/holdings + AV sentiment."""
+    """
+    Daily markets ETL: quotes + company news + market news + AV sentiment.
+    Profile/info updates are intentionally excluded — run --scrape-etf-info
+    (ETFdb) or --refresh-profiles (FMP) manually when needed.
+    """
     print("\n" + "=" * 60)
     print("MARKETS ETL")
     print("=" * 60)
@@ -130,7 +134,6 @@ def run_markets_etl(
     baskets = load_baskets()
     asset_type_map = classify_tickers(baskets)
 
-    # Derive ticker lists from baskets
     all_tickers = [t for tickers in baskets.values() for t in tickers]
     if watchlist is None:
         watchlist = all_tickers
@@ -145,7 +148,6 @@ def run_markets_etl(
             'news_inserted': 0,
             'market_news_inserted': 0,
             'sentiment_upserted': 0,
-            'fmp': {},
             'errors': []
         }
 
@@ -157,7 +159,7 @@ def run_markets_etl(
                 ticker,
                 fetch_quotes=True,
                 fetch_news=(quote_days_back == 0),  # skip company news during backfill
-                fetch_profile=True,
+                fetch_profile=False,                 # profiles updated manually, not daily
                 quote_days_back=quote_days_back,
                 asset_type=at,
             )
@@ -166,30 +168,27 @@ def run_markets_etl(
             total_stats['news_inserted'] += stats.get('news_inserted', 0)
             total_stats['errors'].extend(stats.get('errors', []))
 
-        # Fetch general market news
+        # Market news
         print("\nFetching market news...")
         news_stats = sync_market_news(supabase, categories=MARKET_NEWS_CATEGORIES)
         total_stats['market_news_inserted'] = news_stats.get('articles_inserted', 0)
         total_stats['errors'].extend(news_stats.get('errors', []))
 
-        # Fetch AV news sentiment (5 topics by default; --all-sentiment-topics for all 10)
-        sentiment_topics = SENTIMENT_TOPICS_ALL if all_sentiment_topics else SENTIMENT_TOPICS_DEFAULT
-        print(f"\nFetching AV news sentiment ({len(sentiment_topics)} topics)...")
-        sentiment_stats = sync_news_sentiment(supabase, topics=sentiment_topics, tickers=watchlist)
-        total_stats['sentiment_upserted'] = sentiment_stats.get('articles_upserted', 0)
-        total_stats['errors'].extend(sentiment_stats.get('errors', []))
-
-        # FMP: enrich profiles + ETF holdings (part of markets, not a separate pipeline)
-        fmp_stats = run_fmp_etl(supabase, watchlist=watchlist, etf_only=fmp_etf_only)
-        total_stats['fmp'] = fmp_stats.get('stats', {})
-        if not fmp_stats.get('success'):
-            total_stats['errors'].append(f"FMP: {fmp_stats.get('error')}")
+        # AV news sentiment (skipped when --skip-sentiment)
+        if not skip_sentiment:
+            sentiment_topics = SENTIMENT_TOPICS_ALL if all_sentiment_topics else SENTIMENT_TOPICS_DEFAULT
+            print(f"\nFetching AV news sentiment ({len(sentiment_topics)} topics)...")
+            sentiment_stats = sync_news_sentiment(supabase, topics=sentiment_topics, tickers=watchlist)
+            total_stats['sentiment_upserted'] = sentiment_stats.get('articles_upserted', 0)
+            total_stats['errors'].extend(sentiment_stats.get('errors', []))
+        else:
+            print("\nSkipping AV news sentiment (--skip-sentiment)")
 
         print(f"\nMarkets ETL Complete:")
-        print(f"  Stocks processed: {total_stats['stocks_processed']}")
-        print(f"  Quotes inserted: {total_stats['quotes_inserted']}")
-        print(f"  Company news inserted: {total_stats['news_inserted']}")
-        print(f"  Market news inserted: {total_stats['market_news_inserted']}")
+        print(f"  Stocks processed:          {total_stats['stocks_processed']}")
+        print(f"  Quotes inserted:           {total_stats['quotes_inserted']}")
+        print(f"  Company news inserted:     {total_stats['news_inserted']}")
+        print(f"  Market news inserted:      {total_stats['market_news_inserted']}")
         print(f"  Sentiment articles upserted: {total_stats['sentiment_upserted']}")
 
         return {'success': True, 'stats': total_stats}
@@ -283,6 +282,32 @@ def run_media_etl(
         return {'success': False, 'error': str(e)}
 
 
+def run_etfdb_etl(supabase: Client) -> None:
+    """Scrape ETF info and top-15 holdings from etfdb.com. Manual trigger only."""
+    print("\n" + "=" * 60)
+    print("ETFDB SCRAPE — ETF INFO + HOLDINGS")
+    print("=" * 60)
+
+    baskets = load_baskets()
+    asset_type_map = classify_tickers(baskets)
+    etf_tickers = [t for tickers in baskets.values() for t in tickers
+                   if asset_type_map.get(t) == 'etf']
+
+    print(f"ETFs to scrape: {len(etf_tickers)}")
+
+    sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'markets'))
+    from markets.markets_db_helper import sync_etfdb_data
+
+    stats = sync_etfdb_data(supabase, etf_tickers)
+
+    print(f"\nETFDB Scrape Complete:")
+    print(f"  ETF info updated:  {stats['etf_info_updated']}")
+    print(f"  Holdings upserted: {stats['etf_holdings_upserted']}")
+    print(f"  FMP fallbacks:     {stats['fmp_fallbacks']}")
+    if stats['errors']:
+        print(f"  Errors ({len(stats['errors'])}): {stats['errors'][:3]}")
+
+
 def run_fmp_etl(
     supabase: Client,
     watchlist: Optional[List[str]] = None,
@@ -337,7 +362,7 @@ def run_full_etl(
     skip_markets: bool = False,
     skip_news: bool = False,
     skip_media: bool = False,
-    fmp_etf_only: bool = False,
+    skip_sentiment: bool = False,
     quote_days_back: int = 0,
     backfill_news_days: int = 0,
     backfill_sports_days: int = 0,
@@ -345,19 +370,8 @@ def run_full_etl(
 ) -> Dict[str, Any]:
     """
     Run the full ETL pipeline for all data sources.
-
-    Args:
-        watchlist: Optional list of tickers (defaults to all baskets tickers)
-        skip_sports: Skip sports ETL
-        skip_markets: Skip markets ETL (also skips FMP — it runs inside markets)
-        skip_news: Skip news ETL
-        skip_media: Skip media ETL
-        fmp_etf_only: Within markets, restrict FMP to ETF tickers only (saves FMP budget)
-        quote_days_back: If > 0, backfill all basket tickers using AV candles
-        all_sentiment_topics: Use all 10 AV sentiment topics instead of default 5
-
-    Returns:
-        Summary dictionary with all ETL results
+    Markets = quotes + news + AV sentiment only (no profile/info updates).
+    Profile updates: --refresh-profiles (FMP) or --scrape-etf-info (ETFdb).
     """
     start_time = datetime.now()
     print("=" * 60)
@@ -384,7 +398,7 @@ def run_full_etl(
             watchlist=watchlist,
             quote_days_back=quote_days_back,
             all_sentiment_topics=all_sentiment_topics,
-            fmp_etf_only=fmp_etf_only,
+            skip_sentiment=skip_sentiment,
         )
 
     if not skip_news:
@@ -420,17 +434,17 @@ def main():
     parser.add_argument('--seed', action='store_true',
                         help='Initial seed: backfill 90d quotes, 30d news archive, '
                              '30d sports scores, and run all domains. '
-                             'Equivalent to --backfill-quotes 90 --backfill-news 30 --backfill-sports 30')
+                             'Equivalent to --backfill-quotes 30 --backfill-news 30 --backfill-sports 30')
 
     # ── Domain skip flags ────────────────────────────────────────────────────
     parser.add_argument('--skip-sports',  action='store_true', help='Skip sports ETL')
-    parser.add_argument('--skip-markets', action='store_true', help='Skip markets ETL (includes FMP)')
+    parser.add_argument('--skip-markets', action='store_true', help='Skip markets ETL')
     parser.add_argument('--skip-news',    action='store_true', help='Skip news ETL')
     parser.add_argument('--skip-media',   action='store_true', help='Skip media ETL')
 
     # ── Domain "only" shortcuts ───────────────────────────────────────────────
     parser.add_argument('--sports-only',  action='store_true', help='Run sports ETL only')
-    parser.add_argument('--markets-only', action='store_true', help='Run markets ETL only (includes FMP)')
+    parser.add_argument('--markets-only', action='store_true', help='Run markets ETL only (quotes + news + sentiment)')
     parser.add_argument('--news-only',    action='store_true', help='Run news ETL only')
     parser.add_argument('--media-only',   action='store_true', help='Run media ETL only')
 
@@ -441,8 +455,11 @@ def main():
                         help='Backfill N days of NYT articles via the Archive API')
     parser.add_argument('--backfill-sports', type=int, default=0, metavar='DAYS',
                         help='Backfill N days of ESPN scores')
-    parser.add_argument('--fmp-etf-only', action='store_true',
-                        help='Within markets: run FMP for ETF tickers only (saves FMP daily budget)')
+    parser.add_argument('--scrape-etf-info', action='store_true',
+                        help='Scrape ETF info and top-15 holdings from etfdb.com '
+                             '(run manually, not on daily/seed)')
+    parser.add_argument('--skip-sentiment', action='store_true',
+                        help='Skip AV news sentiment (daily run: quotes + news only)')
     parser.add_argument('--all-sentiment-topics', action='store_true',
                         help='Fetch all 10 AV sentiment topics instead of the default 5')
     parser.add_argument('--watchlist', nargs='+', metavar='TICKER',
@@ -453,9 +470,15 @@ def main():
 
     args = parser.parse_args()
 
+    # --scrape-etf-info: standalone, does NOT chain into run_full_etl
+    if args.scrape_etf_info:
+        supabase = get_supabase_client()
+        run_etfdb_etl(supabase)
+        return
+
     # --seed expands to standard backfill defaults
     if args.seed:
-        args.backfill_quotes  = args.backfill_quotes  or 90
+        args.backfill_quotes  = args.backfill_quotes  or 30
         args.backfill_news    = args.backfill_news    or 30
         args.backfill_sports  = args.backfill_sports  or 30
 
@@ -475,7 +498,7 @@ def main():
         skip_markets=args.skip_markets,
         skip_news=args.skip_news,
         skip_media=args.skip_media,
-        fmp_etf_only=args.fmp_etf_only,
+        skip_sentiment=args.skip_sentiment,
         quote_days_back=args.backfill_quotes,
         backfill_news_days=args.backfill_news,
         backfill_sports_days=args.backfill_sports,

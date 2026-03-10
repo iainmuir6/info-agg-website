@@ -120,9 +120,16 @@ def fetch_company_profile(ticker: str, api_key: Optional[str] = None) -> Optiona
         return None
 
 
+# NOTE: fetch_etf_info and fetch_etf_holdings are NO LONGER called by the ETL.
+# Both endpoints are premium (gated behind a paid FMP plan) and return no useful
+# data on the free tier. ETF metadata and holdings are now scraped from etfdb.com
+# via src/api/markets/etfdb.py (trigger: --scrape-etf-info). Functions are kept
+# here for potential future use or direct invocation.
+
 def fetch_etf_info(ticker: str, api_key: Optional[str] = None) -> Optional[Dict[str, Any]]:
     """
     Fetch ETF information from FMP /stable/etf/information.
+    PREMIUM ENDPOINT — not called by the ETL (replaced by etfdb.scrape_etf_info).
 
     Returns same shape as finnhub.fetch_etf_profile() plus:
     expense_ratio, aum, holdings_count, avg_volume.
@@ -130,7 +137,7 @@ def fetch_etf_info(ticker: str, api_key: Optional[str] = None) -> Optional[Dict[
     if api_key is None:
         api_key = get_fmp_api_key()
 
-    url = f"{FMP_BASE_STABLE}/etf/information"
+    url = f"{FMP_BASE_STABLE}/etf/info"
     params = {'symbol': ticker, 'apikey': api_key}
 
     try:
@@ -185,6 +192,7 @@ def fetch_etf_info(ticker: str, api_key: Optional[str] = None) -> Optional[Dict[
 def fetch_etf_holdings(ticker: str, api_key: Optional[str] = None) -> List[Dict[str, Any]]:
     """
     Fetch ETF holdings from FMP /stable/etf/holdings.
+    PREMIUM ENDPOINT — not called by the ETL (replaced by etfdb.scrape_etf_holdings).
 
     Returns list of dicts with:
     asset_symbol, asset_name, weight_percentage, shares, market_value

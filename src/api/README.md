@@ -106,24 +106,24 @@ See **[`RUNBOOK.md`](RUNBOOK.md)** for the full guide, including:
 ### Quick reference
 
 ```bash
-# Initial seed (new environment) — backfill 90 days of history
-python src/api/run_etl.py --markets-only --backfill-quotes 90
-python src/api/run_etl.py --sports-only && python src/api/run_etl.py --news-only && python src/api/run_etl.py --media-only
+# Initial seed (new environment) — one command, all domains
+python src/api/run_etl.py --seed
 
-# Daily run
+# Daily run (all domains)
 python src/api/run_etl.py
 
-# Daily run — save FMP budget (ETF tickers only)
-python src/api/run_etl.py --fmp-etf-only
-
-# Markets only
+# Domain-specific daily runs
 python src/api/run_etl.py --markets-only
+python src/api/run_etl.py --news-only
+python src/api/run_etl.py --sports-only
+python src/api/run_etl.py --media-only
 ```
 
 ### All flags
 
 | Flag | Effect |
 |------|--------|
+| `--seed` | Full initial seed: `--backfill-quotes 30 --backfill-news 30 --backfill-sports 30` |
 | `--sports-only` | Run sports ETL only |
 | `--markets-only` | Run markets ETL only (includes FMP) |
 | `--news-only` | Run news ETL only |
@@ -132,11 +132,15 @@ python src/api/run_etl.py --markets-only
 | `--skip-markets` | Skip markets ETL (includes FMP) |
 | `--skip-news` | Skip news ETL |
 | `--skip-media` | Skip media ETL |
-| `--backfill-quotes DAYS` | Backfill N days of OHLCV history via AV (seed mode; company news skipped) |
-| `--fmp-etf-only` | Within markets: restrict FMP to ETF tickers only |
+| `--backfill-quotes DAYS` | Backfill N days of OHLCV history via AV (company news skipped during backfill) |
+| `--backfill-news DAYS` | Backfill N days of NYT articles via Archive API* |
+| `--backfill-sports DAYS` | Backfill N days of ESPN scores |
+| `--fmp-etf-only` | Within markets: restrict FMP to ETF tickers only (saves FMP budget) |
 | `--all-sentiment-topics` | Fetch all 10 AV sentiment topics (default: 5) |
 | `--watchlist TICKER ...` | Override basket watchlist with a custom ticker list |
 | `--output FILE` | Write results JSON to FILE |
+
+*`--backfill-news` requires the Archive API product enabled at [developer.nytimes.com/my-apps](https://developer.nytimes.com/my-apps).
 
 ---
 

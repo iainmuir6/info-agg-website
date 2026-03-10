@@ -8,12 +8,15 @@
 
 from typing import Dict, List, Optional, Any
 from datetime import datetime, timedelta
+import pandas as pd
 import requests
 import os
 
 # Load Environment Variables
 from dotenv import load_dotenv
 load_dotenv()
+
+ROOT_DIR = os.getenv('ROOT_DIR')
 
 # API base URLs
 NYT_BASE_URL = "https://api.nytimes.com/svc"
@@ -26,8 +29,9 @@ ALL_NYT_SECTIONS = [
     'travel', 'upshot', 'us', 'world'
 ]
 NYT_SECTIONS = [
-    'arts', 'business', 'opinion', 'politics', 'realestate', 
-    'science', 'sports', 'technology', 'us', 'world'
+    'us', 'world', 'opinion', 'business', 'insider',
+    'realestate', 'science', 'technology', 'arts', 'sports', 
+    # 'politics', 'movies', 'nyregion', 
 ]
 
 # NYT Most Popular types
@@ -247,11 +251,17 @@ def fetch_nyt_archive(
     month: int,
     sections: Optional[List[str]] = None,
     since_date: Optional[str] = None,
-    max_per_section_per_day: int = 5,
+    max_per_section_per_day: int = 10,
     api_key: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
     """
     Fetch articles for a given year/month from the NYT Archive API.
+
+    PREREQUISITE: The "Archive API" product must be enabled at
+    https://developer.nytimes.com/my-apps for the NYT_API_KEY in use.
+    The default key (Top Stories / Most Popular) returns 401 here.
+    Enable Archive API in the developer portal and re-run.
+
 
     Args:
         year: e.g. 2026
@@ -280,6 +290,7 @@ def fetch_nyt_archive(
         'dealbook': 'business',
         'opinion': 'opinion',
         'editorial': 'opinion',
+        'insider': 'insider',
         'politics': 'politics',
         'real estate': 'realestate',
         'science': 'science',
@@ -295,10 +306,18 @@ def fetch_nyt_archive(
     target_sections = set(sections)
 
     url = f"{NYT_BASE_URL}/archive/v1/{year}/{month}.json"
+    # print(f"Fetching NYT archive {year}/{month} from {url}...")
     params = {'api-key': api_key}
 
     try:
         response = requests.get(url, params=params, timeout=30)
+        if response.status_code in (401, 403):
+            print(
+                f"  NYT Archive {response.status_code}: Archive API product not yet active "
+                f"for this key. Enable it at https://developer.nytimes.com/my-apps "
+                f"and wait a few minutes for permissions to propagate."
+            )
+            return []
         response.raise_for_status()
         data = response.json()
     except requests.exceptions.RequestException as e:
@@ -310,18 +329,17 @@ def fetch_nyt_archive(
 
     docs = data.get('response', {}).get('docs', [])
 
-    # Group by (section_slug, date_str) for per-section-per-day cap
     from collections import defaultdict
-    bucket: Dict[str, int] = defaultdict(int)
-    articles = []
 
+    # Pass 1: collect all valid candidates with sort keys
+    candidates = []
     for doc in docs:
-        pub_date = doc.get('pub_date', '')  # ISO: '2026-02-10T12:00:00+0000'
+        pub_date = doc.get('pub_date', '')
         date_str = pub_date[:10] if pub_date else ''
 
         if since_date and date_str < since_date:
             continue
-        if doc.get('document_type') != 'article':
+        if doc.get('document_type', '').lower().strip() != 'article':
             continue
 
         raw_section = (doc.get('section_name') or '').lower().strip()
@@ -329,28 +347,43 @@ def fetch_nyt_archive(
         if slug not in target_sections:
             continue
 
-        bucket_key = f"{slug}:{date_str}"
-        if bucket[bucket_key] >= max_per_section_per_day:
-            continue
-        bucket[bucket_key] += 1
+        # Ranking: print_section A < B < Z; print_page 1 < 26 < 9999 (web-only)
+        print_section = (doc.get('print_section') or 'Z').upper().strip()
+        try:
+            print_page = int(doc.get('print_page') or 9999)
+        except (ValueError, TypeError):
+            print_page = 9999
 
-        # Extract best image — archive multimedia URLs may be relative
-        image_url = None
-        for m in doc.get('multimedia') or []:
-            if m.get('type') == 'image':
+        # Multimedia: archive format is a dict with 'default' and 'thumbnail' sub-keys
+        multimedia = doc.get('multimedia') or {}
+        if isinstance(multimedia, dict):
+            image_url = (
+                (multimedia.get('default') or {}).get('url')
+                or (multimedia.get('thumbnail') or {}).get('url')
+            )
+        else:
+            # Fallback for list-style multimedia (other NYT API shapes)
+            image_url = None
+            for m in multimedia:
                 raw_url = m.get('url', '')
-                image_url = (
-                    raw_url if raw_url.startswith('http')
-                    else f"https://static01.nyt.com/{raw_url.lstrip('/')}"
-                )
-                break
+                if raw_url:
+                    image_url = (
+                        raw_url if raw_url.startswith('http')
+                        else f"https://static01.nyt.com/{raw_url.lstrip('/')}"
+                    )
+                    break
 
         headline = doc.get('headline') or {}
         byline = doc.get('byline') or {}
 
-        articles.append({
+        candidates.append({
+            '_date': date_str,
+            '_section': slug,
+            '_print_section': print_section,
+            '_print_page': print_page,
             'source': 'nyt',
             'section': slug,
+            'news_desk': doc.get('news_desk'),
             'title': headline.get('main') or headline.get('print_headline'),
             'abstract': doc.get('abstract') or doc.get('snippet'),
             'byline': byline.get('original'),
@@ -358,6 +391,20 @@ def fetch_nyt_archive(
             'image_url': image_url,
             'published_at': pub_date,
         })
+
+    # Pass 2: sort by print importance, then cap per (section, day)
+    candidates.sort(key=lambda x: (
+        x['_date'], x['_section'], x['_print_section'], x['_print_page']
+    ))
+
+    bucket: Dict[str, int] = defaultdict(int)
+    articles = []
+    for c in candidates:
+        key = f"{c['_section']}:{c['_date']}"
+        if bucket[key] >= max_per_section_per_day:
+            continue
+        bucket[key] += 1
+        articles.append({k: v for k, v in c.items() if not k.startswith('_')})
 
     return articles
 
@@ -417,8 +464,29 @@ if __name__ == "__main__":
                 print(f"  - {article.get('title')}")
                 if article.get('views'):
                     print(f"    Views: {article.get('views')}")
+                    
+        # Test fetching archive
+        print("\n--- Testing Archive (NYT) ---")
+        archive = fetch_nyt_archive(year=2026, month=1, api_key=nyt_key)
+        if archive:
+            print(f"Number of articles: {len(archive)}")
+            # for article in archive[:3]:  # Show first 3
+            #     print(f"  - {article.get('title')}")
+            #     print(f"    Published: {article.get('published_at')}")
 
     except ValueError as e:
         print(f"Configuration error: {e}")
     except Exception as e:
         print(f"Error: {e}")
+
+
+    articles_df = pd.DataFrame(archive)
+    print(f"Number of articles: {len(articles_df)}")
+    articles_df.head()
+    # articles_df['section'].value_counts()
+    # articles_df.to_csv(
+    #     f'{ROOT_DIR}/data/raw/nyt_archive_2026_01.csv', 
+    #     index=False,
+    #     encoding='utf-8'
+    # )
+ 
