@@ -51,17 +51,34 @@ ALPHA_VANTAGE_API_KEY_3
   Called 5–10× per daily ETL run (see `SENTIMENT_TOPICS_DEFAULT` / `SENTIMENT_TOPICS_ALL` in `run_etl.py`)
 - `GET /query?function=TIME_SERIES_DAILY&symbol={ticker}` — stock OHLCV backfill (`fetch_historical_quotes`)
 - `GET /query?function=DIGITAL_CURRENCY_DAILY&symbol={symbol}` — crypto OHLCV backfill (`fetch_crypto_candles_av`)
+- `GET /query?function=ETF_PROFILE&symbol={ticker}` — ETF holdings (`fetch_etf_holdings_av`)
+  Called once per ETF ticker during seed Phase 2 (23 calls for the current basket)
 
-**Daily budget (2 keys, 36-ticker basket):**
+**Daily budget (3 keys × 25 req/day = 75 total):**
 
-| Usage | Calls/key | Remaining/key |
-|-------|-----------|---------------|
-| Sentiment (5 topics default) | 5 | 20 |
-| Backfill — 33 ETFs/stocks | ~17 | 3 |
-| Backfill — 3 crypto | ~2 | 1 |
-| **Daily total (with backfill)** | **~24** | **~1** |
+Round-robin key selection (`_get_keys_round_robin` in `alpha_vantage.py`) distributes
+successive calls evenly: call 1 → key1, call 2 → key2, call 3 → key3, call 4 → key1, …
 
-Use `--all-sentiment-topics` (10 topics) only when budget allows.
+| Usage | Total calls | Calls/key (round-robin, 3 keys) |
+|-------|------------|----------------------------------|
+| Quote backfill — 36 tickers | 36 | ~12 |
+| ETF holdings — 23 ETFs (`ETF_PROFILE`) | 23 | ~8 |
+| Sentiment — 10 topics (`--all-sentiment-topics`) | 10 | ~4 |
+| **Seed total** | **69** | **~23** |
+| Sentiment — 5 topics (daily default) | 5 | ~2 |
+| **Daily total (no backfill)** | **5** | **~2** |
+| **Budget headroom (seed)** | **+6** | — |
+
+In `run_db_seed.py`, AV backfill is split into 10-ticker batches interleaved with
+other domain ETL (FMP → Sports → News → Media). AV ETF holdings (23 calls) are
+fetched in Phase 2 after FMP stock profiles, so the 5 req/min window resets
+between Phase 1 and Phase 2 AV work. No explicit `sleep()` is used — the
+`_av_rate_limit()` deque handles any sub-window pauses automatically.
+
+Phase 0 of `run_db_seed.py` reports the live key count and budget breakdown
+before any calls are made, making it easy to spot configuration issues early.
+
+Use `--all-sentiment-topics` (10 topics) only during seed or when budget allows.
 
 ---
 
@@ -146,19 +163,19 @@ Access token expires after **3600 s** and is re-fetched at the start of each ETL
 **Endpoints actively used in daily ETL:**
 - `GET /stable/etf/information?symbol=` — ETF name, expense ratio, AUM, asset class (fills Finnhub 403 gap)
 - `GET /stable/etf/holdings?symbol=` — per-holding weight %, shares, market value → `etf_holdings` table
-- `GET /api/v3/profile/{symbol}` — enriched company profile (sector, description, CEO, HQ, beta)
-- `GET /api/v3/historical-price-full/{symbol}` — daily OHLCV backfill → `stock_quotes` table
+- `GET /stable/profile/{symbol}` — enriched company profile (sector, description, CEO, HQ, beta)
+- `GET /stable/historical-price-full/{symbol}` — daily OHLCV backfill → `stock_quotes` table
   (~13 calls when `--backfill-quotes` is used, one per watchlist ticker)
 
 **Endpoints available but NOT wired into daily ETL (future fundamentals):**
-- `/api/v3/income-statement/{symbol}` — income statements
-- `/api/v3/balance-sheet-statement/{symbol}` — balance sheets
-- `/api/v3/cash-flow-statement/{symbol}` — cash flow statements
-- `/api/v3/key-metrics/{symbol}` — P/E, EPS, ROE, margins
-- `/api/v3/financial-ratios/{symbol}` — financial ratios
-- `/api/v3/analyst-estimates/{symbol}` — analyst estimates
-- `/api/v3/insider-trading/{symbol}` — insider trades
-- `/api/v3/press-releases/{symbol}` — press releases
+- `/stable/income-statement/{symbol}` — income statements
+- `/stable/balance-sheet-statement/{symbol}` — balance sheets
+- `/stable/cash-flow-statement/{symbol}` — cash flow statements
+- `/stable/key-metrics/{symbol}` — P/E, EPS, ROE, margins
+- `/stable/financial-ratios/{symbol}` — financial ratios
+- `/stable/analyst-estimates/{symbol}` — analyst estimates
+- `/stable/insider-trading/{symbol}` — insider trades
+- `/stable/press-releases/{symbol}` — press releases
 
 **Daily budget plan (13-ticker watchlist):**
 

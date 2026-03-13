@@ -283,9 +283,17 @@ def run_media_etl(
 
 
 def run_etfdb_etl(supabase: Client) -> None:
-    """Scrape ETF info and top-15 holdings from etfdb.com. Manual trigger only."""
+    """Scrape ETF info and top-15 holdings from etfdb.com. Manual trigger only.
+
+    DEPRECATED — ETF holdings are now fetched via Alpha Vantage ETF_PROFILE
+    (sync_av_etf_holdings in markets_db_helper.py). This scraper is kept for
+    manual enrichment of ETFdb-only fields (expense ratio, AUM, category) but
+    is no longer part of the seed or daily pipeline.
+    """
     print("\n" + "=" * 60)
-    print("ETFDB SCRAPE — ETF INFO + HOLDINGS")
+    print("ETFDB SCRAPE — ETF INFO + HOLDINGS  [DEPRECATED]")
+    print("  Holdings are now sourced from AV ETF_PROFILE (run_db_seed.py Phase 2).")
+    print("  Use this only to backfill ETFdb-specific fields (expense ratio, AUM).")
     print("=" * 60)
 
     baskets = load_baskets()
@@ -381,6 +389,28 @@ def run_full_etl(
 
     supabase = get_supabase_client()
 
+    # Auto catch-up: if the DB has no quotes in the last 24h and no explicit backfill
+    # was requested, fill in the gap (up to 7 days) automatically.
+    if quote_days_back == 0 and not skip_markets:
+        try:
+            result = (supabase.table('stock_quotes')
+                      .select('fetched_at')
+                      .order('fetched_at', desc=True)
+                      .limit(1)
+                      .execute())
+            if result.data:
+                last_fetch = datetime.fromisoformat(result.data[0]['fetched_at'][:19])
+                gap = datetime.now() - last_fetch
+                if gap.total_seconds() > 86400:
+                    days_missed = min(int(gap.days), 7)
+                    print(f"Auto catch-up: last run was {days_missed} day(s) ago "
+                          f"— backfilling {days_missed} days")
+                    quote_days_back = days_missed
+                    if backfill_sports_days == 0:
+                        backfill_sports_days = days_missed
+        except Exception as e:
+            print(f"  Auto catch-up check failed (skipping): {e}")
+
     results = {
         'started_at': start_time.isoformat(),
         'sports': None,
@@ -430,12 +460,6 @@ def run_full_etl(
 def main():
     parser = argparse.ArgumentParser(description='Info Aggregator ETL Pipeline')
 
-    # ── Seed shortcut ────────────────────────────────────────────────────────
-    parser.add_argument('--seed', action='store_true',
-                        help='Initial seed: backfill 90d quotes, 30d news archive, '
-                             '30d sports scores, and run all domains. '
-                             'Equivalent to --backfill-quotes 30 --backfill-news 30 --backfill-sports 30')
-
     # ── Domain skip flags ────────────────────────────────────────────────────
     parser.add_argument('--skip-sports',  action='store_true', help='Skip sports ETL')
     parser.add_argument('--skip-markets', action='store_true', help='Skip markets ETL')
@@ -475,12 +499,6 @@ def main():
         supabase = get_supabase_client()
         run_etfdb_etl(supabase)
         return
-
-    # --seed expands to standard backfill defaults
-    if args.seed:
-        args.backfill_quotes  = args.backfill_quotes  or 30
-        args.backfill_news    = args.backfill_news    or 30
-        args.backfill_sports  = args.backfill_sports  or 30
 
     # Expand "only" shortcuts into skip flags
     if args.sports_only:

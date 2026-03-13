@@ -7,6 +7,7 @@
 #       ---> Supports news and scores/schedule for: NFL, College Football, NBA, WNBA,
 #            Men's/Women's College Basketball, MLB, College Baseball, NHL, and Soccer
 
+from pprint import PrettyPrinter
 from typing import Dict, List, Optional, Any
 from datetime import datetime
 import requests
@@ -26,7 +27,7 @@ SPORT_CONFIGS = [
     ('basketball', 'nba'),
     ('basketball', 'wnba'),
     ('basketball', 'mens-college-basketball'),
-    ('basketball', 'womens-college-basketball'),
+    # ('basketball', 'womens-college-basketball'),
     # Baseball
     ('baseball', 'mlb'),
     ('baseball', 'college-baseball'),
@@ -82,6 +83,145 @@ def fetch_espn_news(sport: str, league: str, limit: int = 20) -> List[Dict[str, 
     except (KeyError, IndexError) as e:
         print(f"Error parsing news data for {sport}/{league}: {e}")
         return []
+
+
+def fetch_espn_teams(sport: str, league: str) -> List[Dict[str, Any]]:
+    """
+    Fetch all teams for a given sport/league from ESPN API.
+
+    This uses the public teams endpoint, e.g.:
+      https://site.api.espn.com/apis/site/v2/sports/basketball/nba/teams
+
+    Args:
+        sport: Sport name (e.g., 'basketball').
+        league: League name (e.g., 'nba').
+
+    Returns:
+        List of simplified team dictionaries with common fields.
+    """
+    url = f"{ESPN_BASE_URL}/{sport}/{league}/teams"
+
+    try:
+        response = requests.get(url, timeout=10)
+        response.raise_for_status()
+        data = response.json()
+
+        # ESPN structure: sports -> leagues -> teams -> team
+        sports = data.get("sports", [])
+        if not sports:
+            return []
+
+        leagues = sports[0].get("leagues", [])
+        if not leagues:
+            return []
+
+        teams_wrapped = leagues[0].get("teams", []) or []
+        teams: List[Dict[str, Any]] = []
+
+        for item in teams_wrapped:
+            team = item.get("team", {})
+            if not team:
+                continue
+
+            logos = team.get("logos", []) or []
+            primary_logo = logos[0] if logos else {}
+
+            teams.append(
+                {
+                    "id": team.get("id"),
+                    "uid": team.get("uid"),
+                    "slug": team.get("slug"),
+                    "abbreviation": team.get("abbreviation"),
+                    "display_name": team.get("displayName"),
+                    "short_display_name": team.get("shortDisplayName"),
+                    "name": team.get("name"),
+                    "nickname": team.get("nickname"),
+                    "location": team.get("location"),
+                    "color": team.get("color"),
+                    "alternate_color": team.get("alternateColor"),
+                    "is_active": team.get("isActive"),
+                    "is_all_star": team.get("isAllStar"),
+                    "logo": primary_logo.get("href"),
+                    "logos": logos,
+                    "links": team.get("links", []),
+                }
+            )
+
+        return teams
+
+    except requests.exceptions.RequestException as e:
+        print(f"Error fetching teams for {sport}/{league}: {e}")
+        return []
+    except (KeyError, IndexError, ValueError) as e:
+        print(f"Error parsing teams data for {sport}/{league}: {e}")
+        return []
+
+
+def find_espn_team_by_name(
+    sport: str,
+    league: str,
+    name: str,
+    *,
+    match_abbreviation: bool = True,
+    match_nickname: bool = True,
+) -> Optional[Dict[str, Any]]:
+    """
+    Look up a single team within a league by name.
+
+    Matching is case-insensitive and tries the following fields in order:
+      - abbreviation (e.g., 'BOS')
+      - nickname (e.g., 'Celtics')
+      - location + nickname (e.g., 'Boston Celtics')
+      - display_name / short_display_name
+
+    Args:
+        sport: Sport name (e.g., 'basketball').
+        league: League name (e.g., 'nba').
+        name: Team identifier (name, abbreviation, etc.).
+        match_abbreviation: Whether to match on abbreviation.
+        match_nickname: Whether to match on nickname only.
+
+    Returns:
+        The first matching team dict from `fetch_espn_teams`, or None.
+    """
+    teams = fetch_espn_teams(sport, league)
+    if not teams:
+        return None
+
+    target = name.strip().lower()
+
+    # Try strict matches first
+    for team in teams:
+        abbr = (team.get("abbreviation") or "").lower()
+        nickname = (team.get("nickname") or "").lower()
+        location = (team.get("location") or "").lower()
+        display_name = (team.get("display_name") or "").lower()
+        short_display_name = (team.get("short_display_name") or "").lower()
+
+        full_name = f"{location} {nickname}".strip()
+
+        if match_abbreviation and target == abbr and abbr:
+            return team
+        if match_nickname and target == nickname and nickname:
+            return team
+        if target == full_name and full_name:
+            return team
+        if target == display_name and display_name:
+            return team
+        if target == short_display_name and short_display_name:
+            return team
+
+    # Fallback: substring match on display_name / full_name
+    for team in teams:
+        nickname = (team.get("nickname") or "").lower()
+        location = (team.get("location") or "").lower()
+        display_name = (team.get("display_name") or "").lower()
+        full_name = f"{location} {nickname}".strip()
+
+        if target in full_name or target in display_name:
+            return team
+
+    return None
 
 
 def fetch_espn_scores(sport: str, league: str, dates: Optional[str] = None) -> List[Dict[str, Any]]:
@@ -271,3 +411,13 @@ if __name__ == "__main__":
                 print(f"  - {away} @ {home}: {away_score}-{home_score} ({status})")
 
 
+    print('\n--- Fetching Teams ---')
+    all_teams = fetch_espn_teams(sport='basketball', league='nba')
+    
+    for team in all_teams:
+        abbreviation = team.get('abbreviation')
+        name = team.get('name')
+        color = team.get('color')
+        alt_color = team.get('alternate_color')
+        # Print abbreviation with alternate_color, name with color
+        print(f"\033[38;2;{int(alt_color[1:3],16)};{int(alt_color[3:5],16)};{int(alt_color[5:7],16)}m{abbreviation}\033[0m: \033[38;2;{int(color[1:3],16)};{int(color[3:5],16)};{int(color[5:7],16)}m{name}\033[0m")

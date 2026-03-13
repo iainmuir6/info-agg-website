@@ -231,7 +231,7 @@ def snippet_fmp_historical_prices():
         })
     return save_snippet(
         'markets', 'fmp_historical_prices',
-        'GET https://financialmodelingprep.com/api/v3/historical-price-full/AAPL',
+        'GET https://financialmodelingprep.com/stable/historical-price-full/AAPL',
         rows[:2], stored_shapes
     ), None
 

@@ -160,7 +160,7 @@ baskets.json
     ├─ stocks  ──► Finnhub /stock/profile2 ──────────────────────► stocks
     ├─ etfs    ──► FMP /etf/information ────────────────────────► stocks
     │              FMP /etf/holdings ───────────────────────────► etf_holdings
-    └─ stocks  ──► FMP /api/v3/profile ─────────────────────────► stocks (sector, CEO, etc.)
+    └─ stocks  ──► FMP /stable/profile ─────────────────────────► stocks (sector, CEO, etc.)
 
     Backfill (--backfill-quotes N):
     ├─ stocks/etfs ──► AV TIME_SERIES_DAILY ─────────────────────► stock_quotes (bulk)
