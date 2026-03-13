@@ -114,6 +114,7 @@ CREATE TABLE IF NOT EXISTS info_agg.stocks (
     state             TEXT,
     beta              DECIMAL(8,4),
     asset_type        TEXT    NOT NULL DEFAULT 'stock',  -- 'stock' | 'etf' | 'crypto'
+    is_core           BOOLEAN NOT NULL DEFAULT false,    -- true = in baskets.json watchlist
     is_active         BOOLEAN NOT NULL DEFAULT true,
     created_at        TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
     updated_at        TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
@@ -197,21 +198,40 @@ CREATE TRIGGER trg_market_news_updated_at
 -- MARKETS — etf_holdings
 -- ============================================================
 CREATE TABLE IF NOT EXISTS info_agg.etf_holdings (
-    id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    etf_stock_id UUID    NOT NULL REFERENCES info_agg.stocks(id) ON DELETE CASCADE,
-    asset_symbol TEXT    NOT NULL,
-    asset_name   TEXT,
-    weight_pct   DECIMAL(8,4),
-    shares       BIGINT,
-    market_value DECIMAL(20,4),
-    as_of_date   DATE,
-    fetched_at   TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
-    updated_at   TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
-    UNIQUE (etf_stock_id, asset_symbol, as_of_date)
+    id             UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    etf_stock_id   UUID    NOT NULL REFERENCES info_agg.stocks(id) ON DELETE CASCADE,
+    asset_stock_id UUID    NOT NULL REFERENCES info_agg.stocks(id) ON DELETE CASCADE,
+    asset_name     TEXT,
+    weight_pct     DECIMAL(8,4),
+    shares         BIGINT,
+    market_value   DECIMAL(20,4),
+    as_of_date     DATE,
+    fetched_at     TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+    updated_at     TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+    UNIQUE (etf_stock_id, asset_stock_id, as_of_date)
 );
 
 CREATE TRIGGER trg_etf_holdings_updated_at
     BEFORE UPDATE ON info_agg.etf_holdings
+    FOR EACH ROW EXECUTE FUNCTION info_agg.set_updated_at();
+
+
+-- ============================================================
+-- MARKETS — etf_sectors
+-- ============================================================
+CREATE TABLE IF NOT EXISTS info_agg.etf_sectors (
+    id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    etf_stock_id UUID    NOT NULL REFERENCES info_agg.stocks(id) ON DELETE CASCADE,
+    sector       TEXT    NOT NULL,
+    weight_pct   DECIMAL(8,4),
+    as_of_date   DATE,
+    fetched_at   TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+    updated_at   TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+    UNIQUE (etf_stock_id, sector, as_of_date)
+);
+
+CREATE TRIGGER trg_etf_sectors_updated_at
+    BEFORE UPDATE ON info_agg.etf_sectors
     FOR EACH ROW EXECUTE FUNCTION info_agg.set_updated_at();
 
 

@@ -83,8 +83,17 @@ CREATE INDEX IF NOT EXISTS idx_stock_quotes_quote_timestamp
 CREATE INDEX IF NOT EXISTS idx_etf_holdings_etf_stock_id
     ON info_agg.etf_holdings (etf_stock_id);
 
-CREATE INDEX IF NOT EXISTS idx_etf_holdings_asset_symbol
-    ON info_agg.etf_holdings (asset_symbol);
+CREATE INDEX IF NOT EXISTS idx_etf_holdings_asset_stock_id
+    ON info_agg.etf_holdings (asset_stock_id);
+
+
+-- ── MARKETS — etf_sectors ───────────────────────────────────
+
+CREATE INDEX IF NOT EXISTS idx_etf_sectors_etf_stock_id
+    ON info_agg.etf_sectors (etf_stock_id);
+
+CREATE INDEX IF NOT EXISTS idx_stocks_is_core
+    ON info_agg.stocks (is_core);
 
 
 -- ── MARKETS — company_news ──────────────────────────────────
