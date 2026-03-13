@@ -58,9 +58,31 @@ def get_alphavantage_api_keys() -> List[str]:
     return keys
 
 
+_av_key_index: int = 0  # module-level round-robin counter
+
+
+def _get_keys_round_robin(api_key: Optional[str] = None) -> List[str]:
+    """Return keys list starting from the next round-robin position.
+
+    Each call advances the counter so successive ticker fetches are distributed
+    evenly across all configured keys instead of always starting with key 0.
+    Fallback to the next key on Note/Information is preserved by the caller's
+    ``for key in keys`` loop.
+    """
+    global _av_key_index
+    if api_key:
+        return [api_key]
+    keys = get_alphavantage_api_keys()
+    start = _av_key_index % len(keys)
+    _av_key_index += 1
+    return keys[start:] + keys[:start]
+
+# ================================================================================================
+# Markets Endpoints - DB SEED ONLY
+# ================================================================================================
 def fetch_stock_candles_av(
     ticker: str,
-    days_back: int = 365,
+    days_back: int = 30,
     api_key: Optional[str] = None
 ) -> Optional[Dict[str, Any]]:
     """
@@ -74,7 +96,7 @@ def fetch_stock_candles_av(
     Returns:
         Dict with keys: ticker, resolution, open, high, low, close, volume, timestamps, fetched_at
     """
-    keys = [api_key] if api_key else get_alphavantage_api_keys()
+    keys = _get_keys_round_robin(api_key)
     outputsize = 'compact'  # last 100 trading days (~5 months) on free tier
 
     last_err = None
@@ -197,7 +219,7 @@ def fetch_historical_quotes(
 def fetch_crypto_candles_av(
     symbol: str,
     market: str = 'USD',
-    days_back: int = 100,
+    days_back: int = 30,
     api_key: Optional[str] = None
 ) -> List[Dict[str, Any]]:
     """
@@ -210,7 +232,7 @@ def fetch_crypto_candles_av(
         days_back: Calendar days of history to keep
         api_key: Optional specific key; if None, rotates across all configured keys
     """
-    keys = [api_key] if api_key else get_alphavantage_api_keys()
+    keys = _get_keys_round_robin(api_key)
     last_err = None
 
     for key in keys:
@@ -294,24 +316,95 @@ def fetch_crypto_candles_av(
 
 
 def fetch_index_constituents(symbol: str = 'VOO', api_key: Optional[str] = None) -> Optional[Dict[str, Any]]:
-    """Fetch ETF constituents via Alpha Vantage ETF_PROFILE (premium endpoint)."""
-    if api_key is None:
-        api_key = get_alphavantage_api_key()
+    """Fetch ETF profile and holdings via Alpha Vantage ETF_PROFILE.
 
-    params = {'function': 'ETF_PROFILE', 'symbol': symbol, 'apikey': api_key}
+    Uses round-robin key rotation with the same Note/Information fallback
+    pattern as the other AV fetchers.
 
-    try:
-        response = requests.get(ALPHA_VANTAGE_BASE_URL, params=params, timeout=10)
-        response.raise_for_status()
-        return response.json()
-    except requests.exceptions.RequestException as e:
-        print(f"Error fetching Alpha Vantage ETF profile: {e}")
-        return None
-    except Exception as e:
-        print(f"Error parsing Alpha Vantage ETF profile: {e}")
-        return None
+    Returns the raw AV response dict (keys: net_assets, net_asset_value,
+    pe_ratio, dividend_yield, inception_date, leveraged, holdings[]),
+    or None on failure.
+    """
+    keys = _get_keys_round_robin(api_key)
+    last_err = None
+
+    for key in keys:
+        _av_rate_limit(key)
+
+        params = {'function': 'ETF_PROFILE', 'symbol': symbol, 'apikey': key}
+        try:
+            response = requests.get(ALPHA_VANTAGE_BASE_URL, params=params, timeout=10)
+            response.raise_for_status()
+            data = response.json()
+
+            if 'Note' in data or 'Information' in data:
+                msg = data.get('Note') or data.get('Information', '')
+                print(f"  Alpha Vantage key rotation triggered for ETF_PROFILE {symbol}: {msg[:80]}")
+                last_err = msg
+                continue
+
+            if 'Error Message' in data:
+                print(f"  Alpha Vantage error for ETF_PROFILE {symbol}: {data['Error Message']}")
+                return None
+
+            return data
+
+        except requests.exceptions.RequestException as e:
+            last_err = str(e)
+            print(f"  Alpha Vantage request error for ETF_PROFILE {symbol}: {e}")
+            continue
+        except Exception as e:
+            print(f"  Alpha Vantage parse error for ETF_PROFILE {symbol}: {e}")
+            return None
+
+    print(f"  All Alpha Vantage keys exhausted for ETF_PROFILE {symbol}. Last error: {last_err}")
+    return None
 
 
+def fetch_etf_holdings_av(symbol: str, api_key: Optional[str] = None) -> List[Dict[str, Any]]:
+    """Fetch and normalize ETF holdings from AV ETF_PROFILE into the format
+    expected by ``upsert_etf_holdings``.
+
+    AV provides symbol, description, and weight (e.g. "7.29%") per holding.
+    shares and market_value are not available via this endpoint and are left None.
+
+    Returns a list of dicts with keys:
+        asset_symbol, asset_name, weight_percentage, shares, market_value, as_of_date
+    """
+    raw = fetch_index_constituents(symbol, api_key=api_key)
+    if not raw:
+        return []
+
+    today = datetime.now().strftime('%Y-%m-%d')
+    holdings = []
+    for h in raw.get('holdings', []):
+        asset_symbol = h.get('symbol') or h.get('asset_symbol')
+        if not asset_symbol:
+            continue
+
+        weight_str = h.get('weight', '')
+        weight_pct: Optional[float] = None
+        if weight_str:
+            try:
+                weight_pct = float(str(weight_str).strip('%'))
+            except (ValueError, AttributeError):
+                pass
+
+        holdings.append({
+            'asset_symbol': asset_symbol,
+            'asset_name': h.get('description') or h.get('asset_name'),
+            'weight_percentage': weight_pct,
+            'shares': None,        # not provided by ETF_PROFILE
+            'market_value': None,  # not provided by ETF_PROFILE
+            'as_of_date': today,
+        })
+
+    return holdings
+
+
+# ================================================================================================
+# News Sentiment Endpoints - DAILY RUN
+# ================================================================================================
 def fetch_news_sentiment(
     tickers: Optional[List[str]] = None,
     topic: Optional[str] = None,
@@ -326,7 +419,7 @@ def fetch_news_sentiment(
         topic: Optional single topic filter (e.g. 'earnings', 'technology').
         api_key: Optional specific key; if None, rotates across all configured keys.
     """
-    keys = [api_key] if api_key else get_alphavantage_api_keys()
+    keys = _get_keys_round_robin(api_key)
 
     last_err = None
     for key in keys:
@@ -395,6 +488,9 @@ def fetch_news_sentiment(
     return []
 
 
+# ================================================================================================
+# Miscellaneous Endpoints
+# ================================================================================================
 def fetch_top_gainers_losers(api_key: Optional[str] = None) -> Optional[Dict[str, Any]]:
     """Fetch top gainers, losers, and most actively traded from Alpha Vantage."""
     if api_key is None:

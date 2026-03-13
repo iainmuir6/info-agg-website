@@ -16,7 +16,7 @@ import os
 from dotenv import load_dotenv
 load_dotenv()
 
-FMP_BASE_V3 = "https://financialmodelingprep.com/api/v3"
+# FMP_BASE_V3 = "https://financialmodelingprep.com/api/v3"
 FMP_BASE_STABLE = "https://financialmodelingprep.com/stable"
 
 # FMP free tier: 250 requests/day — daily counter with midnight reset
@@ -60,19 +60,18 @@ def get_fmp_api_key() -> str:
 # ---------------------------------------------------------------------------
 # Actively used in daily ETL
 # ---------------------------------------------------------------------------
-
 def fetch_company_profile(ticker: str, api_key: Optional[str] = None) -> Optional[Dict[str, Any]]:
     """
-    Fetch company profile from FMP /api/v3/profile/{symbol}.
+    Fetch company profile from FMP /stable/profile?symbol={symbol}.
 
-    Returns same field names as finnhub.fetch_company_profile() plus extras:
-    sector, description, ceo, full_time_employees, city, state, beta.
+    Field mapping verified against live API response (fmp_aapl.json).
+    Returns None if the ticker is unknown to FMP or has no companyName.
     """
     if api_key is None:
         api_key = get_fmp_api_key()
 
-    url = f"{FMP_BASE_V3}/profile/{ticker}"
-    params = {'apikey': api_key}
+    url = f"{FMP_BASE_STABLE}/profile"
+    params = {'symbol': ticker.replace('.', '-'), 'apikey': api_key}
 
     try:
         _fmp_rate_check()
@@ -92,14 +91,14 @@ def fetch_company_profile(ticker: str, api_key: Optional[str] = None) -> Optiona
             'name': p.get('companyName'),
             'country': p.get('country'),
             'currency': p.get('currency'),
-            'exchange': p.get('exchangeShortName'),
+            'exchange': p.get('exchange'),           # "NASDAQ" (was wrongly mapped to exchangeShortName)
+            'exchange_full': p.get('exchangeFullName'),
             'ipo_date': p.get('ipoDate'),
-            'market_cap': p.get('mktCap'),
-            'share_outstanding': None,  # not in FMP profile endpoint
+            'market_cap': p.get('marketCap'),        # was mktCap — actual field is marketCap
+            'share_outstanding': None,               # not provided by this endpoint
             'logo': p.get('image'),
             'website': p.get('website'),
             'industry': p.get('industry'),
-            # FMP extras
             'sector': p.get('sector'),
             'description': p.get('description'),
             'ceo': p.get('ceo'),
@@ -107,7 +106,9 @@ def fetch_company_profile(ticker: str, api_key: Optional[str] = None) -> Optiona
             'city': p.get('city'),
             'state': p.get('state'),
             'beta': p.get('beta'),
-            'fetched_at': datetime.now().isoformat()
+            'is_etf': p.get('isEtf', False),
+            'is_actively_trading': p.get('isActivelyTrading', True),
+            'fetched_at': datetime.now().isoformat(),
         }
 
     except RuntimeError:
@@ -125,7 +126,6 @@ def fetch_company_profile(ticker: str, api_key: Optional[str] = None) -> Optiona
 # data on the free tier. ETF metadata and holdings are now scraped from etfdb.com
 # via src/api/markets/etfdb.py (trigger: --scrape-etf-info). Functions are kept
 # here for potential future use or direct invocation.
-
 def fetch_etf_info(ticker: str, api_key: Optional[str] = None) -> Optional[Dict[str, Any]]:
     """
     Fetch ETF information from FMP /stable/etf/information.
@@ -241,7 +241,7 @@ def fetch_historical_prices(
     api_key: Optional[str] = None
 ) -> List[Dict[str, Any]]:
     """
-    Fetch historical daily OHLCV prices from FMP /api/v3/historical-price-full/{symbol}.
+    Fetch historical daily OHLCV prices from FMP /stable/historical-price-full/{symbol}.
 
     Returns a list of quote-shaped dicts (oldest → newest) matching the stock_quotes
     insert format. Counts as a single FMP rate-limit call per ticker.
@@ -252,7 +252,7 @@ def fetch_historical_prices(
     from_date = (date.today() - timedelta(days=days_back)).isoformat()
     to_date = date.today().isoformat()
 
-    url = f"{FMP_BASE_V3}/historical-price-full/{ticker}"
+    url = f"{FMP_BASE_STABLE}/historical-price-full/{ticker}"
     params = {'from': from_date, 'to': to_date, 'apikey': api_key}
 
     try:
@@ -302,7 +302,7 @@ def fetch_income_statement(ticker: str, period: str = 'annual', api_key: Optiona
     """Fetch income statements. period: 'annual' or 'quarter'."""
     if api_key is None:
         api_key = get_fmp_api_key()
-    url = f"{FMP_BASE_V3}/income-statement/{ticker}"
+    url = f"{FMP_BASE_STABLE}/income-statement/{ticker}"
     params = {'period': period, 'apikey': api_key}
     try:
         _fmp_rate_check()
@@ -320,7 +320,7 @@ def fetch_balance_sheet(ticker: str, period: str = 'annual', api_key: Optional[s
     """Fetch balance sheet statements. period: 'annual' or 'quarter'."""
     if api_key is None:
         api_key = get_fmp_api_key()
-    url = f"{FMP_BASE_V3}/balance-sheet-statement/{ticker}"
+    url = f"{FMP_BASE_STABLE}/balance-sheet-statement/{ticker}"
     params = {'period': period, 'apikey': api_key}
     try:
         _fmp_rate_check()
@@ -338,7 +338,7 @@ def fetch_cash_flow(ticker: str, period: str = 'annual', api_key: Optional[str] 
     """Fetch cash flow statements. period: 'annual' or 'quarter'."""
     if api_key is None:
         api_key = get_fmp_api_key()
-    url = f"{FMP_BASE_V3}/cash-flow-statement/{ticker}"
+    url = f"{FMP_BASE_STABLE}/cash-flow-statement/{ticker}"
     params = {'period': period, 'apikey': api_key}
     try:
         _fmp_rate_check()
@@ -356,7 +356,7 @@ def fetch_key_metrics(ticker: str, period: str = 'annual', api_key: Optional[str
     """Fetch key metrics (P/E, EPS, ROE, margins, etc.)."""
     if api_key is None:
         api_key = get_fmp_api_key()
-    url = f"{FMP_BASE_V3}/key-metrics/{ticker}"
+    url = f"{FMP_BASE_STABLE}/key-metrics/{ticker}"
     params = {'period': period, 'apikey': api_key}
     try:
         _fmp_rate_check()
@@ -374,7 +374,7 @@ def fetch_financial_ratios(ticker: str, period: str = 'annual', api_key: Optiona
     """Fetch financial ratios."""
     if api_key is None:
         api_key = get_fmp_api_key()
-    url = f"{FMP_BASE_V3}/financial-ratios/{ticker}"
+    url = f"{FMP_BASE_STABLE}/financial-ratios/{ticker}"
     params = {'period': period, 'apikey': api_key}
     try:
         _fmp_rate_check()
@@ -392,7 +392,7 @@ def fetch_analyst_estimates(ticker: str, api_key: Optional[str] = None) -> List[
     """Fetch analyst estimates."""
     if api_key is None:
         api_key = get_fmp_api_key()
-    url = f"{FMP_BASE_V3}/analyst-estimates/{ticker}"
+    url = f"{FMP_BASE_STABLE}/analyst-estimates/{ticker}"
     params = {'apikey': api_key}
     try:
         _fmp_rate_check()
@@ -410,7 +410,7 @@ def fetch_insider_trades(ticker: str, api_key: Optional[str] = None) -> List[Dic
     """Fetch insider trading activity."""
     if api_key is None:
         api_key = get_fmp_api_key()
-    url = f"{FMP_BASE_V3}/insider-trading/{ticker}"
+    url = f"{FMP_BASE_STABLE}/insider-trading/{ticker}"
     params = {'apikey': api_key}
     try:
         _fmp_rate_check()
@@ -428,7 +428,7 @@ def fetch_press_releases(ticker: str, limit: int = 10, api_key: Optional[str] = 
     """Fetch press releases."""
     if api_key is None:
         api_key = get_fmp_api_key()
-    url = f"{FMP_BASE_V3}/press-releases/{ticker}"
+    url = f"{FMP_BASE_STABLE}/press-releases/{ticker}"
     params = {'limit': limit, 'apikey': api_key}
     try:
         _fmp_rate_check()

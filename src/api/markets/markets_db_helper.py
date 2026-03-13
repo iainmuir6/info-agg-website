@@ -52,48 +52,56 @@ def get_or_create_stock(supabase: Client, ticker: str, profile_data: Optional[Di
         stock_id = response.data.get('id') if (response and response.data) else None
         
         if stock_id:
-            # Update if profile data provided
             if profile_data:
                 _mc = profile_data.get('market_cap')
                 _so = profile_data.get('share_outstanding')
                 update_data = {
-                    'name': profile_data.get('name'),
-                    'country': profile_data.get('country'),
-                    'currency': profile_data.get('currency'),
-                    'exchange': profile_data.get('exchange'),
-                    'ipo_date': profile_data.get('ipo_date'),
-                    'market_cap': int(round(_mc)) if _mc is not None else None,
+                    'name':              profile_data.get('name'),
+                    'country':           profile_data.get('country'),
+                    'currency':          profile_data.get('currency'),
+                    'exchange':          profile_data.get('exchange'),
+                    'ipo_date':          profile_data.get('ipo_date'),
+                    'market_cap':        int(round(_mc)) if _mc is not None else None,
                     'share_outstanding': int(round(_so)) if _so is not None else None,
-                    'logo_url': profile_data.get('logo'),
-                    'website': profile_data.get('website'),
-                    'industry': profile_data.get('industry')
+                    'logo_url':          profile_data.get('logo'),
+                    'website':           profile_data.get('website'),
+                    'industry':          profile_data.get('industry'),
+                    'sector':            profile_data.get('sector'),
+                    'description':       profile_data.get('description'),
+                    'ceo':               profile_data.get('ceo'),
+                    'city':              profile_data.get('city'),
+                    'state':             profile_data.get('state'),
+                    'beta':              profile_data.get('beta'),
+                    'is_active':         profile_data.get('is_actively_trading'),
                 }
-                # Remove None values
                 update_data = {k: v for k, v in update_data.items() if v is not None}
                 supabase.table('stocks').update(update_data).eq('id', stock_id).execute()
-            
             return stock_id
         else:
-            # Create new stock
             _mc = profile_data.get('market_cap') if profile_data else None
             _so = profile_data.get('share_outstanding') if profile_data else None
             insert_data = {
-                'ticker': ticker,
-                'asset_type': asset_type,
-                'name': profile_data.get('name') if profile_data else None,
-                'country': profile_data.get('country') if profile_data else None,
-                'currency': profile_data.get('currency') if profile_data else None,
-                'exchange': profile_data.get('exchange') if profile_data else None,
-                'ipo_date': profile_data.get('ipo_date') if profile_data else None,
-                'market_cap': int(round(_mc)) if _mc is not None else None,
+                'ticker':            ticker,
+                'asset_type':        asset_type,
+                'name':              profile_data.get('name') if profile_data else None,
+                'country':           profile_data.get('country') if profile_data else None,
+                'currency':          profile_data.get('currency') if profile_data else None,
+                'exchange':          profile_data.get('exchange') if profile_data else None,
+                'ipo_date':          profile_data.get('ipo_date') if profile_data else None,
+                'market_cap':        int(round(_mc)) if _mc is not None else None,
                 'share_outstanding': int(round(_so)) if _so is not None else None,
-                'logo_url': profile_data.get('logo') if profile_data else None,
-                'website': profile_data.get('website') if profile_data else None,
-                'industry': profile_data.get('industry') if profile_data else None
+                'logo_url':          profile_data.get('logo') if profile_data else None,
+                'website':           profile_data.get('website') if profile_data else None,
+                'industry':          profile_data.get('industry') if profile_data else None,
+                'sector':            profile_data.get('sector') if profile_data else None,
+                'description':       profile_data.get('description') if profile_data else None,
+                'ceo':               profile_data.get('ceo') if profile_data else None,
+                'city':              profile_data.get('city') if profile_data else None,
+                'state':             profile_data.get('state') if profile_data else None,
+                'beta':              profile_data.get('beta') if profile_data else None,
+                'is_active':         profile_data.get('is_actively_trading') if profile_data else None,
             }
-            # Remove None values
             insert_data = {k: v for k, v in insert_data.items() if v is not None}
-            
             response = supabase.table('stocks').upsert(
                 insert_data,
                 on_conflict='ticker'
@@ -450,35 +458,66 @@ def sync_market_news(supabase: Client, categories: List[str] = ['general'], api_
     return stats
 
 
+def insert_stub_stocks(supabase: Client, tickers: List[str], asset_type: str = 'stock') -> Dict[str, str]:
+    """
+    Batch-insert stub rows for tickers that don't yet exist in stocks, then
+    return a {ticker: id} map for all requested tickers.
+
+    Uses ON CONFLICT DO NOTHING so existing rows are untouched.
+    """
+    if not tickers:
+        return {}
+
+    unique = list(dict.fromkeys(tickers))  # deduplicate, preserve order
+
+    # Insert stubs — ignore conflicts on existing tickers
+    stubs = [{'ticker': t, 'asset_type': asset_type} for t in unique]
+    try:
+        batch_size = 100
+        for i in range(0, len(stubs), batch_size):
+            supabase.table('stocks').upsert(
+                stubs[i:i + batch_size],
+                on_conflict='ticker',
+                ignore_duplicates=True,
+            ).execute()
+    except Exception as e:
+        print(f"Error inserting stub stocks: {e}")
+
+    # Fetch IDs for all requested tickers
+    try:
+        resp = supabase.table('stocks').select('id,ticker').in_('ticker', unique).execute()
+        return {row['ticker']: row['id'] for row in (resp.data or [])}
+    except Exception as e:
+        print(f"Error fetching stock IDs after stub insert: {e}")
+        return {}
+
+
 def upsert_etf_holdings(supabase: Client, etf_stock_id: str, holdings: List[Dict[str, Any]]) -> int:
     """
     Batch upsert ETF holdings into etf_holdings table.
 
-    Args:
-        supabase: Supabase client instance
-        etf_stock_id: Stock ID of the ETF from the stocks table
-        holdings: List of holding dicts from fmp.fetch_etf_holdings()
+    Each holding dict must contain:
+        asset_stock_id (UUID), asset_name, weight_pct, shares, market_value, as_of_date
 
-    Returns:
-        Number of rows upserted
+    Returns number of rows upserted.
     """
     if not holdings:
         return 0
 
     batch_data = []
     for h in holdings:
-        row = {
+        asset_stock_id = h.get('asset_stock_id')
+        if not asset_stock_id:
+            continue
+        batch_data.append({
             'etf_stock_id': etf_stock_id,
-            'asset_symbol': h.get('asset_symbol'),
+            'asset_stock_id': asset_stock_id,
             'asset_name': h.get('asset_name'),
-            'weight_pct': h.get('weight_percentage'),
+            'weight_pct': h.get('weight_pct'),
             'shares': h.get('shares'),
             'market_value': h.get('market_value'),
             'as_of_date': h.get('as_of_date'),
-        }
-        # Drop None-only rows (must have at least a symbol)
-        if row['asset_symbol']:
-            batch_data.append(row)
+        })
 
     if not batch_data:
         return 0
@@ -490,12 +529,51 @@ def upsert_etf_holdings(supabase: Client, etf_stock_id: str, holdings: List[Dict
             batch = batch_data[i:i + batch_size]
             supabase.table('etf_holdings').upsert(
                 batch,
-                on_conflict='etf_stock_id,asset_symbol,as_of_date'
+                on_conflict='etf_stock_id,asset_stock_id,as_of_date'
             ).execute()
             upserted += len(batch)
         return upserted
     except Exception as e:
         print(f"Error upserting ETF holdings for stock_id={etf_stock_id}: {e}")
+        return 0
+
+
+def upsert_etf_sectors(supabase: Client, etf_stock_id: str, sectors: List[Dict[str, Any]]) -> int:
+    """
+    Batch upsert ETF sector breakdown into etf_sectors.
+
+    Each sector dict must contain: sector (str), weight_pct (float), as_of_date (str).
+
+    Returns number of rows upserted.
+    """
+    if not sectors:
+        return 0
+
+    batch_data = [
+        {
+            'etf_stock_id': etf_stock_id,
+            'sector': s['sector'],
+            'weight_pct': s.get('weight_pct'),
+            'as_of_date': s.get('as_of_date'),
+        }
+        for s in sectors if s.get('sector')
+    ]
+
+    if not batch_data:
+        return 0
+
+    try:
+        upserted = 0
+        batch_size = 100
+        for i in range(0, len(batch_data), batch_size):
+            supabase.table('etf_sectors').upsert(
+                batch_data[i:i + batch_size],
+                on_conflict='etf_stock_id,sector,as_of_date'
+            ).execute()
+            upserted += len(batch_data[i:i + batch_size])
+        return upserted
+    except Exception as e:
+        print(f"Error upserting ETF sectors for stock_id={etf_stock_id}: {e}")
         return 0
 
 
@@ -582,8 +660,88 @@ def sync_fmp_data(
     return stats
 
 
+def sync_av_etf_holdings(supabase: Client, etf_tickers: List[str]) -> Dict[str, Any]:
+    """
+    Fetch ETF holdings from Alpha Vantage ETF_PROFILE and upsert into etf_holdings.
+
+    One AV call per ETF ticker. Uses round-robin key rotation via
+    fetch_etf_holdings_av(). AV provides symbol, description, and weight%;
+    shares and market_value are not available and are stored as NULL.
+
+    Returns:
+        Stats dict: etfs_processed, holdings_upserted, errors
+    """
+    try:
+        from .alpha_vantage import fetch_etf_holdings_av
+    except ImportError:
+        import sys
+        import os
+        current_dir = os.path.dirname(os.path.abspath(__file__))
+        if current_dir not in sys.path:
+            sys.path.insert(0, current_dir)
+        from alpha_vantage import fetch_etf_holdings_av
+
+    stats: Dict[str, Any] = {
+        'etfs_processed': 0,
+        'holdings_upserted': 0,
+        'errors': [],
+    }
+
+    for ticker in etf_tickers:
+        try:
+            print(f"  [{ticker}] Fetching ETF holdings via AV ETF_PROFILE...")
+            raw_holdings = fetch_etf_holdings_av(ticker)
+            if not raw_holdings:
+                print(f"  [{ticker}] No holdings returned")
+                stats['etfs_processed'] += 1
+                continue
+
+            etf_stock_id = get_or_create_stock(supabase, ticker, asset_type='etf')
+            if not etf_stock_id:
+                stats['errors'].append(f"{ticker}: failed to get/create stock row")
+                continue
+
+            # Insert stub rows for all holding symbols, get {ticker: id} map
+            holding_tickers = [h['asset_symbol'] for h in raw_holdings if h.get('asset_symbol')]
+            ticker_id_map = insert_stub_stocks(supabase, holding_tickers, asset_type='stock')
+
+            # Re-shape holdings to use asset_stock_id FK
+            holdings = []
+            for h in raw_holdings:
+                sym = h.get('asset_symbol')
+                stock_id = ticker_id_map.get(sym) if sym else None
+                if not stock_id:
+                    continue
+                holdings.append({
+                    'asset_stock_id': stock_id,
+                    'asset_name': h.get('asset_name'),
+                    'weight_pct': h.get('weight_percentage'),
+                    'shares': h.get('shares'),
+                    'market_value': h.get('market_value'),
+                    'as_of_date': h.get('as_of_date'),
+                })
+
+            count = upsert_etf_holdings(supabase, etf_stock_id, holdings)
+            stats['holdings_upserted'] += count
+            stats['etfs_processed'] += 1
+            print(f"  [{ticker}] Upserted {count} holdings")
+
+        except Exception as e:
+            msg = f"{ticker}: {e}"
+            print(f"  [av_etf_holdings] Error for {ticker}: {e}")
+            stats['errors'].append(msg)
+
+    return stats
+
+
 def sync_etfdb_data(supabase: Client, etf_tickers: List[str]) -> Dict[str, Any]:
     """
+    DEPRECATED — ETF holdings are now fetched via AV ETF_PROFILE in sync_av_etf_holdings().
+
+    This Selenium-based scraper remains available for manual enrichment (expense ratio,
+    AUM, ETF category) that AV does not provide, but it is no longer called by the
+    seed or daily ETL pipelines. Trigger manually with --scrape-etf-info if needed.
+
     Scrape all ETF pages in one Selenium session, then batch-upsert to Supabase.
 
     Flow:
@@ -591,8 +749,6 @@ def sync_etfdb_data(supabase: Client, etf_tickers: List[str]) -> Dict[str, Any]:
          returns [{ticker, info, holdings}] for all tickers
       2. For each result: info None → FMP company profile fallback
       3. get_or_create_stock() + upsert_etf_holdings() for every ticker
-
-    Trigger: manual only via --scrape-etf-info. Never called on daily/seed runs.
 
     Returns:
         Stats dict: etf_info_updated, etf_holdings_upserted, fmp_fallbacks, errors
