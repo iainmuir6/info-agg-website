@@ -50,7 +50,7 @@ export async function updateSession(request: NextRequest) {
 
     // Only protect explicitly private routes (e.g. /premium, /dashboard).
     // All public routes (/, /news, /sports, /markets, /media) are open.
-    const PRIVATE_PREFIXES = ["/premium", "/dashboard"];
+    const PRIVATE_PREFIXES = ["/premium", "/dashboard", "/profile", "/watchlist"];
     const isPrivate = PRIVATE_PREFIXES.some((p) =>
       request.nextUrl.pathname.startsWith(p)
     );

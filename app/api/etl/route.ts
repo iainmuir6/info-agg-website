@@ -1,9 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
+import { isSuperAdmin } from "@/lib/rbac";
 import { exec } from "child_process";
 import path from "path";
 
-// Only allow triggering from authenticated users
+// Only allow triggering from super_admin users
 export async function POST(request: NextRequest) {
   try {
     const supabase = await createClient();
@@ -11,6 +12,10 @@ export async function POST(request: NextRequest) {
 
     if (error || !data?.claims) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+
+    if (!(await isSuperAdmin())) {
+      return NextResponse.json({ error: "Forbidden" }, { status: 403 });
     }
 
     const body = await request.json().catch(() => ({}));

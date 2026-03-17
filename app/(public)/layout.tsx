@@ -2,6 +2,8 @@ import Link from "next/link";
 import { ThemeSwitcher } from "@/components/theme-switcher";
 import { createClient } from "@/lib/supabase/server";
 import { NewsTickerClient } from "@/components/news-ticker-client";
+import { isSuperAdmin } from "@/lib/rbac";
+import { EtlTriggerButton } from "@/components/etl-trigger";
 
 type TickerItem = {
   label: string;
@@ -43,8 +45,8 @@ async function getTickerItems(): Promise<TickerItem[]> {
             change: parseFloat(latest.percent_change ?? 0),
           };
         })
-        .filter(Boolean)
-        .sort((a: any, b: any) => order.indexOf(a.label) - order.indexOf(b.label));
+        .filter((x): x is TickerItem => x !== null)
+        .sort((a, b) => order.indexOf(a.label) - order.indexOf(b.label));
     };
 
     const equities = normalize(equitiesRes.data ?? [], MAG7);
@@ -63,6 +65,11 @@ const NAV_LINKS = [
   { href: "/media", label: "MEDIA", accent: "hsl(340 78% 50%)" },
 ];
 
+const AUTH_NAV_LINKS = [
+  { href: "/watchlist", label: "WATCHLIST", accent: "hsl(310 78% 50%)", adminOnly: false },
+  { href: "/dashboard", label: "DASHBOARD", accent: "hsl(45 90% 52%)", adminOnly: true },
+];
+
 export default async function PublicLayout({ children }: { children: React.ReactNode }) {
   const now = new Date();
   const dateStr = now
@@ -73,6 +80,11 @@ export default async function PublicLayout({ children }: { children: React.React
       day: "numeric",
     })
     .toUpperCase();
+
+  const supabase = await createClient();
+  const { data: claimsData } = await supabase.auth.getClaims();
+  const isAuthenticated = !!claimsData?.claims;
+  const isAdmin = isAuthenticated ? await isSuperAdmin() : false;
 
   return (
     <div className="min-h-screen bg-background flex flex-col">
@@ -99,12 +111,25 @@ export default async function PublicLayout({ children }: { children: React.React
                 Live
               </span>
             </div>
-            <Link
-              href="/auth/login"
-              className="text-[10px] font-mono tracking-widest uppercase text-muted-foreground hover:text-foreground border border-border px-3 py-1.5 hover:border-foreground transition-colors"
-            >
-              Sign In
-            </Link>
+            {!isAuthenticated ? (
+              <Link
+                href="/auth/login"
+                className="text-[10px] font-mono tracking-widest uppercase text-muted-foreground hover:text-foreground border border-border px-3 py-1.5 hover:border-foreground transition-colors"
+              >
+                Sign In
+              </Link>
+            ) : (
+              <>
+                {isAdmin && <EtlTriggerButton />}
+                <Link
+                  href="/profile"
+                  className="flex items-center justify-center w-7 h-7 rounded-full border border-border text-[10px] font-mono font-bold tracking-wider text-muted-foreground hover:text-foreground hover:border-foreground transition-colors"
+                  title="Profile"
+                >
+                  {(claimsData?.claims?.email as string | undefined)?.slice(0, 2).toUpperCase() ?? "??"}
+                </Link>
+              </>
+            )}
             <ThemeSwitcher />
           </div>
         </div>
@@ -119,6 +144,19 @@ export default async function PublicLayout({ children }: { children: React.React
               Overview
             </Link>
             {NAV_LINKS.map((item) => (
+              <Link
+                key={item.href}
+                href={item.href}
+                className="relative px-4 py-2.5 text-xs font-mono tracking-widest uppercase text-muted-foreground hover:text-foreground transition-colors shrink-0 group"
+              >
+                {item.label}
+                <span
+                  className="absolute bottom-0 left-0 right-0 h-0.5 scale-x-0 group-hover:scale-x-100 transition-transform origin-left"
+                  style={{ backgroundColor: item.accent }}
+                />
+              </Link>
+            ))}
+            {isAuthenticated && AUTH_NAV_LINKS.filter((l) => !l.adminOnly || isAdmin).map((item) => (
               <Link
                 key={item.href}
                 href={item.href}
