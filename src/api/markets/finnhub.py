@@ -9,6 +9,7 @@
 from typing import Dict, List, Optional, Any
 from collections import deque
 from datetime import datetime, timedelta
+import pandas as pd
 import requests
 import threading
 import os
@@ -104,7 +105,11 @@ def fetch_stock_quote(ticker: str, api_key: Optional[str] = None) -> Optional[Di
 
 def fetch_crypto_quote(symbol: str, api_key: Optional[str] = None) -> Optional[Dict[str, Any]]:
     """
-    Fetch daily quote for a crypto asset via Finnhub /crypto/candle.
+    Fetch real-time quote for a crypto asset via Finnhub /quote.
+
+    Uses the same endpoint as stocks but with exchange-prefixed symbol
+    (e.g. 'BINANCE:BTCUSDT' for BTC). Returns ticker key mapped back to
+    the short symbol (e.g. 'BTC').
 
     Args:
         symbol: Basket symbol (e.g. 'BTC', 'ETH', 'XRP')
@@ -121,59 +126,13 @@ def fetch_crypto_quote(symbol: str, api_key: Optional[str] = None) -> Optional[D
         api_key = get_finnhub_api_key()
 
     fh_symbol = CRYPTO_SYMBOL_MAP[symbol]
-    now_ts = int(datetime.now().timestamp())
-    yesterday_ts = int((datetime.now() - timedelta(days=2)).timestamp())
-
-    url = f"{FINNHUB_BASE_URL}/crypto/candle"
-    params = {
-        'symbol': fh_symbol,
-        'resolution': 'D',
-        'from': yesterday_ts,
-        'to': now_ts,
-        'token': api_key,
-    }
-
-    try:
-        _fh_rate_limit()
-        response = requests.get(url, params=params, timeout=10)
-        response.raise_for_status()
-        data = response.json()
-
-        if data.get('s') == 'no_data' or not data.get('c'):
-            print(f"  Finnhub crypto: no data for {symbol}")
-            return None
-
-        c = data['c']
-        o = data['o']
-        h = data['h']
-        l = data['l']
-        v = data['v']
-        t = data['t']
-
-        prev_close = c[-2] if len(c) >= 2 else None
-        change = c[-1] - o[-1]
-        pct_change = (change / o[-1] * 100) if o[-1] else None
-
-        return {
-            'ticker': symbol,
-            'current_price': c[-1],
-            'change': change,
-            'percent_change': pct_change,
-            'high_price': h[-1],
-            'low_price': l[-1],
-            'open_price': o[-1],
-            'previous_close': prev_close,
-            'volume': v[-1],
-            'timestamp': t[-1],
-            'fetched_at': datetime.now().isoformat(),
-        }
-
-    except requests.exceptions.RequestException as e:
-        print(f"Error fetching crypto quote for {symbol}: {e}")
+    quote = fetch_stock_quote(fh_symbol, api_key)
+    if quote is None:
         return None
-    except Exception as e:
-        print(f"Error parsing crypto quote for {symbol}: {e}")
-        return None
+
+    # Re-key ticker back to the short basket symbol (e.g. 'BTC')
+    quote['ticker'] = symbol
+    return quote
 
 
 # DEPRECATED: fetch_stock_candles (Finnhub /stock/candle) — use alpha_vantage.fetch_stock_candles_av instead.
@@ -303,7 +262,6 @@ def fetch_company_news(
                 'image_url': article.get('image'),
                 'source': article.get('source'),
                 'published_at': datetime.fromtimestamp(article.get('datetime', 0)).isoformat() if article.get('datetime') else None,
-                'related_tickers': [t for t in (article.get('related') or '').split(',') if t],
                 'fetched_at': datetime.now().isoformat()
             })
 
@@ -341,7 +299,6 @@ def fetch_market_news(category: str = 'general', min_id: int = 0, api_key: Optio
                 'image_url': article.get('image'),
                 'source': article.get('source'),
                 'published_at': datetime.fromtimestamp(article.get('datetime', 0)).isoformat() if article.get('datetime') else None,
-                'related_tickers': [t for t in (article.get('related') or '').split(',') if t],
                 'fetched_at': datetime.now().isoformat()
             })
 
@@ -467,7 +424,12 @@ if __name__ == "__main__":
         print(f"{profile['name']} | {profile['industry']} | mktcap={profile['market_cap']}")
 
     print("\n--- Company News ---")
-    news = fetch_company_news('AAPL', days_back=7, api_key=key)
+    news = fetch_company_news('AAPL', days_back=1, api_key=key)
     print(f"Found {len(news)} articles")
     for a in news[:3]:
         print(f"  - {a['headline']}")
+
+    news_df = pd.DataFrame(news)
+    news_df.head()
+    news_df['source'].value_counts()
+    pd.to_datetime(news_df['published_at']).dt.date.value_counts()

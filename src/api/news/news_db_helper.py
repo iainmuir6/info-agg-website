@@ -151,7 +151,7 @@ def sync_nyt_data(supabase: Client, sections: Optional[List[str]] = None) -> Dic
             print(f"  Inserted {count} articles for '{section}'")
         return section, count
 
-    with ThreadPoolExecutor(max_workers=len(sections)) as executor:
+    with ThreadPoolExecutor(max_workers=3) as executor:  # NYT allows 10 req/min; 3 concurrent avoids 429s
         futures = {executor.submit(_fetch_section, s): s for s in sections}
         for future in as_completed(futures):
             section = futures[future]

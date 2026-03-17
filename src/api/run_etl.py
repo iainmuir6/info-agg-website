@@ -32,7 +32,16 @@ DEFAULT_SUBREDDITS = [
     'entertainment', 'music', 'movies', 'programming'
 ]
 
-MARKET_NEWS_CATEGORIES = ['general', 'forex', 'crypto', 'merger']
+MARKET_NEWS_CATEGORIES = [
+    'general', 'forex', 'crypto',
+    # 'merger'
+]
+
+SENTIMENT_TOPICS_ALL = [
+    'earnings', 'financial_markets', 'technology', 'finance',
+    'economy_macro', 'economy_monetary', 'economy_fiscal',
+    'mergers_and_acquisitions', 'ipo', 'energy_transportation'
+]
 
 
 def load_baskets() -> Dict[str, List[str]]:
@@ -43,27 +52,19 @@ def load_baskets() -> Dict[str, List[str]]:
 
 def classify_tickers(baskets: Dict[str, List[str]]) -> Dict[str, str]:
     """Return {ticker: asset_type} for every ticker across all basket groups."""
-    ETF_GROUPS    = {'core_market', 'sectors', 'breadth', 'risk'}
-    CRYPTO_GROUPS = {'crypto'}
+    ETF_GROUPS       = {'core_market', 'sectors', 'breadth', 'risk'}
+    CRYPTO_GROUPS    = {'crypto'}
+    FOREX_GROUPS     = {'forex'}
+    COMMODITY_GROUPS = {'commodities'}
     result = {}
     for group, tickers in baskets.items():
-        at = ('etf'    if group in ETF_GROUPS    else
-              'crypto' if group in CRYPTO_GROUPS else 'stock')
+        at = ('etf'       if group in ETF_GROUPS       else
+              'crypto'    if group in CRYPTO_GROUPS    else
+              'forex'     if group in FOREX_GROUPS     else
+              'commodity' if group in COMMODITY_GROUPS else 'stock')
         for t in tickers:
             result[t] = at
     return result
-
-# Full list of supported sentiment topics; default run uses SENTIMENT_TOPICS_DEFAULT
-# to stay within the ~10 req/day budget per AV key
-SENTIMENT_TOPICS_DEFAULT = [
-    'earnings', 'financial_markets', 'technology',
-    'finance', 'economy_macro',
-]
-SENTIMENT_TOPICS_ALL = [
-    'earnings', 'financial_markets', 'technology', 'finance',
-    'economy_macro', 'economy_monetary', 'economy_fiscal',
-    'mergers_and_acquisitions', 'ipo', 'energy_transportation'
-]
 
 
 def get_supabase_client() -> Client:
@@ -78,39 +79,23 @@ def get_supabase_client() -> Client:
     return create_client(supabase_url, supabase_key)
 
 
-def run_sports_etl(supabase: Client, backfill_days: int = 0) -> Dict[str, Any]:
-    """Run sports ETL: ESPN news and scores. Optionally backfill N days of historical scores."""
+def run_sports_etl(supabase: Client) -> Dict[str, Any]:
+    """Run sports ETL: ESPN news and scores (today's snapshot only)."""
     print("\n" + "=" * 60)
     print("SPORTS ETL")
     print("=" * 60)
 
     try:
         sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'sports'))
-        from sports.sports_db_helper import sync_all_sports_data, backfill_sports_scores
+        from sports.sports_db_helper import sync_all_sports_data
 
-        stats: Dict[str, Any] = {'leagues_processed': 0, 'news_inserted': 0,
-                                  'scores_inserted': 0, 'errors': []}
-
-        if backfill_days > 0:
-            print(f"\nBackfilling {backfill_days} days of ESPN scores...")
-            bf_stats = backfill_sports_scores(supabase, days_back=backfill_days)
-            stats['scores_inserted'] += bf_stats.get('scores_inserted', 0)
-            stats['errors'].extend(bf_stats.get('errors', []))
-            print(f"  Backfilled {bf_stats.get('scores_inserted', 0)} scores across "
-                  f"{bf_stats.get('dates_processed', 0)} dates")
-
-        # Always fetch current snapshot (news + today's scores)
         current = sync_all_sports_data(supabase, news_limit_per_sport=20)
-        stats['leagues_processed'] = current['leagues_processed']
-        stats['news_inserted'] = current['news_inserted']
-        stats['scores_inserted'] += current['scores_inserted']
-        stats['errors'].extend(current.get('errors', []))
 
         print(f"\nSports ETL Complete:")
-        print(f"  Leagues processed: {stats['leagues_processed']}")
-        print(f"  News inserted: {stats['news_inserted']}")
-        print(f"  Scores inserted: {stats['scores_inserted']}")
-        return {'success': True, 'stats': stats}
+        print(f"  Leagues processed: {current['leagues_processed']}")
+        print(f"  News inserted: {current['news_inserted']}")
+        print(f"  Scores inserted: {current['scores_inserted']}")
+        return {'success': True, 'stats': current}
     except Exception as e:
         print(f"Sports ETL failed: {e}")
         return {'success': False, 'error': str(e)}
@@ -119,11 +104,10 @@ def run_sports_etl(supabase: Client, backfill_days: int = 0) -> Dict[str, Any]:
 def run_markets_etl(
     supabase: Client,
     watchlist: Optional[List[str]] = None,
-    all_sentiment_topics: bool = False,
     skip_sentiment: bool = False,
 ) -> Dict[str, Any]:
     """
-    Daily markets ETL: quotes + company news + market news + AV sentiment.
+    Daily markets ETL: quotes + company news + market news + AV sentiment (all 10 topics).
     Quote backfill (OHLCV history) is intentionally excluded — use run_db_seed.py.
     Profile/info updates are intentionally excluded — run --scrape-etf-info
     (ETFdb) or --refresh-profiles (FMP) manually when needed.
@@ -141,7 +125,10 @@ def run_markets_etl(
 
     try:
         sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'markets'))
-        from markets.markets_db_helper import sync_stock_data, sync_market_news, sync_news_sentiment
+        from markets.markets_db_helper import (
+            sync_stock_data, sync_market_news, sync_news_sentiment,
+            sync_economic_indicators, backfill_missing_profiles,
+        )
 
         total_stats = {
             'stocks_processed': 0,
@@ -149,6 +136,8 @@ def run_markets_etl(
             'news_inserted': 0,
             'market_news_inserted': 0,
             'sentiment_upserted': 0,
+            'economic_rows_upserted': 0,
+            'profiles_backfilled': 0,
             'errors': []
         }
 
@@ -159,14 +148,13 @@ def run_markets_etl(
                 supabase,
                 ticker,
                 fetch_quotes=True,
-                fetch_news=(at == 'stock'),  # stocks only; ETF/crypto news skipped
+                fetch_news=(at == 'stock'),  # stocks only; ETF/crypto/forex/commodity news skipped
                 fetch_profile=False,          # profiles updated manually, not daily
-                quote_days_back=0,
                 asset_type=at,
             )
             return ticker, result
 
-        with ThreadPoolExecutor(max_workers=len(watchlist)) as executor:
+        with ThreadPoolExecutor(max_workers=5) as executor:  # cap concurrent Supabase writers to avoid connection exhaustion
             futures = {executor.submit(_fetch_ticker, t): t for t in watchlist}
             for future in as_completed(futures):
                 ticker, stats = future.result()
@@ -181,22 +169,35 @@ def run_markets_etl(
         total_stats['market_news_inserted'] = news_stats.get('articles_inserted', 0)
         total_stats['errors'].extend(news_stats.get('errors', []))
 
-        # AV news sentiment (skipped when --skip-sentiment)
+        # AV news sentiment — all 10 topics, spread across keys for efficiency
         if not skip_sentiment:
-            sentiment_topics = SENTIMENT_TOPICS_ALL if all_sentiment_topics else SENTIMENT_TOPICS_DEFAULT
-            print(f"\nFetching AV news sentiment ({len(sentiment_topics)} topics)...")
-            sentiment_stats = sync_news_sentiment(supabase, topics=sentiment_topics, tickers=watchlist)
+            print(f"\nFetching AV news sentiment ({len(SENTIMENT_TOPICS_ALL)} topics)...")
+            sentiment_stats = sync_news_sentiment(supabase, topics=SENTIMENT_TOPICS_ALL, tickers=watchlist)
             total_stats['sentiment_upserted'] = sentiment_stats.get('articles_upserted', 0)
             total_stats['errors'].extend(sentiment_stats.get('errors', []))
         else:
             print("\nSkipping AV news sentiment (--skip-sentiment)")
 
+        # Economic indicators (treasury rates + 7 macro)
+        print("\nFetching economic indicators...")
+        econ_stats = sync_economic_indicators(supabase)
+        total_stats['economic_rows_upserted'] = econ_stats.get('rows_upserted', 0)
+        total_stats['errors'].extend(econ_stats.get('errors', []))
+
+        # Missing profile backfill (stocks with name IS NULL)
+        print("\nBackfilling missing stock profiles...")
+        bp_stats = backfill_missing_profiles(supabase)
+        total_stats['profiles_backfilled'] = bp_stats.get('updated', 0)
+        total_stats['errors'].extend(bp_stats.get('errors', []))
+
         print(f"\nMarkets ETL Complete:")
-        print(f"  Stocks processed:          {total_stats['stocks_processed']}")
-        print(f"  Quotes inserted:           {total_stats['quotes_inserted']}")
-        print(f"  Company news inserted:     {total_stats['news_inserted']}")
-        print(f"  Market news inserted:      {total_stats['market_news_inserted']}")
+        print(f"  Stocks processed:            {total_stats['stocks_processed']}")
+        print(f"  Quotes inserted:             {total_stats['quotes_inserted']}")
+        print(f"  Company news inserted:       {total_stats['news_inserted']}")
+        print(f"  Market news inserted:        {total_stats['market_news_inserted']}")
         print(f"  Sentiment articles upserted: {total_stats['sentiment_upserted']}")
+        print(f"  Economic indicator rows:     {total_stats['economic_rows_upserted']}")
+        print(f"  Profiles backfilled:         {total_stats['profiles_backfilled']}")
 
         return {'success': True, 'stats': total_stats}
 
@@ -205,12 +206,8 @@ def run_markets_etl(
         return {'success': False, 'error': str(e)}
 
 
-def run_news_etl(
-    supabase: Client,
-    sections: Optional[List[str]] = None,
-    backfill_days: int = 0,
-) -> Dict[str, Any]:
-    """Run news ETL: NYT top stories. Optionally backfill N days via the NYT Archive API."""
+def run_news_etl(supabase: Client, sections: Optional[List[str]] = None) -> Dict[str, Any]:
+    """Run news ETL: NYT top stories."""
     print("\n" + "=" * 60)
     print("NEWS ETL")
     print("=" * 60)
@@ -220,26 +217,15 @@ def run_news_etl(
 
     try:
         sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'news'))
-        from news.news_db_helper import sync_nyt_data, backfill_nyt_archive
+        from news.news_db_helper import sync_nyt_data
 
-        total_inserted = 0
-
-        if backfill_days > 0:
-            print(f"\nBackfilling {backfill_days} days of NYT articles via Archive API...")
-            bf_stats = backfill_nyt_archive(supabase, days_back=backfill_days)
-            total_inserted += bf_stats.get('articles_inserted', 0)
-            print(f"  Archive backfill: {bf_stats.get('articles_inserted', 0)} articles "
-                  f"from {bf_stats.get('months_fetched', 0)} month(s)")
-
-        # Always fetch current top stories as well
         print("\nSyncing NYT top stories...")
         nyt_stats = sync_nyt_data(supabase, sections=sections)
-        total_inserted += nyt_stats.get('articles_inserted', 0)
 
         print(f"\nNews ETL Complete:")
-        print(f"  NYT articles inserted: {total_inserted}")
+        print(f"  NYT articles inserted: {nyt_stats.get('articles_inserted', 0)}")
 
-        return {'success': True, 'stats': {**nyt_stats, 'total_inserted': total_inserted}}
+        return {'success': True, 'stats': nyt_stats}
 
     except Exception as e:
         print(f"News ETL failed: {e}")
@@ -378,13 +364,10 @@ def run_full_etl(
     skip_news: bool = False,
     skip_media: bool = False,
     skip_sentiment: bool = False,
-    backfill_news_days: int = 0,
-    backfill_sports_days: int = 0,
-    all_sentiment_topics: bool = False
 ) -> Dict[str, Any]:
     """
     Run the full ETL pipeline for all data sources.
-    Markets = today's quotes + company news + market news + AV sentiment only.
+    Markets = today's quotes + company news + market news + AV sentiment (all 10 topics).
     Quote backfill (OHLCV history) is not part of the daily run — use run_db_seed.py.
     Profile updates: --refresh-profiles (FMP) or --scrape-etf-info (ETFdb).
     """
@@ -406,16 +389,15 @@ def run_full_etl(
 
     domain_fns = {}
     if not skip_sports:
-        domain_fns['sports'] = lambda: run_sports_etl(supabase, backfill_days=backfill_sports_days)
+        domain_fns['sports'] = lambda: run_sports_etl(supabase)
     if not skip_markets:
         domain_fns['markets'] = lambda: run_markets_etl(
             supabase,
             watchlist=watchlist,
-            all_sentiment_topics=all_sentiment_topics,
             skip_sentiment=skip_sentiment,
         )
     if not skip_news:
-        domain_fns['news'] = lambda: run_news_etl(supabase, backfill_days=backfill_news_days)
+        domain_fns['news'] = lambda: run_news_etl(supabase)
     if not skip_media:
         domain_fns['media'] = lambda: run_media_etl(supabase)
 
@@ -463,26 +445,30 @@ def main():
     parser.add_argument('--news-only',    action='store_true', help='Run news ETL only')
     parser.add_argument('--media-only',   action='store_true', help='Run media ETL only')
 
-    # ── Backfill / markets options ────────────────────────────────────────────
-    # Note: --backfill-quotes removed — OHLCV backfill belongs in run_db_seed.py only.
-    parser.add_argument('--backfill-news', type=int, default=0, metavar='DAYS',
-                        help='Backfill N days of NYT articles via the Archive API')
-    parser.add_argument('--backfill-sports', type=int, default=0, metavar='DAYS',
-                        help='Backfill N days of ESPN scores')
+    # ── Markets options ───────────────────────────────────────────────────────
     parser.add_argument('--scrape-etf-info', action='store_true',
                         help='Scrape ETF info and top-15 holdings from etfdb.com '
                              '(run manually, not on daily/seed)')
     parser.add_argument('--skip-sentiment', action='store_true',
                         help='Skip AV news sentiment (daily run: quotes + news only)')
-    parser.add_argument('--all-sentiment-topics', action='store_true',
-                        help='Fetch all 10 AV sentiment topics instead of the default 5')
     parser.add_argument('--watchlist', nargs='+', metavar='TICKER',
                         help='Override basket watchlist with a custom ticker list')
+
+    # ── Test / dry-run ────────────────────────────────────────────────────────
+    parser.add_argument('--test', action='store_true',
+                        help='Dry-run: test every external API endpoint once and print PASS/FAIL table')
 
     # ── Output ────────────────────────────────────────────────────────────────
     parser.add_argument('--output', metavar='FILE', help='Write results JSON to FILE')
 
     args = parser.parse_args()
+
+    # --test: dry-run endpoint test, no DB writes
+    if args.test:
+        test_script = Path(__file__).parent / 'run_test.py'
+        import subprocess
+        result = subprocess.run([sys.executable, str(test_script)], check=False)
+        sys.exit(result.returncode)
 
     # --scrape-etf-info: standalone, does NOT chain into run_full_etl
     if args.scrape_etf_info:
@@ -507,9 +493,6 @@ def main():
         skip_news=args.skip_news,
         skip_media=args.skip_media,
         skip_sentiment=args.skip_sentiment,
-        backfill_news_days=args.backfill_news,
-        backfill_sports_days=args.backfill_sports,
-        all_sentiment_topics=args.all_sentiment_topics,
     )
 
     if args.output:

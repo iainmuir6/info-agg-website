@@ -46,5 +46,12 @@
       "BTC",
       "ETH",
       "XRP"
+    ],
+    "forex": [
+      "EURUSD", "GBPUSD", "USDJPY", "USDCAD", "AUDUSD",
+      "USDCHF", "NZDUSD", "USDCNY", "USDMXN", "USDINR"
+    ],
+    "commodities": [
+      "BZUSD", "SIUSD", "GCUSD"
     ]
   }

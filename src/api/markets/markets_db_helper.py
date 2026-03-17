@@ -234,7 +234,6 @@ def insert_company_news(supabase: Client, stock_id: str, articles: List[Dict[str
                 'image_url': article.get('image_url'),
                 'source': article.get('source'),
                 'published_at': article.get('published_at'),
-                'related_tickers': article.get('related_tickers', [])
             }
             
             # Use upsert to handle duplicates (based on URL)
@@ -278,7 +277,6 @@ def insert_market_news(supabase: Client, articles: List[Dict[str, Any]]) -> int:
                 'image_url': article.get('image_url'),
                 'source': article.get('source'),
                 'published_at': article.get('published_at'),
-                'related_tickers': article.get('related_tickers', [])
             }
             
             # Use upsert to handle duplicates (based on URL)
@@ -302,20 +300,18 @@ def sync_stock_data(
     fetch_quotes: bool = True,
     fetch_news: bool = True,
     fetch_profile: bool = True,
-    quote_days_back: int = 0,
     asset_type: str = 'stock'
 ) -> Dict[str, Any]:
     """
-    Sync all data for a specific stock, ETF, or crypto asset.
+    Sync daily data for a specific stock, ETF, crypto, forex, or commodity asset.
 
     Args:
         supabase: Supabase client instance
-        ticker: Stock/ETF/crypto ticker symbol
+        ticker: Ticker symbol
         fetch_quotes: Whether to fetch and insert the latest quote
-        fetch_news: Whether to fetch and insert company news
-        fetch_profile: Whether to fetch and insert company/ETF profile
-        quote_days_back: If > 0, backfill this many days of daily quotes using AV candles.
-        asset_type: 'stock', 'etf', or 'crypto' — controls which fetcher is used.
+        fetch_news: Whether to fetch and insert company news (stocks only)
+        fetch_profile: Whether to fetch and insert company profile (stocks/ETFs only)
+        asset_type: 'stock', 'etf', 'crypto', 'forex', or 'commodity'
 
     Returns:
         Dictionary with sync statistics
@@ -325,7 +321,6 @@ def sync_stock_data(
             fetch_stock_quote, fetch_company_profile,
             fetch_company_news, fetch_crypto_quote, get_finnhub_api_key
         )
-        from .alpha_vantage import fetch_historical_quotes, fetch_crypto_candles_av
     except ImportError:
         import sys
         import os
@@ -336,7 +331,6 @@ def sync_stock_data(
             fetch_stock_quote, fetch_company_profile,
             fetch_company_news, fetch_crypto_quote, get_finnhub_api_key
         )
-        from alpha_vantage import fetch_historical_quotes, fetch_crypto_candles_av
 
     stats = {
         'ticker': ticker,
@@ -347,6 +341,44 @@ def sync_stock_data(
     }
 
     try:
+        # Forex/commodity: stub row + FMP quote only — no profile, no news, no Finnhub
+        if asset_type in ('forex', 'commodity'):
+            try:
+                from .fmp import fetch_fmp_quote, get_fmp_api_key
+            except ImportError:
+                import sys
+                import os
+                current_dir = os.path.dirname(os.path.abspath(__file__))
+                if current_dir not in sys.path:
+                    sys.path.insert(0, current_dir)
+                from fmp import fetch_fmp_quote, get_fmp_api_key
+
+            stock_id = get_or_create_stock(supabase, ticker, asset_type=asset_type)
+            if not stock_id:
+                stats['errors'].append(f"Failed to get/create stock for {ticker}")
+                return stats
+
+            if fetch_quotes:
+                print(f"Fetching FMP quote for {ticker} ({asset_type})...")
+                fmp_key = get_fmp_api_key()
+                quote = fetch_fmp_quote(ticker, fmp_key)
+                if quote:
+                    # Map fetch_fmp_quote keys to insert_stock_quote expectations
+                    quote_mapped = {
+                        'current_price': quote.get('current_price'),
+                        'change': quote.get('change_amount'),
+                        'percent_change': quote.get('percent_change'),
+                        'high_price': quote.get('high_price'),
+                        'low_price': quote.get('low_price'),
+                        'open_price': quote.get('open_price'),
+                        'previous_close': quote.get('previous_close'),
+                        'volume': quote.get('volume'),
+                        'timestamp': quote.get('quote_timestamp'),
+                    }
+                    if insert_stock_quote(supabase, stock_id, quote_mapped):
+                        stats['quotes_inserted'] = 1
+            return stats
+
         api_key = get_finnhub_api_key()
 
         # Crypto assets: skip profile fetch (no Finnhub/FMP profile) — just ensure row exists
@@ -381,20 +413,8 @@ def sync_stock_data(
                 if insert_stock_quote(supabase, stock_id, quote):
                     stats['quotes_inserted'] = 1
 
-        # Backfill historical quotes via AV (works for both stocks and crypto)
-        if quote_days_back > 0:
-            print(f"Backfilling {quote_days_back}-day quote history for {ticker} via AV...")
-            if asset_type == 'crypto':
-                historical = fetch_crypto_candles_av(ticker, days_back=quote_days_back)
-            else:
-                historical = fetch_historical_quotes(ticker, days_back=quote_days_back)
-            if historical:
-                count = insert_stock_quotes_batch(supabase, stock_id, historical)
-                stats['quotes_inserted'] += count
-                print(f"  Backfilled {count} historical quotes")
-
-        # Fetch and insert company news (stocks only — skip ETFs and crypto)
-        if fetch_news and asset_type not in ('crypto', 'etf'):
+        # Fetch and insert company news (stocks only — skip ETFs, crypto, forex, commodity)
+        if fetch_news and asset_type not in ('crypto', 'etf', 'forex', 'commodity'):
             print(f"Fetching company news for {ticker}...")
             news = fetch_company_news(ticker, days_back=7, api_key=api_key)
             if news:
@@ -851,6 +871,10 @@ def insert_news_sentiment(supabase: Client, articles: List[Dict[str, Any]]) -> i
     if not articles:
         return 0
 
+    # Build ticker → stock UUID map for primary_ticker_id resolution
+    stocks_result = supabase.table('stocks').select('id, ticker').execute()
+    ticker_to_id = {row['ticker']: row['id'] for row in (stocks_result.data or [])}
+
     batch_data = []
     for article in articles:
         # Parse AV time_published: '20240101T120000' → ISO timestamp
@@ -870,6 +894,16 @@ def insert_news_sentiment(supabase: Client, articles: List[Dict[str, Any]]) -> i
         if not url:
             continue
 
+        # Resolve primary_ticker_id: highest relevance_score ticker present in stocks
+        ts = article.get('ticker_sentiments') or []
+        primary_ticker_id = None
+        if ts:
+            for entry in sorted(ts, key=lambda x: float(x.get('relevance_score') or 0), reverse=True):
+                tid = ticker_to_id.get(entry.get('ticker'))
+                if tid:
+                    primary_ticker_id = tid
+                    break
+
         batch_data.append({
             'title': article.get('title'),
             'url': url,
@@ -882,6 +916,7 @@ def insert_news_sentiment(supabase: Client, articles: List[Dict[str, Any]]) -> i
             'overall_sentiment_score': article.get('overall_sentiment_score'),
             'overall_sentiment_label': article.get('overall_sentiment_label'),
             'ticker_sentiments': article.get('ticker_sentiments'),
+            'primary_ticker_id': primary_ticker_id,
         })
 
     if not batch_data:
@@ -958,6 +993,183 @@ def sync_news_sentiment(
             print(msg)
             stats['errors'].append(msg)
 
+    return stats
+
+
+def backfill_missing_profiles(supabase: Client, batch_size: int = 100) -> Dict[str, Any]:
+    """
+    Fetch FMP company profiles for stocks that have no name yet.
+
+    Queries stocks WHERE name IS NULL AND asset_type = 'stock', fetches
+    FMP company profile for each, and updates the row via get_or_create_stock.
+
+    Returns:
+        {'checked': int, 'updated': int, 'errors': list}
+    """
+    try:
+        from .fmp import fetch_company_profile as fmp_profile, get_fmp_api_key
+    except ImportError:
+        import sys
+        import os
+        current_dir = os.path.dirname(os.path.abspath(__file__))
+        if current_dir not in sys.path:
+            sys.path.insert(0, current_dir)
+        from fmp import fetch_company_profile as fmp_profile, get_fmp_api_key
+
+    stats: Dict[str, Any] = {'checked': 0, 'updated': 0, 'errors': []}
+
+    try:
+        api_key = get_fmp_api_key()
+    except ValueError as e:
+        stats['errors'].append(str(e))
+        print(f"Profile backfill skipped: {e}")
+        return stats
+
+    try:
+        resp = (
+            supabase.table('stocks')
+            .select('id,ticker')
+            .is_('name', 'null')
+            .eq('asset_type', 'stock')
+            .limit(batch_size)
+            .execute()
+        )
+        rows = resp.data or []
+    except Exception as e:
+        stats['errors'].append(f"Query failed: {e}")
+        return stats
+
+    for row in rows:
+        ticker = row['ticker']
+        stats['checked'] += 1
+        try:
+            profile = fmp_profile(ticker, api_key)
+            if profile:
+                get_or_create_stock(supabase, ticker, profile, asset_type='stock')
+                stats['updated'] += 1
+                print(f"  [backfill] {ticker}: profile updated")
+            else:
+                print(f"  [backfill] {ticker}: no FMP profile found")
+        except RuntimeError as e:
+            print(f"FMP rate limit during profile backfill: {e}")
+            stats['errors'].append(str(e))
+            break
+        except Exception as e:
+            msg = f"{ticker}: {e}"
+            stats['errors'].append(msg)
+            print(f"  [backfill] Error for {ticker}: {e}")
+
+    return stats
+
+
+def upsert_economic_indicators(supabase: Client, rows: List[Dict[str, Any]]) -> int:
+    """
+    Batch upsert rows into info_agg.economic_indicators on (indicator_name, date).
+
+    Each row must have: indicator_name, date, value.
+    Returns number of rows upserted.
+    """
+    if not rows:
+        return 0
+
+    # Filter out rows missing required fields
+    clean = [r for r in rows if r.get('indicator_name') and r.get('date')]
+    if not clean:
+        return 0
+
+    try:
+        upserted = 0
+        batch_size = 200
+        for i in range(0, len(clean), batch_size):
+            batch = clean[i:i + batch_size]
+            supabase.table('economic_indicators').upsert(
+                batch,
+                on_conflict='indicator_name,date'
+            ).execute()
+            upserted += len(batch)
+        return upserted
+    except Exception as e:
+        print(f"Error upserting economic indicators: {e}")
+        return 0
+
+
+def sync_economic_indicators(supabase: Client) -> Dict[str, Any]:
+    """
+    Fetch and store economic indicators: treasury rates (1 FMP call) +
+    7 macro indicators (7 FMP calls) = 8 calls/day total.
+
+    Returns:
+        {'indicators_processed': int, 'rows_upserted': int, 'errors': list}
+    """
+    try:
+        from .fmp import fetch_treasury_rates, fetch_economic_indicator, get_fmp_api_key
+    except ImportError:
+        import sys
+        import os
+        current_dir = os.path.dirname(os.path.abspath(__file__))
+        if current_dir not in sys.path:
+            sys.path.insert(0, current_dir)
+        from fmp import fetch_treasury_rates, fetch_economic_indicator, get_fmp_api_key
+
+    MACRO_INDICATORS = [
+        'realGDP',
+        'federalFunds',
+        'CPI',
+        'unemploymentRate',
+        'inflationRate',
+        '30YearFixedRateMortgageAverage',
+        'initialClaims',
+    ]
+
+    stats: Dict[str, Any] = {'indicators_processed': 0, 'rows_upserted': 0, 'errors': []}
+
+    try:
+        api_key = get_fmp_api_key()
+    except ValueError as e:
+        stats['errors'].append(str(e))
+        print(f"Economic indicators sync skipped: {e}")
+        return stats
+
+    all_rows: List[Dict[str, Any]] = []
+
+    # Treasury rates (9 terms, 1 API call)
+    print("  Fetching FMP treasury rates...")
+    try:
+        treasury_rows = fetch_treasury_rates(api_key)
+        all_rows.extend(treasury_rows)
+        stats['indicators_processed'] += 1
+        print(f"    Got {len(treasury_rows)} treasury rate rows")
+    except RuntimeError as e:
+        print(f"FMP rate limit fetching treasury rates: {e}")
+        stats['errors'].append(str(e))
+        count = upsert_economic_indicators(supabase, all_rows)
+        stats['rows_upserted'] += count
+        return stats
+    except Exception as e:
+        msg = f"Error fetching treasury rates: {e}"
+        print(msg)
+        stats['errors'].append(msg)
+
+    # Macro indicators (7 API calls)
+    for name in MACRO_INDICATORS:
+        print(f"  Fetching FMP economic indicator: {name}...")
+        try:
+            indicator_rows = fetch_economic_indicator(name, api_key)
+            all_rows.extend(indicator_rows)
+            stats['indicators_processed'] += 1
+            print(f"    Got {len(indicator_rows)} rows")
+        except RuntimeError as e:
+            print(f"FMP rate limit fetching {name}: {e}")
+            stats['errors'].append(str(e))
+            break
+        except Exception as e:
+            msg = f"Error fetching {name}: {e}"
+            print(msg)
+            stats['errors'].append(msg)
+
+    count = upsert_economic_indicators(supabase, all_rows)
+    stats['rows_upserted'] += count
+    print(f"  Economic indicators: upserted {count} rows")
     return stats
 
 

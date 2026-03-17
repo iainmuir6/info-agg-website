@@ -1,5 +1,5 @@
 -- ============================================================
--- 02_tables.sql — Table definitions, seed data, and triggers
+-- 02_tables.sql — Table definitions and seed data
 --
 -- Run order: 2 of 4  (requires 01_schema.sql)
 -- Author: IM / Scouts Consulting Group
@@ -15,14 +15,8 @@ CREATE TABLE IF NOT EXISTS info_agg.leagues (
     league       TEXT    NOT NULL,
     display_name TEXT    NOT NULL,
     is_active    BOOLEAN NOT NULL DEFAULT true,
-    created_at   TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
-    updated_at   TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
     UNIQUE (sport, league)
 );
-
-CREATE TRIGGER trg_leagues_updated_at
-    BEFORE UPDATE ON info_agg.leagues
-    FOR EACH ROW EXECUTE FUNCTION info_agg.set_updated_at();
 
 -- Initial league seed data
 INSERT INTO info_agg.leagues (sport, league, display_name) VALUES
@@ -51,14 +45,8 @@ CREATE TABLE IF NOT EXISTS info_agg.sports_news (
     published_at TIMESTAMP WITH TIME ZONE,
     source       TEXT    NOT NULL DEFAULT 'ESPN',
     image_url    TEXT,
-    created_at   TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
-    updated_at   TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
     UNIQUE (url)
 );
-
-CREATE TRIGGER trg_sports_news_updated_at
-    BEFORE UPDATE ON info_agg.sports_news
-    FOR EACH ROW EXECUTE FUNCTION info_agg.set_updated_at();
 
 
 -- ============================================================
@@ -81,14 +69,8 @@ CREATE TABLE IF NOT EXISTS info_agg.sports_scores (
     broadcast     TEXT,
     week          INTEGER,
     season        INTEGER,
-    created_at    TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
-    updated_at    TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
     UNIQUE (league_id, event_id)
 );
-
-CREATE TRIGGER trg_sports_scores_updated_at
-    BEFORE UPDATE ON info_agg.sports_scores
-    FOR EACH ROW EXECUTE FUNCTION info_agg.set_updated_at();
 
 
 -- ============================================================
@@ -115,14 +97,8 @@ CREATE TABLE IF NOT EXISTS info_agg.stocks (
     beta              DECIMAL(8,4),
     asset_type        TEXT    NOT NULL DEFAULT 'stock',  -- 'stock' | 'etf' | 'crypto'
     is_core           BOOLEAN NOT NULL DEFAULT false,    -- true = in baskets.json watchlist
-    is_active         BOOLEAN NOT NULL DEFAULT true,
-    created_at        TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
-    updated_at        TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
+    is_active         BOOLEAN NOT NULL DEFAULT true
 );
-
-CREATE TRIGGER trg_stocks_updated_at
-    BEFORE UPDATE ON info_agg.stocks
-    FOR EACH ROW EXECUTE FUNCTION info_agg.set_updated_at();
 
 
 -- ============================================================
@@ -141,7 +117,6 @@ CREATE TABLE IF NOT EXISTS info_agg.stock_quotes (
     volume          BIGINT,
     quote_timestamp TIMESTAMP WITH TIME ZONE NOT NULL,
     fetched_at      TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
-    created_at      TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
     UNIQUE (stock_id, quote_timestamp)
 );
 
@@ -160,38 +135,25 @@ CREATE TABLE IF NOT EXISTS info_agg.company_news (
     published_at    TIMESTAMP WITH TIME ZONE,
     related_tickers TEXT[],
     fetched_at      TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
-    created_at      TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
-    updated_at      TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
     UNIQUE (url)
 );
-
-CREATE TRIGGER trg_company_news_updated_at
-    BEFORE UPDATE ON info_agg.company_news
-    FOR EACH ROW EXECUTE FUNCTION info_agg.set_updated_at();
 
 
 -- ============================================================
 -- MARKETS — market_news
 -- ============================================================
 CREATE TABLE IF NOT EXISTS info_agg.market_news (
-    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    category        TEXT NOT NULL,  -- general, forex, crypto, merger
-    headline        TEXT NOT NULL,
-    summary         TEXT,
-    url             TEXT NOT NULL,
-    image_url       TEXT,
-    source          TEXT,
-    published_at    TIMESTAMP WITH TIME ZONE,
-    related_tickers TEXT[],
-    fetched_at      TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
-    created_at      TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
-    updated_at      TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+    id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    category     TEXT NOT NULL,  -- general, forex, crypto, merger
+    headline     TEXT NOT NULL,
+    summary      TEXT,
+    url          TEXT NOT NULL,
+    image_url    TEXT,
+    source       TEXT,
+    published_at TIMESTAMP WITH TIME ZONE,
+    fetched_at   TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
     UNIQUE (url)
 );
-
-CREATE TRIGGER trg_market_news_updated_at
-    BEFORE UPDATE ON info_agg.market_news
-    FOR EACH ROW EXECUTE FUNCTION info_agg.set_updated_at();
 
 
 -- ============================================================
@@ -207,13 +169,8 @@ CREATE TABLE IF NOT EXISTS info_agg.etf_holdings (
     market_value   DECIMAL(20,4),
     as_of_date     DATE,
     fetched_at     TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
-    updated_at     TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
     UNIQUE (etf_stock_id, asset_stock_id, as_of_date)
 );
-
-CREATE TRIGGER trg_etf_holdings_updated_at
-    BEFORE UPDATE ON info_agg.etf_holdings
-    FOR EACH ROW EXECUTE FUNCTION info_agg.set_updated_at();
 
 
 -- ============================================================
@@ -226,13 +183,8 @@ CREATE TABLE IF NOT EXISTS info_agg.etf_sectors (
     weight_pct   DECIMAL(8,4),
     as_of_date   DATE,
     fetched_at   TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
-    updated_at   TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
     UNIQUE (etf_stock_id, sector, as_of_date)
 );
-
-CREATE TRIGGER trg_etf_sectors_updated_at
-    BEFORE UPDATE ON info_agg.etf_sectors
-    FOR EACH ROW EXECUTE FUNCTION info_agg.set_updated_at();
 
 
 -- ============================================================
@@ -251,14 +203,9 @@ CREATE TABLE IF NOT EXISTS info_agg.news_sentiment (
     overall_sentiment_score DECIMAL(6,4),
     overall_sentiment_label TEXT,
     ticker_sentiments       JSONB,
-    fetched_at              TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
-    created_at              TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
-    updated_at              TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
+    primary_ticker_id       UUID REFERENCES info_agg.stocks(id),
+    fetched_at              TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
 );
-
-CREATE TRIGGER trg_news_sentiment_updated_at
-    BEFORE UPDATE ON info_agg.news_sentiment
-    FOR EACH ROW EXECUTE FUNCTION info_agg.set_updated_at();
 
 
 -- ============================================================
@@ -275,14 +222,8 @@ CREATE TABLE IF NOT EXISTS info_agg.news_articles (
     image_url    TEXT,
     published_at TIMESTAMP WITH TIME ZONE,
     fetched_at   TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
-    created_at   TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
-    updated_at   TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
     UNIQUE (url)
 );
-
-CREATE TRIGGER trg_news_articles_updated_at
-    BEFORE UPDATE ON info_agg.news_articles
-    FOR EACH ROW EXECUTE FUNCTION info_agg.set_updated_at();
 
 
 -- ============================================================
@@ -299,7 +240,6 @@ CREATE TABLE IF NOT EXISTS info_agg.spotify_releases (
     external_url TEXT,
     total_tracks INTEGER,
     fetched_at   TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
-    created_at   TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
     UNIQUE (spotify_id)
 );
 
@@ -324,11 +264,17 @@ CREATE TABLE IF NOT EXISTS info_agg.reddit_posts (
     flair         TEXT,
     posted_at     TIMESTAMP WITH TIME ZONE,
     fetched_at    TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
-    created_at    TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
-    updated_at    TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
     UNIQUE (post_id)
 );
 
-CREATE TRIGGER trg_reddit_posts_updated_at
-    BEFORE UPDATE ON info_agg.reddit_posts
-    FOR EACH ROW EXECUTE FUNCTION info_agg.set_updated_at();
+
+-- ============================================================
+-- MARKETS — economic_indicators
+-- ============================================================
+CREATE TABLE IF NOT EXISTS info_agg.economic_indicators (
+    id             UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    indicator_name TEXT NOT NULL,   -- e.g. 'realGDP', 'treasury_10y'
+    date           DATE NOT NULL,
+    value          DECIMAL(20, 6),
+    UNIQUE (indicator_name, date)
+);

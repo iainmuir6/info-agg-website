@@ -96,6 +96,13 @@ CREATE POLICY "news_sentiment: anon read"
     USING (true);
 
 
+ALTER TABLE info_agg.economic_indicators ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "economic_indicators: anon read"
+    ON info_agg.economic_indicators FOR SELECT
+    TO anon, authenticated
+    USING (true);
+
+
 -- ── NEWS ────────────────────────────────────────────────────
 
 ALTER TABLE info_agg.news_articles ENABLE ROW LEVEL SECURITY;

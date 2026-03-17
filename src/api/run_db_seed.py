@@ -11,16 +11,17 @@
 #   rather than burning a sleep() call.
 #
 #   Phase layout (36-ticker basket, 3 AV keys → 75 req/day total):
-#     0  Key inventory    report AV key count + daily budget
-#     1  AV backfill      tickers [0:10]
-#     2  FMP + AV ETF     stock profiles (FMP) + ETF holdings (AV ETF_PROFILE)
-#     3  Sports           ESPN backfill + current news     (~60s elapsed → AV resets)
-#     4  AV backfill      tickers [10:20]
-#     5  News             NYT Archive backfill              (~60s elapsed → AV resets)
-#     6  AV backfill      tickers [20:30]
-#     7  Media            Spotify + Reddit                 (~60s elapsed → AV resets)
-#     8  AV backfill      remaining tickers + sentiment (all 10 topics)
-#     9  Markets          Finnhub market news + company news
+#     0   Key inventory    report AV key count + daily budget
+#     1   AV backfill      tickers [0:10]
+#     2   FMP + AV ETF     stock profiles (FMP) + ETF holdings (AV ETF_PROFILE)
+#     3   Sports           ESPN backfill + current news     (~60s elapsed → AV resets)
+#     4   AV backfill      tickers [10:20]
+#     5   News             NYT Archive backfill              (~60s elapsed → AV resets)
+#     6   AV backfill      tickers [20:30]
+#     7   Media            Spotify + Reddit                 (~60s elapsed → AV resets)
+#     8   AV backfill      remaining tickers + sentiment (all 10 topics)
+#     9   Markets          Finnhub market news + company news
+#     10  Economic         FMP treasury rates + 7 macro indicators (full history)
 #
 # Usage:
 #   python src/api/run_db_seed.py [--backfill-quotes DAYS] [--backfill-news DAYS] [--backfill-sports DAYS]
@@ -59,24 +60,37 @@ def _run_av_batch(
     asset_type_map: Dict[str, str],
     quote_days_back: int,
 ) -> Dict[str, Any]:
-    """Backfill AV quotes for a single batch of tickers (no news, no profile)."""
-    from markets.markets_db_helper import sync_stock_data
+    """Backfill AV quotes for a single batch of tickers (no news, no profile).
+
+    Calls AV fetchers directly — does NOT go through sync_stock_data — so AV
+    backfill is strictly seed-only and never bleeds into the daily run path.
+    """
+    from markets.alpha_vantage import fetch_historical_quotes, fetch_crypto_candles_av
+    from markets.markets_db_helper import get_or_create_stock, insert_stock_quotes_batch
 
     stats: Dict[str, Any] = {'quotes_inserted': 0, 'errors': []}
     for ticker in tickers:
         at = asset_type_map.get(ticker, 'stock')
+        # forex/commodity have no AV backfill — skip silently
+        if at in ('forex', 'commodity'):
+            continue
         print(f"  [{ticker}] ({at}) backfill {quote_days_back}d...")
-        result = sync_stock_data(
-            supabase,
-            ticker,
-            fetch_quotes=True,
-            fetch_news=False,
-            fetch_profile=False,
-            quote_days_back=quote_days_back,
-            asset_type=at,
-        )
-        stats['quotes_inserted'] += result.get('quotes_inserted', 0)
-        stats['errors'].extend(result.get('errors', []))
+        try:
+            stock_id = get_or_create_stock(supabase, ticker, asset_type=at)
+            if not stock_id:
+                stats['errors'].append(f"{ticker}: failed to get/create stock row")
+                continue
+            if at == 'crypto':
+                historical = fetch_crypto_candles_av(ticker, days_back=quote_days_back)
+            else:
+                historical = fetch_historical_quotes(ticker, days_back=quote_days_back)
+            if historical:
+                count = insert_stock_quotes_batch(supabase, stock_id, historical)
+                stats['quotes_inserted'] += count
+        except Exception as e:
+            msg = f"{ticker}: {e}"
+            stats['errors'].append(msg)
+            print(f"  [av_batch] Error for {ticker}: {e}")
     return stats
 
 
@@ -223,18 +237,29 @@ def run_seed(
             fetch_quotes=True,
             fetch_news=True,
             fetch_profile=False,
-            quote_days_back=0,
             asset_type=at,
         )
+
+    # ── Phase 10: Economic indicators — full history backfill ─────────────────
+    # FMP treasury-rates and economic-indicator endpoints return all available
+    # history (10+ years) in a single call — no per-day loop needed.
+    _phase_header(10, "FMP — economic indicators full history backfill")
+    from markets.markets_db_helper import sync_economic_indicators
+    econ_stats = sync_economic_indicators(supabase)
+    print(f"  Indicators processed:  {econ_stats.get('indicators_processed', 0)}")
+    print(f"  Rows upserted:         {econ_stats.get('rows_upserted', 0)}")
+    if econ_stats.get('errors'):
+        print(f"  Errors:                {len(econ_stats['errors'])}")
 
     end_time = datetime.now()
     duration = (end_time - start_time).total_seconds()
 
     print("\n" + "=" * 60)
     print(f"SEED COMPLETE — Duration: {duration:.1f}s")
-    print(f"  Total quotes inserted:   {total_quotes}")
-    print(f"  ETF holdings upserted:   {etf_stats['holdings_upserted']}")
-    print(f"  AV calls (estimated):    {total_av_calls} / {daily_budget} budget")
+    print(f"  Total quotes inserted:     {total_quotes}")
+    print(f"  ETF holdings upserted:     {etf_stats['holdings_upserted']}")
+    print(f"  Economic indicator rows:   {econ_stats.get('rows_upserted', 0)}")
+    print(f"  AV calls (estimated):      {total_av_calls} / {daily_budget} budget")
     print("=" * 60)
 
     return {
@@ -243,6 +268,7 @@ def run_seed(
         'duration_seconds': duration,
         'total_quotes_inserted': total_quotes,
         'etf_holdings_upserted': etf_stats['holdings_upserted'],
+        'economic_indicator_rows': econ_stats.get('rows_upserted', 0),
         'av_calls_estimated': total_av_calls,
         'av_daily_budget': daily_budget,
     }
@@ -264,10 +290,24 @@ AV budget (3 keys × 25 req/day = 75 total):
                         help='Days of NYT articles to backfill via Archive API (default: 30)')
     parser.add_argument('--backfill-sports', type=int, default=30, metavar='DAYS',
                         help='Days of ESPN scores to backfill (default: 30)')
+    parser.add_argument('--economic-indicators-only', action='store_true',
+                        help='Fetch and upsert FMP treasury rates + macro indicators only '
+                             '(no other ETL)')
     parser.add_argument('--output', metavar='FILE',
                         help='Write results JSON to FILE')
 
     args = parser.parse_args()
+
+    if args.economic_indicators_only:
+        from run_etl import get_supabase_client
+        supabase = get_supabase_client()
+        from markets.markets_db_helper import sync_economic_indicators
+        stats = sync_economic_indicators(supabase)
+        print(f"  Indicators processed: {stats['indicators_processed']}")
+        print(f"  Rows upserted:        {stats['rows_upserted']}")
+        if stats['errors']:
+            print(f"  Errors: {stats['errors']}")
+        return
 
     results = run_seed(
         backfill_quotes_days=args.backfill_quotes,

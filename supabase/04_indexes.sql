@@ -86,6 +86,12 @@ CREATE INDEX IF NOT EXISTS idx_market_news_category_published
     ON info_agg.market_news (category, published_at DESC);
 
 
+-- ── MARKETS — economic_indicators ───────────────────────────
+
+CREATE INDEX IF NOT EXISTS idx_economic_indicators_name_date
+    ON info_agg.economic_indicators (indicator_name, date DESC);
+
+
 -- ── NEWS — news_articles ────────────────────────────────────
 
 CREATE INDEX IF NOT EXISTS idx_news_articles_source
@@ -105,3 +111,9 @@ CREATE INDEX IF NOT EXISTS idx_spotify_releases_release_date
 
 CREATE INDEX IF NOT EXISTS idx_reddit_posts_score
     ON info_agg.reddit_posts (score DESC);
+
+
+-- ── MARKETS — news_sentiment ─────────────────────────────────
+
+CREATE INDEX IF NOT EXISTS idx_news_sentiment_primary_ticker_id
+    ON info_agg.news_sentiment (primary_ticker_id);

@@ -235,6 +235,148 @@ def fetch_etf_holdings(ticker: str, api_key: Optional[str] = None) -> List[Dict[
         return []
 
 
+def fetch_fmp_quote(symbol: str, api_key: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    """
+    Fetch real-time quote from FMP /stable/quote?symbol={symbol}.
+
+    Shared by forex and commodities (same endpoint shape as stock quote).
+    Returns: current_price, change_amount, percent_change, high, low, open,
+             previous_close, volume, quote_timestamp
+    """
+    if api_key is None:
+        api_key = get_fmp_api_key()
+
+    url = f"{FMP_BASE_STABLE}/quote"
+    params = {'symbol': symbol, 'apikey': api_key}
+
+    try:
+        _fmp_rate_check()
+        response = requests.get(url, params=params, timeout=10)
+        response.raise_for_status()
+        data = response.json()
+
+        if not data or not isinstance(data, list):
+            return None
+
+        q = data[0]
+        if not q.get('price') and not q.get('previousClose'):
+            return None
+
+        return {
+            'ticker': symbol,
+            'current_price': q.get('price'),
+            'change_amount': q.get('change'),
+            'percent_change': q.get('changesPercentage'),
+            'high_price': q.get('dayHigh'),
+            'low_price': q.get('dayLow'),
+            'open_price': q.get('open'),
+            'previous_close': q.get('previousClose'),
+            'volume': q.get('volume'),
+            'quote_timestamp': q.get('timestamp'),
+        }
+
+    except RuntimeError:
+        raise
+    except requests.exceptions.RequestException as e:
+        print(f"Error fetching FMP quote for {symbol}: {e}")
+        return None
+    except Exception as e:
+        print(f"Error parsing FMP quote for {symbol}: {e}")
+        return None
+
+
+def fetch_treasury_rates(api_key: Optional[str] = None) -> List[Dict[str, Any]]:
+    """
+    Fetch US treasury rates from FMP /stable/treasury-rates.
+
+    Returns a flat list of dicts with indicator_name and value per term per date:
+        [{'indicator_name': 'treasury_10y', 'date': '2024-01-05', 'value': 4.05}, ...]
+    """
+    if api_key is None:
+        api_key = get_fmp_api_key()
+
+    url = f"{FMP_BASE_STABLE}/treasury-rates"
+    params = {'apikey': api_key}
+
+    TERM_MAP = {
+        'month1':  'treasury_1m',
+        'month3':  'treasury_3m',
+        'month6':  'treasury_6m',
+        'year1':   'treasury_1y',
+        'year2':   'treasury_2y',
+        'year5':   'treasury_5y',
+        'year10':  'treasury_10y',
+        'year20':  'treasury_20y',
+        'year30':  'treasury_30y',
+    }
+
+    try:
+        _fmp_rate_check()
+        response = requests.get(url, params=params, timeout=10)
+        response.raise_for_status()
+        data = response.json()
+
+        if not data or not isinstance(data, list):
+            return []
+
+        rows = []
+        for entry in data:
+            dt = entry.get('date')
+            if not dt:
+                continue
+            for api_key_term, indicator_name in TERM_MAP.items():
+                value = entry.get(api_key_term)
+                if value is not None:
+                    rows.append({'indicator_name': indicator_name, 'date': dt, 'value': value})
+        return rows
+
+    except RuntimeError:
+        raise
+    except requests.exceptions.RequestException as e:
+        print(f"Error fetching FMP treasury rates: {e}")
+        return []
+    except Exception as e:
+        print(f"Error parsing FMP treasury rates: {e}")
+        return []
+
+
+def fetch_economic_indicator(name: str, api_key: Optional[str] = None) -> List[Dict[str, Any]]:
+    """
+    Fetch a single economic indicator from FMP /stable/economic-indicators?name={name}.
+
+    Returns a list of dicts: [{'indicator_name': name, 'date': '...', 'value': ...}, ...]
+    """
+    if api_key is None:
+        api_key = get_fmp_api_key()
+
+    url = f"{FMP_BASE_STABLE}/economic-indicators"
+    params = {'name': name, 'apikey': api_key}
+
+    try:
+        _fmp_rate_check()
+        response = requests.get(url, params=params, timeout=10)
+        response.raise_for_status()
+        data = response.json()
+
+        if not data or not isinstance(data, list):
+            return []
+
+        return [
+            {'indicator_name': name, 'date': row.get('date'), 'value': row.get('value')}
+            for row in data
+            if row.get('date') is not None
+        ]
+
+    except RuntimeError:
+        raise
+    except requests.exceptions.RequestException as e:
+        print(f"Error fetching FMP economic indicator '{name}': {e}")
+        return []
+    except Exception as e:
+        print(f"Error parsing FMP economic indicator '{name}': {e}")
+        return []
+
+
 def fetch_historical_prices(
     ticker: str,
     days_back: int = 30,
