@@ -39,6 +39,7 @@ domain work (ESPN, NYT, Spotify) rather than burning a `sleep()` call.
 | 7 | Media — Spotify + Reddit | >60s → AV window reset ✓ |
 | 8 | AV backfill — remaining tickers + sentiment (all 10 topics) | — |
 | 9 | Finnhub — market news + company news (all 36 tickers) | — |
+| 10 | FMP — economic indicators full history (treasury rates + 7 macro, ~8 calls) | — |
 
 #### AV budget
 
@@ -71,6 +72,7 @@ key exhausts its daily cap mid-run. Phase 0 prints a live budget breakdown befor
 | 7 | Spotify + Reddit (8 subs × 1s sleep) | ~15–20s |
 | 8 | 6 AV ticker calls + 10 sentiment calls | ~1 min |
 | 9 | Finnhub company news (36 tickers) + market news | ~1–2 min |
+| 10 | FMP treasury rates + 7 macro indicators (~8 calls) | ~10–15s |
 | **Total** | | **~12–18 min** |
 
 > Timing scales with key count and network latency. With 1 AV key (5 req/min) the seed
@@ -82,13 +84,14 @@ key exhausts its daily cap mid-run. Phase 0 prints a live budget breakdown befor
 
 | Action | Source | Table |
 |--------|--------|-------|
-| Company profiles + ETF info | FMP `/stable/profile`, `/stable/etf/information` | `stocks` |
+| Company profiles + ETF info | FMP `/stable/profile` | `stocks` |
 | ETF holdings | AV `ETF_PROFILE` | `etf_holdings` |
 | Backfill N days of daily OHLCV (stocks/ETFs) | AV `TIME_SERIES_DAILY` | `stock_quotes` |
 | Backfill N days of daily OHLCV (crypto) | AV `DIGITAL_CURRENCY_DAILY` | `stock_quotes` |
 | Market news (general/forex/crypto/merger) | Finnhub `/news` | `market_news` |
 | Company news (7-day window, all 36 tickers) | Finnhub `/company-news` | `company_news` |
 | AV news sentiment (all 10 topics) | AV `NEWS_SENTIMENT` | `news_sentiment` |
+| Economic indicators — full history (treasury rates + 7 macro) | FMP `/stable/treasury-rates`, `/stable/economic-indicators` | `economic_indicators` |
 
 Company news is fetched **only in Phase 9** (not during AV backfill phases) to keep AV
 budget usage predictable.
@@ -156,15 +159,17 @@ Runs all four domains sequentially: **sports → markets → news → media**.
 
 ### What each domain does on a daily run
 
-#### Markets (Finnhub + AV)
+#### Markets (Finnhub + FMP + AV)
 
-Per ticker (all 36):
+Per ticker:
 
-| Action | Source | Table |
-|--------|--------|-------|
-| Fetch latest quote | Finnhub `/quote` (stocks/ETFs) | `stock_quotes` |
-| Fetch latest quote | Finnhub `/crypto/candle` (BTC/ETH/XRP) | `stock_quotes` |
-| Fetch company news (7-day window) | Finnhub `/company-news` | `company_news` |
+| Asset type | Action | Source | Table |
+|------------|--------|--------|-------|
+| stock/ETF | Fetch latest quote | Finnhub `/quote` | `stock_quotes` |
+| crypto | Fetch latest quote | Finnhub `/quote` (via `BINANCE:*USDT`) | `stock_quotes` |
+| forex | Fetch latest quote | FMP `/stable/quote` | `stock_quotes` |
+| commodity | Fetch latest quote | FMP `/stable/quote` | `stock_quotes` |
+| stock | Fetch company news (7-day window) | Finnhub `/company-news` | `company_news` |
 
 Then once (not per-ticker):
 
@@ -172,8 +177,10 @@ Then once (not per-ticker):
 |--------|--------|-------|
 | Fetch market news (4 categories) | Finnhub `/news` | `market_news` |
 | Fetch AV sentiment (5 topics) | AV `NEWS_SENTIMENT` | `news_sentiment` |
+| Treasury rates + 7 macro indicators | FMP `/stable/treasury-rates`, `/stable/economic-indicators` | `economic_indicators` |
+| Missing profile backfill (≤100 stubs) | FMP `/stable/profile` | `stocks` |
 
-Profile/info updates are **not** run daily — trigger manually with `--scrape-etf-info` (ETFdb).
+Profile/info updates beyond stub backfill are **not** run daily — trigger manually with `--scrape-etf-info` (ETFdb).
 
 #### Sports / News / Media
 
@@ -233,7 +240,8 @@ Running on Vercel Cron (60s limit)?
 | AV rate limiting | Interleaved with domain ETL (no explicit sleep) | Per-key sliding-window deque |
 | Company news | Skipped during backfill; fetched in Phase 9 | Always fetched (7-day window) |
 | ETF holdings | AV `ETF_PROFILE` — full upsert (Phase 2) | Not run (manual only) |
+| Economic indicators | FMP full history — Phase 10 (~8 calls) | ~8 calls/day (incremental) |
 | AV sentiment | All 10 topics (Phase 8) | 5 topics (10 with `--all-sentiment-topics`) |
-| AV calls per run | ~36 (backfill) + 23 (holdings) + 10 (sentiment) = 69 | 5–10 (sentiment only) |
+| AV calls per run | ~36 (backfill) + 23 (holdings) + 10 (sentiment) = 69 | 5–10 (sentiment only) — no backfill |
 | Typical duration (3 AV keys) | ~12–18 min | ~5–7 min |
 | Vercel Cron compatible? | No (too long) | No (exceeds 60s limit) |

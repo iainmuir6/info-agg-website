@@ -20,7 +20,7 @@ src/api/
 │
 ├── markets/
 │   ├── baskets.json         # Watchlist: 5 groups, 36 tickers (stocks, ETFs, crypto)
-│   ├── alpha_vantage.py     # AV fetcher: candles, crypto candles, news sentiment
+│   ├── alpha_vantage.py     # AV fetcher: news sentiment (daily); OHLCV candles + ETF holdings (seed only)
 │   ├── finnhub.py           # Finnhub fetcher: quotes, crypto quotes, company/market news
 │   ├── fmp.py               # FMP fetcher: ETF info, ETF holdings, company profiles, backfill
 │   └── markets_db_helper.py # DB layer: upserts for all markets tables
@@ -83,14 +83,16 @@ src/api/
 
 All market ETL is driven by `markets/baskets.json`. Five groups determine which fetcher and `asset_type` each ticker uses:
 
-| Group | Asset Type | Tickers (count) | Quote Source | Backfill Source |
-|-------|-----------|-----------------|--------------|-----------------|
+| Group | Asset Type | Tickers (count) | Daily Quote Source | Seed Backfill Source |
+|-------|-----------|-----------------|-------------------|---------------------|
 | `core_stocks` | `stock` | AAPL MSFT NVDA AMZN GOOGL META TSLA BRK.B JPM AVGO (10) | Finnhub `/quote` | AV `TIME_SERIES_DAILY` |
 | `core_market` | `etf` | VTI SPY QQQ IWM VXUS (5) | Finnhub `/quote` | AV `TIME_SERIES_DAILY` |
 | `sectors` | `etf` | XLC XLY XLP XLE XLF XLV XLI XLB XLRE XLK XLU (11) | Finnhub `/quote` | AV `TIME_SERIES_DAILY` |
 | `breadth` | `etf` | RSP VUG VTV (3) | Finnhub `/quote` | AV `TIME_SERIES_DAILY` |
 | `risk` | `etf` | TLT HYG GLD UUP (4) | Finnhub `/quote` | AV `TIME_SERIES_DAILY` |
-| `crypto` | `crypto` | BTC ETH XRP (3) | Finnhub `/crypto/candle` | AV `DIGITAL_CURRENCY_DAILY` |
+| `crypto` | `crypto` | BTC ETH XRP (3) | Finnhub `/quote` (via `BINANCE:*USDT`) | AV `DIGITAL_CURRENCY_DAILY` |
+| `forex` | `forex` | EURUSD GBPUSD USDJPY … (10) | FMP `/stable/quote` | — |
+| `commodities` | `commodity` | BZUSD SIUSD GCUSD (3) | FMP `/stable/quote` | — |
 
 To add or remove tickers, edit `baskets.json` — no code changes required.
 
@@ -152,6 +154,7 @@ python src/api/run_etl.py --media-only
 | `--scrape-etf-info` | Scrape ETF info + top-15 holdings from etfdb.com (manual, not daily) |
 | `--all-sentiment-topics` | Fetch all 10 AV sentiment topics (default: 5) |
 | `--watchlist TICKER ...` | Override basket watchlist with a custom ticker list |
+| `--test` | Dry-run: call every external API endpoint once and print a PASS/FAIL table (no DB writes) |
 | `--output FILE` | Write results JSON to FILE |
 
 ### `run_db_seed.py` flags
@@ -177,21 +180,23 @@ baskets.json
     ├─ sectors (etf)       ──► Finnhub /quote ──────────────────► stock_quotes
     ├─ breadth (etf)       ──► Finnhub /quote ──────────────────► stock_quotes
     ├─ risk (etf)          ──► Finnhub /quote ──────────────────► stock_quotes
-    └─ crypto (crypto)     ──► Finnhub /crypto/candle ──────────► stock_quotes
+    ├─ crypto (crypto)     ──► Finnhub /quote (BINANCE:*USDT) ──► stock_quotes
+    ├─ forex (forex)       ──► FMP /stable/quote ───────────────► stock_quotes
+    └─ commodities         ──► FMP /stable/quote ───────────────► stock_quotes
 
-    Profiles:
-    ├─ stocks  ──► Finnhub /stock/profile2 ──────────────────────► stocks
-    ├─ etfs    ──► FMP /etf/information ────────────────────────► stocks
-    │              FMP /etf/holdings ───────────────────────────► etf_holdings
-    └─ stocks  ──► FMP /stable/profile ─────────────────────────► stocks (sector, CEO, etc.)
+    Profiles (manual / backfill):
+    ├─ stocks  ──► Finnhub /stock/profile2 / FMP /stable/profile ► stocks
+    └─ etfs    ──► AV ETF_PROFILE (seed) ──────────────────────► etf_holdings
 
-    Backfill (--backfill-quotes N):
+    Seed backfill only (run_db_seed.py):
     ├─ stocks/etfs ──► AV TIME_SERIES_DAILY ─────────────────────► stock_quotes (bulk)
     └─ crypto      ──► AV DIGITAL_CURRENCY_DAILY ────────────────► stock_quotes (bulk)
 
 Finnhub /company-news ───────────────────────────────────────────► company_news
 Finnhub /news (general/forex/crypto/merger) ─────────────────────► market_news
 AV NEWS_SENTIMENT (5–10 topics) ─────────────────────────────────► news_sentiment
+FMP /stable/treasury-rates ──────────────────────────────────────► economic_indicators
+FMP /stable/economic-indicators (7 names) ───────────────────────► economic_indicators
 
 ESPN /news, /scoreboard ─────────────────────────────────────────► sports_news, sports_scores
 

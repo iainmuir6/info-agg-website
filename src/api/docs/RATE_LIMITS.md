@@ -17,14 +17,14 @@ Sleeps only when the 60-call window is full; no fixed per-call delay.
 **Env var:** `FINNHUB_API_KEY`
 
 **Endpoints actively used:**
-- `GET /quote` — latest stock/ETF quote
-- `GET /crypto/candle` — daily crypto quote (BTC, ETH, XRP via `BINANCE:*USDT` symbols)
+- `GET /quote` — latest stock/ETF/crypto quote (BTC, ETH, XRP via `BINANCE:*USDT` symbols)
 - `GET /stock/profile2` — company profile (stocks only; ETFs return empty)
 - `GET /company-news` — per-ticker news
 - `GET /news` — general market news (general, forex, crypto, merger)
 
 **Deprecated (commented out):**
-- `GET /stock/candle` — replaced by Alpha Vantage for all candle/history needs
+- `GET /stock/candle` — replaced by Alpha Vantage for seed-only OHLCV backfill
+- `GET /crypto/candle` — replaced by `/quote` with `BINANCE:*USDT` symbol mapping
 
 ---
 
@@ -47,9 +47,13 @@ ALPHA_VANTAGE_API_KEY_3
 ```
 
 **Endpoints actively used:**
+
+*Daily ETL (`run_etl.py`):*
 - `GET /query?function=NEWS_SENTIMENT&topics={topic}` — news sentiment by topic (`fetch_news_sentiment`)
-  Called 5–10× per daily ETL run (see `SENTIMENT_TOPICS_DEFAULT` / `SENTIMENT_TOPICS_ALL` in `run_etl.py`)
-- `GET /query?function=TIME_SERIES_DAILY&symbol={ticker}` — stock OHLCV backfill (`fetch_historical_quotes`)
+  Called 5–10× per daily run (see `SENTIMENT_TOPICS_DEFAULT` / `SENTIMENT_TOPICS_ALL` in `run_etl.py`)
+
+*Seed only (`run_db_seed.py`):*
+- `GET /query?function=TIME_SERIES_DAILY&symbol={ticker}` — stock/ETF OHLCV backfill (`fetch_historical_quotes`)
 - `GET /query?function=DIGITAL_CURRENCY_DAILY&symbol={symbol}` — crypto OHLCV backfill (`fetch_crypto_candles_av`)
 - `GET /query?function=ETF_PROFILE&symbol={ticker}` — ETF holdings (`fetch_etf_holdings_av`)
   Called once per ETF ticker during seed Phase 2 (23 calls for the current basket)
@@ -61,12 +65,12 @@ successive calls evenly: call 1 → key1, call 2 → key2, call 3 → key3, call
 
 | Usage | Total calls | Calls/key (round-robin, 3 keys) |
 |-------|------------|----------------------------------|
-| Quote backfill — 36 tickers | 36 | ~12 |
-| ETF holdings — 23 ETFs (`ETF_PROFILE`) | 23 | ~8 |
+| Quote backfill — 36 tickers (**seed only**) | 36 | ~12 |
+| ETF holdings — 23 ETFs (**seed only**) | 23 | ~8 |
 | Sentiment — 10 topics (`--all-sentiment-topics`) | 10 | ~4 |
 | **Seed total** | **69** | **~23** |
 | Sentiment — 5 topics (daily default) | 5 | ~2 |
-| **Daily total (no backfill)** | **5** | **~2** |
+| **Daily total** | **5** | **~2** |
 | **Budget headroom (seed)** | **+6** | — |
 
 In `run_db_seed.py`, AV backfill is split into 10-ticker batches interleaved with
@@ -161,13 +165,17 @@ Access token expires after **3600 s** and is re-fetched at the start of each ETL
 **Env var:** `FMP_API_KEY`
 
 **Endpoints actively used in daily ETL:**
-- `GET /stable/etf/information?symbol=` — ETF name, expense ratio, AUM, asset class (fills Finnhub 403 gap)
-- `GET /stable/etf/holdings?symbol=` — per-holding weight %, shares, market value → `etf_holdings` table
-- `GET /stable/profile/{symbol}` — enriched company profile (sector, description, CEO, HQ, beta)
-- `GET /stable/historical-price-full/{symbol}` — daily OHLCV backfill → `stock_quotes` table
-  (~13 calls when `--backfill-quotes` is used, one per watchlist ticker)
+- `GET /stable/profile?symbol=` — enriched company profile (sector, description, CEO, HQ, beta); also used for missing-profile backfill (~100 stubs/day max)
+- `GET /stable/quote?symbol=` — real-time quote for forex and commodity tickers
+- `GET /stable/treasury-rates` — US treasury yield curve (all terms); 1 call/day
+- `GET /stable/economic-indicators?name=` — single macro indicator; 7 calls/day (realGDP, CPI, etc.)
 
-**Endpoints available but NOT wired into daily ETL (future fundamentals):**
+**Endpoints used in seed only (`run_db_seed.py`):**
+- `GET /stable/historical-price-full/{symbol}` — daily OHLCV backfill → `stock_quotes` table (one call per ticker)
+
+**Endpoints available but NOT wired into any ETL (future fundamentals):**
+- `/stable/etf/information?symbol=` — ETF name, expense ratio, AUM (premium gated on free tier)
+- `/stable/etf/holdings?symbol=` — per-holding weight % (premium gated on free tier)
 - `/stable/income-statement/{symbol}` — income statements
 - `/stable/balance-sheet-statement/{symbol}` — balance sheets
 - `/stable/cash-flow-statement/{symbol}` — cash flow statements
@@ -177,17 +185,18 @@ Access token expires after **3600 s** and is re-fetched at the start of each ETL
 - `/stable/insider-trading/{symbol}` — insider trades
 - `/stable/press-releases/{symbol}` — press releases
 
-**Daily budget plan (13-ticker watchlist):**
+**Daily budget plan:**
 
-| Data | Tickers | Calls | Cadence |
-|------|---------|-------|---------|
-| ETF info (SPY, QQQ, DIA) | 3 | 3 | Daily |
-| ETF holdings | 3 | 3 | Weekly |
-| Company profiles | 10 stocks | 10 | Weekly |
-| Historical backfill | 13 tickers | 13 | On-demand (`--backfill-quotes`) |
-| **Daily average (no backfill)** | | **~6** | — |
-| **Daily average (with backfill)** | | **~19** | — |
-| **Budget headroom** | | **~231–244/day** | — |
+| Data | Calls | Cadence |
+|------|-------|---------|
+| Company profiles (missing backfill, up to 100 stubs) | ≤100 | Daily |
+| Forex quotes (10 pairs) | 10 | Daily |
+| Commodity quotes (3 symbols) | 3 | Daily |
+| Treasury rates | 1 | Daily |
+| Economic indicators (7 names) | 7 | Daily |
+| **Daily total (no seed)** | **~21–121** | — |
+| Historical price backfill (seed, per ticker) | ~36 | Seed only |
+| **Budget headroom (daily)** | **~129–229/day** | — |
 
 **Auth:** `?apikey=KEY` query param appended to all requests (no header required).
 
