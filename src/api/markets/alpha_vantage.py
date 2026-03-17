@@ -10,6 +10,7 @@ from typing import Dict, List, Optional, Any
 from collections import deque
 from datetime import datetime, timedelta
 import requests
+import threading
 import os
 import time
 
@@ -20,23 +21,29 @@ ALPHA_VANTAGE_BASE_URL = "https://www.alphavantage.co/query"
 
 # Free tier: 5 req/min per key — sliding-window rate limiter (same pattern as Finnhub)
 _AV_CALL_TIMES: Dict[str, deque] = {}
+_AV_KEY_LOCKS: Dict[str, threading.Lock] = {}
+_AV_INIT_LOCK = threading.Lock()
 _AV_RATE_LIMIT = 5     # calls per window
 _AV_WINDOW     = 60.0  # seconds
 
 
 def _av_rate_limit(key: str) -> None:
     """Block only when the per-key 5 req/60 s window is full."""
-    if key not in _AV_CALL_TIMES:
-        _AV_CALL_TIMES[key] = deque()
-    times = _AV_CALL_TIMES[key]
-    now = time.time()
-    while times and now - times[0] >= _AV_WINDOW:
-        times.popleft()
-    if len(times) >= _AV_RATE_LIMIT:
-        sleep_for = _AV_WINDOW - (now - times[0]) + 0.05
-        if sleep_for > 0:
-            time.sleep(sleep_for)
-    times.append(time.time())
+    if key not in _AV_KEY_LOCKS:
+        with _AV_INIT_LOCK:
+            if key not in _AV_KEY_LOCKS:  # double-checked locking
+                _AV_CALL_TIMES[key] = deque()
+                _AV_KEY_LOCKS[key] = threading.Lock()
+    with _AV_KEY_LOCKS[key]:
+        times = _AV_CALL_TIMES[key]
+        now = time.time()
+        while times and now - times[0] >= _AV_WINDOW:
+            times.popleft()
+        if len(times) >= _AV_RATE_LIMIT:
+            sleep_for = _AV_WINDOW - (now - times[0]) + 0.05
+            if sleep_for > 0:
+                time.sleep(sleep_for)
+        times.append(time.time())
 
 
 def get_alphavantage_api_key() -> str:

@@ -5,6 +5,7 @@
 # Date: 2026-03-04
 # Description: Helper functions to insert news data into Supabase database
 
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Dict, List, Optional, Any
 from supabase import create_client, Client
 from supabase import ClientOptions
@@ -141,21 +142,27 @@ def sync_nyt_data(supabase: Client, sections: Optional[List[str]] = None) -> Dic
         'errors': []
     }
 
-    for section in sections:
-        try:
-            print(f"Fetching NYT top stories for section: {section}...")
-            result = fetch_nyt_top_stories(section=section)
-            if result and result.get('articles'):
-                count = insert_nyt_articles(supabase, result['articles'], source_type='top_stories')
+    def _fetch_section(section: str) -> tuple:
+        print(f"Fetching NYT top stories for section: {section}...")
+        result = fetch_nyt_top_stories(section=section)
+        count = 0
+        if result and result.get('articles'):
+            count = insert_nyt_articles(supabase, result['articles'], source_type='top_stories')
+            print(f"  Inserted {count} articles for '{section}'")
+        return section, count
+
+    with ThreadPoolExecutor(max_workers=len(sections)) as executor:
+        futures = {executor.submit(_fetch_section, s): s for s in sections}
+        for future in as_completed(futures):
+            section = futures[future]
+            try:
+                _, count = future.result()
                 stats['articles_inserted'] += count
                 stats['sections_processed'] += 1
-                print(f"  Inserted {count} articles for '{section}'")
-            import time
-            time.sleep(7.0)  # NYT rate limit: 10 req/min; 7s ensures 10th call lands after 63s
-        except Exception as e:
-            error_msg = f"Error fetching NYT section '{section}': {e}"
-            stats['errors'].append(error_msg)
-            print(error_msg)
+            except Exception as e:
+                error_msg = f"Error fetching NYT section '{section}': {e}"
+                stats['errors'].append(error_msg)
+                print(error_msg)
 
     # Fetch most popular (viewed over 7 days)
     try:

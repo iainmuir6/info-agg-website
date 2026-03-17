@@ -10,6 +10,7 @@ from typing import Dict, List, Optional, Any
 from collections import deque
 from datetime import datetime, timedelta
 import requests
+import threading
 import os
 import time
 
@@ -35,18 +36,20 @@ CRYPTO_SYMBOL_MAP = {
 _FH_CALL_TIMES: deque = deque()
 _FH_RATE_LIMIT = 60
 _FH_WINDOW = 60.0
+_FH_LOCK = threading.Lock()
 
 
 def _fh_rate_limit() -> None:
     """Sleep only if we're about to exceed 60 req/min on Finnhub."""
-    now = time.time()
-    while _FH_CALL_TIMES and now - _FH_CALL_TIMES[0] >= _FH_WINDOW:
-        _FH_CALL_TIMES.popleft()
-    if len(_FH_CALL_TIMES) >= _FH_RATE_LIMIT:
-        sleep_for = _FH_WINDOW - (now - _FH_CALL_TIMES[0]) + 0.05
-        if sleep_for > 0:
-            time.sleep(sleep_for)
-    _FH_CALL_TIMES.append(time.time())
+    with _FH_LOCK:
+        now = time.time()
+        while _FH_CALL_TIMES and now - _FH_CALL_TIMES[0] >= _FH_WINDOW:
+            _FH_CALL_TIMES.popleft()
+        if len(_FH_CALL_TIMES) >= _FH_RATE_LIMIT:
+            sleep_for = _FH_WINDOW - (now - _FH_CALL_TIMES[0]) + 0.05
+            if sleep_for > 0:
+                time.sleep(sleep_for)
+        _FH_CALL_TIMES.append(time.time())
 
 
 def get_finnhub_api_key() -> str:
