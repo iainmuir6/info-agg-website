@@ -99,15 +99,15 @@ To add or remove tickers, edit `baskets.json` — no code changes required.
 ## Running the ETL
 
 See **[`RUNBOOK.md`](RUNBOOK.md)** for the full guide, including:
-- Step-by-step initial seed instructions
+- Step-by-step initial seed instructions with per-phase timing
 - What the daily run does per domain
-- Budget guidance and decision tree
+- Budget guidance, decision tree, and Vercel Cron constraints
 
 ### Quick reference
 
 ```bash
-# Initial seed (new environment) — one command, all domains
-python src/api/run_etl.py --seed
+# Initial seed (new environment) — dedicated seed orchestrator
+python src/api/run_db_seed.py
 
 # Daily run (all domains)
 python src/api/run_etl.py
@@ -119,26 +119,49 @@ python src/api/run_etl.py --sports-only
 python src/api/run_etl.py --media-only
 ```
 
-### All flags
+### Expected run times
+
+| Command | Scope | Est. duration | Notes |
+|---------|-------|---------------|-------|
+| `run_db_seed.py` | All domains + backfill | ~12–18 min | 3 AV keys; scales with key count |
+| `run_etl.py` | All domains, no backfill | ~5–7 min | Auto catch-up if >24h since last run |
+| `run_etl.py --markets-only` | Quotes + news + sentiment | ~2–3 min | 36 Finnhub calls + 5 AV calls |
+| `run_etl.py --sports-only` | ESPN news + scores | ~10–15s | No rate limiting applied |
+| `run_etl.py --news-only` | NYT top stories | ~90–120s | 10 sections × 7s sleep = 70s minimum |
+| `run_etl.py --media-only` | Spotify + Reddit | ~15–20s | 8 Reddit calls × 1s sleep |
+
+> **Vercel Cron (Hobby plan, 60s limit):** A full daily run exceeds the limit. Partial
+> completion is normal — Sports and Media finish comfortably; Markets and News may be cut
+> short. See `RUNBOOK.md` for mitigation options.
+
+### `run_etl.py` flags
 
 | Flag | Effect |
 |------|--------|
-| `--seed` | Full initial seed: `--backfill-quotes 30 --backfill-news 30 --backfill-sports 30` |
 | `--sports-only` | Run sports ETL only |
-| `--markets-only` | Run markets ETL only (includes FMP) |
+| `--markets-only` | Run markets ETL only (quotes + news + sentiment) |
 | `--news-only` | Run news ETL only |
 | `--media-only` | Run media ETL only |
 | `--skip-sports` | Skip sports ETL |
-| `--skip-markets` | Skip markets ETL (includes FMP) |
+| `--skip-markets` | Skip markets ETL |
 | `--skip-news` | Skip news ETL |
 | `--skip-media` | Skip media ETL |
-| `--backfill-quotes DAYS` | Backfill N days of OHLCV history via AV (company news skipped during backfill) |
+| `--skip-sentiment` | Skip AV news sentiment (saves 5 AV calls) |
 | `--backfill-news DAYS` | Backfill N days of NYT articles via Archive API* |
 | `--backfill-sports DAYS` | Backfill N days of ESPN scores |
-| `--fmp-etf-only` | Within markets: restrict FMP to ETF tickers only (saves FMP budget) |
+| `--scrape-etf-info` | Scrape ETF info + top-15 holdings from etfdb.com (manual, not daily) |
 | `--all-sentiment-topics` | Fetch all 10 AV sentiment topics (default: 5) |
 | `--watchlist TICKER ...` | Override basket watchlist with a custom ticker list |
 | `--output FILE` | Write results JSON to FILE |
+
+### `run_db_seed.py` flags
+
+| Flag | Default | Effect |
+|------|---------|--------|
+| `--backfill-quotes DAYS` | 30 | Days of OHLCV history to backfill via AV |
+| `--backfill-news DAYS` | 30 | Days of NYT articles via Archive API* |
+| `--backfill-sports DAYS` | 30 | Days of ESPN scores to backfill |
+| `--output FILE` | — | Write results JSON to FILE |
 
 *`--backfill-news` requires the Archive API product enabled at [developer.nytimes.com/my-apps](https://developer.nytimes.com/my-apps).
 

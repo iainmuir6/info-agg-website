@@ -10,6 +10,7 @@ import os
 import sys
 import json
 import argparse
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, Any, List, Optional
@@ -118,12 +119,12 @@ def run_sports_etl(supabase: Client, backfill_days: int = 0) -> Dict[str, Any]:
 def run_markets_etl(
     supabase: Client,
     watchlist: Optional[List[str]] = None,
-    quote_days_back: int = 0,
     all_sentiment_topics: bool = False,
     skip_sentiment: bool = False,
 ) -> Dict[str, Any]:
     """
     Daily markets ETL: quotes + company news + market news + AV sentiment.
+    Quote backfill (OHLCV history) is intentionally excluded — use run_db_seed.py.
     Profile/info updates are intentionally excluded — run --scrape-etf-info
     (ETFdb) or --refresh-profiles (FMP) manually when needed.
     """
@@ -151,22 +152,28 @@ def run_markets_etl(
             'errors': []
         }
 
-        for ticker in watchlist:
+        def _fetch_ticker(ticker: str) -> tuple:
             at = asset_type_map.get(ticker, 'stock')
             print(f"\nProcessing {ticker} ({at})...")
-            stats = sync_stock_data(
+            result = sync_stock_data(
                 supabase,
                 ticker,
                 fetch_quotes=True,
-                fetch_news=(quote_days_back == 0),  # skip company news during backfill
-                fetch_profile=False,                 # profiles updated manually, not daily
-                quote_days_back=quote_days_back,
+                fetch_news=(at == 'stock'),  # stocks only; ETF/crypto news skipped
+                fetch_profile=False,          # profiles updated manually, not daily
+                quote_days_back=0,
                 asset_type=at,
             )
-            total_stats['stocks_processed'] += 1
-            total_stats['quotes_inserted'] += stats.get('quotes_inserted', 0)
-            total_stats['news_inserted'] += stats.get('news_inserted', 0)
-            total_stats['errors'].extend(stats.get('errors', []))
+            return ticker, result
+
+        with ThreadPoolExecutor(max_workers=len(watchlist)) as executor:
+            futures = {executor.submit(_fetch_ticker, t): t for t in watchlist}
+            for future in as_completed(futures):
+                ticker, stats = future.result()
+                total_stats['stocks_processed'] += 1
+                total_stats['quotes_inserted'] += stats.get('quotes_inserted', 0)
+                total_stats['news_inserted'] += stats.get('news_inserted', 0)
+                total_stats['errors'].extend(stats.get('errors', []))
 
         # Market news
         print("\nFetching market news...")
@@ -371,14 +378,14 @@ def run_full_etl(
     skip_news: bool = False,
     skip_media: bool = False,
     skip_sentiment: bool = False,
-    quote_days_back: int = 0,
     backfill_news_days: int = 0,
     backfill_sports_days: int = 0,
     all_sentiment_topics: bool = False
 ) -> Dict[str, Any]:
     """
     Run the full ETL pipeline for all data sources.
-    Markets = quotes + news + AV sentiment only (no profile/info updates).
+    Markets = today's quotes + company news + market news + AV sentiment only.
+    Quote backfill (OHLCV history) is not part of the daily run — use run_db_seed.py.
     Profile updates: --refresh-profiles (FMP) or --scrape-etf-info (ETFdb).
     """
     start_time = datetime.now()
@@ -389,28 +396,6 @@ def run_full_etl(
 
     supabase = get_supabase_client()
 
-    # Auto catch-up: if the DB has no quotes in the last 24h and no explicit backfill
-    # was requested, fill in the gap (up to 7 days) automatically.
-    if quote_days_back == 0 and not skip_markets:
-        try:
-            result = (supabase.table('stock_quotes')
-                      .select('fetched_at')
-                      .order('fetched_at', desc=True)
-                      .limit(1)
-                      .execute())
-            if result.data:
-                last_fetch = datetime.fromisoformat(result.data[0]['fetched_at'][:19])
-                gap = datetime.now() - last_fetch
-                if gap.total_seconds() > 86400:
-                    days_missed = min(int(gap.days), 7)
-                    print(f"Auto catch-up: last run was {days_missed} day(s) ago "
-                          f"— backfilling {days_missed} days")
-                    quote_days_back = days_missed
-                    if backfill_sports_days == 0:
-                        backfill_sports_days = days_missed
-        except Exception as e:
-            print(f"  Auto catch-up check failed (skipping): {e}")
-
     results = {
         'started_at': start_time.isoformat(),
         'sports': None,
@@ -419,23 +404,29 @@ def run_full_etl(
         'media': None,
     }
 
+    domain_fns = {}
     if not skip_sports:
-        results['sports'] = run_sports_etl(supabase, backfill_days=backfill_sports_days)
-
+        domain_fns['sports'] = lambda: run_sports_etl(supabase, backfill_days=backfill_sports_days)
     if not skip_markets:
-        results['markets'] = run_markets_etl(
+        domain_fns['markets'] = lambda: run_markets_etl(
             supabase,
             watchlist=watchlist,
-            quote_days_back=quote_days_back,
             all_sentiment_topics=all_sentiment_topics,
             skip_sentiment=skip_sentiment,
         )
-
     if not skip_news:
-        results['news'] = run_news_etl(supabase, backfill_days=backfill_news_days)
-
+        domain_fns['news'] = lambda: run_news_etl(supabase, backfill_days=backfill_news_days)
     if not skip_media:
-        results['media'] = run_media_etl(supabase)
+        domain_fns['media'] = lambda: run_media_etl(supabase)
+
+    with ThreadPoolExecutor(max_workers=len(domain_fns)) as executor:
+        domain_futures = {executor.submit(fn): domain for domain, fn in domain_fns.items()}
+        for future in as_completed(domain_futures):
+            domain = domain_futures[future]
+            try:
+                results[domain] = future.result()
+            except Exception as e:
+                results[domain] = {'success': False, 'error': str(e)}
 
     end_time = datetime.now()
     duration = (end_time - start_time).total_seconds()
@@ -473,8 +464,7 @@ def main():
     parser.add_argument('--media-only',   action='store_true', help='Run media ETL only')
 
     # ── Backfill / markets options ────────────────────────────────────────────
-    parser.add_argument('--backfill-quotes', type=int, default=0, metavar='DAYS',
-                        help='Backfill N days of OHLCV history per ticker via AV')
+    # Note: --backfill-quotes removed — OHLCV backfill belongs in run_db_seed.py only.
     parser.add_argument('--backfill-news', type=int, default=0, metavar='DAYS',
                         help='Backfill N days of NYT articles via the Archive API')
     parser.add_argument('--backfill-sports', type=int, default=0, metavar='DAYS',
@@ -517,7 +507,6 @@ def main():
         skip_news=args.skip_news,
         skip_media=args.skip_media,
         skip_sentiment=args.skip_sentiment,
-        quote_days_back=args.backfill_quotes,
         backfill_news_days=args.backfill_news,
         backfill_sports_days=args.backfill_sports,
         all_sentiment_topics=args.all_sentiment_topics,

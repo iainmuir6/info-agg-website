@@ -1,6 +1,6 @@
 # ETL Runbook
 
-Two distinct operating modes: **Initial Seed** (run once per environment) and **Daily Run** (automated, self-healing).
+Two distinct operating modes: **Initial Seed** (run once per environment) and **Daily Run** (automated via Vercel Cron or manual trigger).
 
 ---
 
@@ -13,7 +13,7 @@ source _agg_venv/bin/activate   # from repo root
 python src/api/run_db_seed.py
 ```
 
-Custom backfill depth:
+Custom backfill depth (defaults: 30 days each):
 
 ```bash
 python src/api/run_db_seed.py --backfill-quotes 90 --backfill-news 30 --backfill-sports 30
@@ -22,27 +22,59 @@ python src/api/run_db_seed.py --backfill-quotes 90 --backfill-news 30 --backfill
 ### What `run_db_seed.py` does
 
 `run_db_seed.py` is a dedicated seed orchestrator that **interleaves** Alpha Vantage backfill
-batches with other domain ETL. This ensures the AV 5 req/min rate-limit window resets
-naturally during domain work (ESPN, NYT, Spotify) instead of burning a `sleep()` call.
+batches with other domain ETL. This ensures the AV 5 req/min window resets naturally during
+domain work (ESPN, NYT, Spotify) rather than burning a `sleep()` call.
 
 #### Phase layout (36-ticker basket)
 
 | Phase | Action | ~Time elapsed since last AV batch |
 |-------|--------|-----------------------------------|
+| 0 | AV key inventory — report key count + daily budget | — |
 | 1 | AV backfill — tickers 1–10 | — (first batch) |
-| 2 | FMP — company profiles + ETF holdings | — |
+| 2 | FMP — company profiles + ETF info; AV ETF_PROFILE — ETF holdings | — |
 | 3 | Sports — ESPN backfill + current news | >60s → AV window reset ✓ |
 | 4 | AV backfill — tickers 11–20 | — |
 | 5 | News — NYT Archive backfill | >60s → AV window reset ✓ |
 | 6 | AV backfill — tickers 21–30 | — |
 | 7 | Media — Spotify + Reddit | >60s → AV window reset ✓ |
 | 8 | AV backfill — remaining tickers + sentiment (all 10 topics) | — |
-| 9 | Finnhub — market news + company news | — |
+| 9 | Finnhub — market news + company news (all 36 tickers) | — |
 
-#### AV budget (2 keys × 25 req/day = 50 total)
+#### AV budget
 
-36 ticker backfills + 10 sentiment topics = 46 calls → ~23/key. Round-robin key
-selection distributes load evenly so neither key exhausts its daily cap mid-run.
+Budget depends on how many `ALPHA_VANTAGE_API_KEY_*` variables are set in `.env.local`.
+With 3 keys configured (the default):
+
+| Item | Calls |
+|------|-------|
+| Quote backfill — 36 tickers | 36 |
+| ETF holdings (`ETF_PROFILE`) — 23 ETFs | 23 |
+| Sentiment — all 10 topics | 10 |
+| **Seed total** | **69** |
+| Daily budget (3 keys × 25 req/day) | 75 |
+| **Headroom** | **+6** |
+
+Round-robin key selection distributes calls evenly across all configured keys so no single
+key exhausts its daily cap mid-run. Phase 0 prints a live budget breakdown before any calls.
+
+#### Expected run time — Seed
+
+| Phase | Dominant work | Est. duration |
+|-------|---------------|---------------|
+| 0 | Key inventory report | <1s |
+| 1 | 10 AV calls (3-key round-robin → 15 req/min) | ~1–2 min |
+| 2 | FMP: 33 profiles (~30s); AV ETF_PROFILE: 23 calls (~1.5 min) | ~2 min |
+| 3 | ESPN: 30d × ~10 leagues + news | ~1–2 min |
+| 4 | 10 AV calls (window reset by Phase 3) | ~1 min |
+| 5 | NYT Archive (1–2 months) + Top Stories (10 sections × 7s sleep) | ~2 min |
+| 6 | 10 AV calls (window reset by Phase 5) | ~1 min |
+| 7 | Spotify + Reddit (8 subs × 1s sleep) | ~15–20s |
+| 8 | 6 AV ticker calls + 10 sentiment calls | ~1 min |
+| 9 | Finnhub company news (36 tickers) + market news | ~1–2 min |
+| **Total** | | **~12–18 min** |
+
+> Timing scales with key count and network latency. With 1 AV key (5 req/min) the seed
+> takes ~25–35 min; with 3 keys (~15 req/min effective) it completes in ~12–18 min.
 
 #### Per-domain detail
 
@@ -51,14 +83,15 @@ selection distributes load evenly so neither key exhausts its daily cap mid-run.
 | Action | Source | Table |
 |--------|--------|-------|
 | Company profiles + ETF info | FMP `/stable/profile`, `/stable/etf/information` | `stocks` |
-| ETF holdings | FMP `/stable/etf/holdings` | `etf_holdings` |
+| ETF holdings | AV `ETF_PROFILE` | `etf_holdings` |
 | Backfill N days of daily OHLCV (stocks/ETFs) | AV `TIME_SERIES_DAILY` | `stock_quotes` |
 | Backfill N days of daily OHLCV (crypto) | AV `DIGITAL_CURRENCY_DAILY` | `stock_quotes` |
 | Market news (general/forex/crypto/merger) | Finnhub `/news` | `market_news` |
-| Company news (7-day window) | Finnhub `/company-news` | `company_news` |
+| Company news (7-day window, all 36 tickers) | Finnhub `/company-news` | `company_news` |
 | AV news sentiment (all 10 topics) | AV `NEWS_SENTIMENT` | `news_sentiment` |
 
-Company news is **skipped** during the AV backfill phases to preserve budget; it is fetched in Phase 9.
+Company news is fetched **only in Phase 9** (not during AV backfill phases) to keep AV
+budget usage predictable.
 
 **Sports**
 
@@ -67,7 +100,7 @@ Company news is **skipped** during the AV backfill phases to preserve budget; it
 | Backfill N days of scores for all leagues | ESPN `/scoreboard?dates=YYYYMMDD` | `sports_scores` |
 | Fetch current news for all leagues | ESPN `/news` | `sports_news` |
 
-Leagues seeded by `01_schema.sql` / `02_tables.sql`: NFL, NBA, NHL, MLB, EPL, WNBA, college football/basketball.
+Leagues: NFL, NBA, NHL, MLB, EPL, WNBA, college football/basketball.
 
 **News**
 
@@ -104,17 +137,22 @@ python src/api/run_etl.py
 
 Runs all four domains sequentially: **sports → markets → news → media**.
 
-### Auto catch-up
+### Expected run time — Daily Run (no backfill)
 
-At startup, `run_etl.py` queries `MAX(fetched_at)` from `info_agg.stock_quotes`. If the
-last run was more than 24 hours ago it automatically backfills the gap (capped at 7 days):
+| Domain | Work performed | Est. duration |
+|--------|---------------|---------------|
+| Sports | ESPN: news + scores for ~10 leagues | ~10–15s |
+| Markets | Finnhub: 36 quotes + 36 company-news + 4 market-news; AV: 5 sentiment topics | ~90–120s |
+| News | NYT Top Stories: 10 sections × 7s sleep = 70s minimum | ~90–120s |
+| Media | Spotify (1–2 calls) + Reddit (8 subs × 1s sleep) | ~15–20s |
+| **Total** | | **~5–7 min** |
 
-```
-Auto catch-up: last run was 2 day(s) ago — backfilling 2 days
-```
-
-This covers missed cron runs without any manual intervention. Passing `--backfill-quotes N`
-explicitly takes precedence and disables auto catch-up.
+> **Vercel Cron note:** The Hobby plan enforces a 60-second serverless function limit.
+> A full daily run (~5–7 min) exceeds this. The Vercel Cron route at `/api/cron/etl`
+> uses a 55s exec timeout; partial completion is logged. If full coverage is needed,
+> run domain-specific crons or upgrade to a Pro plan (300s limit).
+> To stay within 60s: `--sports-only` (~15s) or `--markets-only` (~2–3 min, still over).
+> The safest sub-60s option is a subset: `--skip-news --skip-markets` (~30s).
 
 ### What each domain does on a daily run
 
@@ -152,16 +190,15 @@ python src/api/run_etl.py --markets-only
 # Expanded AV sentiment (all 10 topics, ~2× AV budget)
 python src/api/run_etl.py --all-sentiment-topics
 
-# Manual catch-up override (disables auto catch-up)
-python src/api/run_etl.py --backfill-quotes 3
-
 # Scrape ETF info + holdings from etfdb.com (manual trigger)
 python src/api/run_etl.py --scrape-etf-info
+
+# Skip AV sentiment entirely (quotes + news only, saves 5 AV calls)
+python src/api/run_etl.py --skip-sentiment
 ```
 
-> **Note:** `--fmp-etf-only` is documented in older runbook versions but is **not
-> implemented** as a CLI flag in `run_etl.py`. Use `--scrape-etf-info` for ETFdb,
-> or call `run_fmp_etl(supabase, etf_only=True)` directly from Python.
+> **Quote backfill removed from daily run.** OHLCV history is AV-expensive (1 call/ticker/run).
+> Use `run_db_seed.py --backfill-quotes N` for any historical backfill needs.
 
 ---
 
@@ -170,11 +207,18 @@ python src/api/run_etl.py --scrape-etf-info
 ```
 New environment?
   └─ YES → python src/api/run_db_seed.py
-  └─ NO  → python src/api/run_etl.py  (auto catch-up handles missed days)
+  └─ NO  → python src/api/run_etl.py
+
+Need to backfill missed OHLCV history?
+  └─ python src/api/run_db_seed.py --backfill-quotes N  (run_etl.py no longer supports this)
 
 Daily Run — budget constraints?
   ├─ AV budget tight      → omit --all-sentiment-topics (default 5 topics)
-  └─ Need manual catch-up → --backfill-quotes N  (overrides auto catch-up)
+  └─ AV budget very tight → add --skip-sentiment (0 AV calls)
+
+Running on Vercel Cron (60s limit)?
+  ├─ Full run exceeds limit — partial completion is normal
+  └─ For guaranteed completion: use --sports-only or --skip-news --skip-markets
 ```
 
 ---
@@ -184,11 +228,12 @@ Daily Run — budget constraints?
 | Behaviour | Seed (`run_db_seed.py`) | Daily (`run_etl.py`) |
 |-----------|------------------------|----------------------|
 | Entry point | `run_db_seed.py` | `run_etl.py` |
-| Quote history depth | N days (default 30) via `--backfill-quotes` | 1 day, or auto catch-up ≤7d |
+| Quote history depth | N days (default 30) via `--backfill-quotes` | Today's quote only — no backfill |
 | AV key selection | Round-robin per ticker | Round-robin per call |
 | AV rate limiting | Interleaved with domain ETL (no explicit sleep) | Per-key sliding-window deque |
-| Company news | Skipped during backfill; fetched in Phase 9 | Fetched (7-day window) |
-| FMP ETF holdings | Full upsert (Phase 2) | Not run (manual only) |
+| Company news | Skipped during backfill; fetched in Phase 9 | Always fetched (7-day window) |
+| ETF holdings | AV `ETF_PROFILE` — full upsert (Phase 2) | Not run (manual only) |
 | AV sentiment | All 10 topics (Phase 8) | 5 topics (10 with `--all-sentiment-topics`) |
-| AV calls per run | ~36 (backfill) + 10 (sentiment) = 46 | 5–10 (sentiment only) |
-| Typical duration | ~20–30 min | ~3–5 min |
+| AV calls per run | ~36 (backfill) + 23 (holdings) + 10 (sentiment) = 69 | 5–10 (sentiment only) |
+| Typical duration (3 AV keys) | ~12–18 min | ~5–7 min |
+| Vercel Cron compatible? | No (too long) | No (exceeds 60s limit) |
