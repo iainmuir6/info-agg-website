@@ -1,0 +1,13 @@
+{
+  "crons": [
+    {
+      "path": "/api/cron/etl",
+      "schedule": "0 12 * * *"
+    }
+  ],
+  "functions": {
+    "app/api/cron/etl/route.ts": {
+      "maxDuration": 60
+    }
+  }
+}
