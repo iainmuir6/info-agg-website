@@ -18,6 +18,23 @@ from supabase import create_client, Client
 from supabase import ClientOptions
 from dotenv import load_dotenv
 
+_API_DIR = os.path.dirname(os.path.abspath(__file__))
+if _API_DIR not in sys.path:
+    sys.path.insert(0, _API_DIR)
+
+from sports.sports_db_helper import sync_all_sports_data
+from markets.markets_db_helper import (
+    sync_stock_data,
+    sync_market_news,
+    sync_news_sentiment,
+    sync_economic_indicators,
+    backfill_missing_profiles,
+    sync_fmp_data,
+    sync_etfdb_data,
+)
+from news.news_db_helper import sync_nyt_data
+from media.media_db_helper import sync_spotify_data, sync_reddit_data
+
 load_dotenv()
 
 BASKETS_PATH = Path(__file__).parent / 'markets' / 'baskets.json'
@@ -81,23 +98,9 @@ def get_supabase_client() -> Client:
 
 def run_sports_etl(supabase: Client) -> Dict[str, Any]:
     """Run sports ETL: ESPN news and scores (today's snapshot only)."""
-    print("\n" + "=" * 60)
-    print("SPORTS ETL")
-    print("=" * 60)
-
     try:
-        sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'sports'))
-        from sports.sports_db_helper import sync_all_sports_data
-
-        current = sync_all_sports_data(supabase, news_limit_per_sport=20)
-
-        print(f"\nSports ETL Complete:")
-        print(f"  Leagues processed: {current['leagues_processed']}")
-        print(f"  News inserted: {current['news_inserted']}")
-        print(f"  Scores inserted: {current['scores_inserted']}")
-        return {'success': True, 'stats': current}
+        return {'success': True, 'stats': sync_all_sports_data(supabase, news_limit_per_sport=20)}
     except Exception as e:
-        print(f"Sports ETL failed: {e}")
         return {'success': False, 'error': str(e)}
 
 
@@ -112,10 +115,6 @@ def run_markets_etl(
     Profile/info updates are intentionally excluded — run --scrape-etf-info
     (ETFdb) or --refresh-profiles (FMP) manually when needed.
     """
-    print("\n" + "=" * 60)
-    print("MARKETS ETL")
-    print("=" * 60)
-
     baskets = load_baskets()
     asset_type_map = classify_tickers(baskets)
 
@@ -124,12 +123,6 @@ def run_markets_etl(
         watchlist = all_tickers
 
     try:
-        sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'markets'))
-        from markets.markets_db_helper import (
-            sync_stock_data, sync_market_news, sync_news_sentiment,
-            sync_economic_indicators, backfill_missing_profiles,
-        )
-
         total_stats = {
             'stocks_processed': 0,
             'quotes_inserted': 0,
@@ -143,92 +136,71 @@ def run_markets_etl(
 
         def _fetch_ticker(ticker: str) -> tuple:
             at = asset_type_map.get(ticker, 'stock')
-            print(f"\nProcessing {ticker} ({at})...")
             result = sync_stock_data(
                 supabase,
                 ticker,
                 fetch_quotes=True,
-                fetch_news=(at == 'stock'),  # stocks only; ETF/crypto/forex/commodity news skipped
-                fetch_profile=False,          # profiles updated manually, not daily
+                fetch_news=(at == 'stock'),
+                fetch_profile=False,
                 asset_type=at,
+                write_news=False,  # threads only fetch; news is batch-upserted after pool drains
             )
             return ticker, result
 
-        with ThreadPoolExecutor(max_workers=5) as executor:  # cap concurrent Supabase writers to avoid connection exhaustion
+        # Phase 1: fetch quotes + news from all tickers (2 concurrent threads, no DB news writes)
+        all_pending_news: List[Dict[str, Any]] = []
+        with ThreadPoolExecutor(max_workers=2) as executor:  # 2 Finnhub keys → 2 concurrent workers
             futures = {executor.submit(_fetch_ticker, t): t for t in watchlist}
             for future in as_completed(futures):
                 ticker, stats = future.result()
                 total_stats['stocks_processed'] += 1
                 total_stats['quotes_inserted'] += stats.get('quotes_inserted', 0)
-                total_stats['news_inserted'] += stats.get('news_inserted', 0)
                 total_stats['errors'].extend(stats.get('errors', []))
+                all_pending_news.extend(stats.get('pending_news', []))
 
-        # Market news
-        print("\nFetching market news...")
+        # Phase 2: single batch upsert for all company news after all threads complete
+        if all_pending_news:
+            seen: set = set()
+            deduped = [r for r in all_pending_news if not (r['url'] in seen or seen.add(r['url']))]
+            try:
+                resp = supabase.table('company_news').upsert(deduped, on_conflict='url').execute()
+                total_stats['news_inserted'] = len(resp.data) if resp.data else 0
+            except Exception as e:
+                total_stats['errors'].append(f"Error batch-upserting company news: {e}")
+
         news_stats = sync_market_news(supabase, categories=MARKET_NEWS_CATEGORIES)
         total_stats['market_news_inserted'] = news_stats.get('articles_inserted', 0)
         total_stats['errors'].extend(news_stats.get('errors', []))
 
-        # AV news sentiment — all 10 topics, spread across keys for efficiency
         if not skip_sentiment:
-            print(f"\nFetching AV news sentiment ({len(SENTIMENT_TOPICS_ALL)} topics)...")
             sentiment_stats = sync_news_sentiment(supabase, topics=SENTIMENT_TOPICS_ALL, tickers=watchlist)
             total_stats['sentiment_upserted'] = sentiment_stats.get('articles_upserted', 0)
             total_stats['errors'].extend(sentiment_stats.get('errors', []))
-        else:
-            print("\nSkipping AV news sentiment (--skip-sentiment)")
 
-        # Economic indicators (treasury rates + 7 macro)
-        print("\nFetching economic indicators...")
         econ_stats = sync_economic_indicators(supabase)
         total_stats['economic_rows_upserted'] = econ_stats.get('rows_upserted', 0)
         total_stats['errors'].extend(econ_stats.get('errors', []))
 
-        # Missing profile backfill (stocks with name IS NULL)
-        print("\nBackfilling missing stock profiles...")
         bp_stats = backfill_missing_profiles(supabase)
         total_stats['profiles_backfilled'] = bp_stats.get('updated', 0)
         total_stats['errors'].extend(bp_stats.get('errors', []))
 
-        print(f"\nMarkets ETL Complete:")
-        print(f"  Stocks processed:            {total_stats['stocks_processed']}")
-        print(f"  Quotes inserted:             {total_stats['quotes_inserted']}")
-        print(f"  Company news inserted:       {total_stats['news_inserted']}")
-        print(f"  Market news inserted:        {total_stats['market_news_inserted']}")
-        print(f"  Sentiment articles upserted: {total_stats['sentiment_upserted']}")
-        print(f"  Economic indicator rows:     {total_stats['economic_rows_upserted']}")
-        print(f"  Profiles backfilled:         {total_stats['profiles_backfilled']}")
-
         return {'success': True, 'stats': total_stats}
 
     except Exception as e:
-        print(f"Markets ETL failed: {e}")
         return {'success': False, 'error': str(e)}
 
 
 def run_news_etl(supabase: Client, sections: Optional[List[str]] = None) -> Dict[str, Any]:
     """Run news ETL: NYT top stories."""
-    print("\n" + "=" * 60)
-    print("NEWS ETL")
-    print("=" * 60)
-
     if sections is None:
         sections = DEFAULT_NEWS_SECTIONS
-
     try:
-        sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'news'))
-        from news.news_db_helper import sync_nyt_data
-
-        print("\nSyncing NYT top stories...")
-        nyt_stats = sync_nyt_data(supabase, sections=sections)
-
-        print(f"\nNews ETL Complete:")
-        print(f"  NYT articles inserted: {nyt_stats.get('articles_inserted', 0)}")
-
-        return {'success': True, 'stats': nyt_stats}
-
+        return {
+            'success': True, 
+            'stats': sync_nyt_data(supabase, sections=sections)
+        }
     except Exception as e:
-        print(f"News ETL failed: {e}")
         return {'success': False, 'error': str(e)}
 
 
@@ -237,41 +209,19 @@ def run_media_etl(
     subreddits: Optional[List[str]] = None
 ) -> Dict[str, Any]:
     """Run media ETL: Spotify new releases and Reddit hot posts."""
-    print("\n" + "=" * 60)
-    print("MEDIA ETL")
-    print("=" * 60)
-
     if subreddits is None:
         subreddits = DEFAULT_SUBREDDITS
 
     try:
-        sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'media'))
-        from media.media_db_helper import sync_spotify_data, sync_reddit_data
-
-        total_stats = {
-            'spotify_releases': 0,
-            'reddit_posts': 0,
-            'errors': []
-        }
-
-        print("\nSyncing Spotify data...")
         spotify_stats = sync_spotify_data(supabase)
-        total_stats['spotify_releases'] = spotify_stats.get('releases_inserted', 0)
-        total_stats['errors'].extend(spotify_stats.get('errors', []))
-
-        print("\nSyncing Reddit data...")
         reddit_stats = sync_reddit_data(supabase, subreddits=subreddits)
-        total_stats['reddit_posts'] = reddit_stats.get('posts_inserted', 0)
-        total_stats['errors'].extend(reddit_stats.get('errors', []))
 
-        print(f"\nMedia ETL Complete:")
-        print(f"  Spotify releases inserted: {total_stats['spotify_releases']}")
-        print(f"  Reddit posts inserted: {total_stats['reddit_posts']}")
-
-        return {'success': True, 'stats': total_stats}
-
+        return {'success': True, 'stats': {
+            'spotify_releases': spotify_stats.get('releases_inserted', 0),
+            'reddit_posts': reddit_stats.get('posts_inserted', 0),
+            'errors': spotify_stats.get('errors', []) + reddit_stats.get('errors', []),
+        }}
     except Exception as e:
-        print(f"Media ETL failed: {e}")
         return {'success': False, 'error': str(e)}
 
 
@@ -283,21 +233,12 @@ def run_etfdb_etl(supabase: Client) -> None:
     manual enrichment of ETFdb-only fields (expense ratio, AUM, category) but
     is no longer part of the seed or daily pipeline.
     """
-    print("\n" + "=" * 60)
-    print("ETFDB SCRAPE — ETF INFO + HOLDINGS  [DEPRECATED]")
-    print("  Holdings are now sourced from AV ETF_PROFILE (run_db_seed.py Phase 2).")
-    print("  Use this only to backfill ETFdb-specific fields (expense ratio, AUM).")
-    print("=" * 60)
-
     baskets = load_baskets()
     asset_type_map = classify_tickers(baskets)
     etf_tickers = [t for tickers in baskets.values() for t in tickers
                    if asset_type_map.get(t) == 'etf']
 
     print(f"ETFs to scrape: {len(etf_tickers)}")
-
-    sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'markets'))
-    from markets.markets_db_helper import sync_etfdb_data
 
     stats = sync_etfdb_data(supabase, etf_tickers)
 
@@ -316,10 +257,6 @@ def run_fmp_etl(
     skip_holdings: bool = False
 ) -> Dict[str, Any]:
     """Run FMP ETL: enrich company profiles and upsert ETF holdings."""
-    print("\n" + "=" * 60)
-    print("FMP ETL")
-    print("=" * 60)
-
     baskets = load_baskets()
     asset_type_map = classify_tickers(baskets)
     all_tickers = [t for tickers in baskets.values() for t in tickers]
@@ -333,9 +270,6 @@ def run_fmp_etl(
     tickers_to_process = etf_tickers if etf_only else non_crypto
 
     try:
-        sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'markets'))
-        from markets.markets_db_helper import sync_fmp_data
-
         stats = sync_fmp_data(
             supabase,
             watchlist=tickers_to_process,
@@ -343,10 +277,10 @@ def run_fmp_etl(
             skip_holdings=skip_holdings
         )
 
-        print(f"\nFMP ETL Complete:")
-        print(f"  Company profiles updated: {stats['profiles_updated']}")
-        print(f"  ETF info updated:         {stats['etf_info_updated']}")
-        print(f"  ETF holdings upserted:    {stats['etf_holdings_upserted']}")
+        # print(f"\nFMP ETL Complete:")
+        # print(f"  Company profiles updated: {stats['profiles_updated']}")
+        # print(f"  ETF info updated:         {stats['etf_info_updated']}")
+        # print(f"  ETF holdings upserted:    {stats['etf_holdings_upserted']}")
         if stats.get('errors'):
             print(f"  Errors: {len(stats['errors'])}")
 
@@ -372,11 +306,6 @@ def run_full_etl(
     Profile updates: --refresh-profiles (FMP) or --scrape-etf-info (ETFdb).
     """
     start_time = datetime.now()
-    print("=" * 60)
-    print(f"INFO AGGREGATOR — FULL ETL RUN")
-    print(f"Started: {start_time.strftime('%Y-%m-%d %H:%M:%S')}")
-    print("=" * 60)
-
     supabase = get_supabase_client()
 
     results = {
@@ -401,8 +330,21 @@ def run_full_etl(
     if not skip_media:
         domain_fns['media'] = lambda: run_media_etl(supabase)
 
+    # Run all domains in parallel. Each domain thread fetches from external APIs then
+    # writes to Supabase in a single batch upsert per table.
+    domain_elapsed: Dict[str, float] = {}
+
+    def _timed(domain: str, fn) -> Dict[str, Any]:
+        t0 = datetime.now()
+        result = fn()
+        domain_elapsed[domain] = (datetime.now() - t0).total_seconds()
+        return result
+
     with ThreadPoolExecutor(max_workers=len(domain_fns)) as executor:
-        domain_futures = {executor.submit(fn): domain for domain, fn in domain_fns.items()}
+        domain_futures = {
+            executor.submit(_timed, domain, fn): domain
+            for domain, fn in domain_fns.items()
+        }
         for future in as_completed(domain_futures):
             domain = domain_futures[future]
             try:
@@ -415,17 +357,58 @@ def run_full_etl(
     results['completed_at'] = end_time.isoformat()
     results['duration_seconds'] = duration
 
-    print("\n" + "=" * 60)
-    print(f"ETL COMPLETE — Duration: {duration:.1f}s")
-    print("=" * 60)
+    # ── Final output table ────────────────────────────────────────────────────
+    W = 60
+    print("=" * W)
+    print(f"INFO AGGREGATOR — ETL COMPLETE")
+    print(f"Started: {start_time.strftime('%Y-%m-%d %H:%M:%S')}  ·  Duration: {duration:.1f}s")
+    print("=" * W)
 
-    for domain in ['sports', 'markets', 'news', 'media']:
+    DOMAIN_ORDER = ['sports', 'markets', 'news', 'media']
+
+    def _stat_str(domain: str, result: Dict[str, Any]) -> str:
+        s = result.get('stats', {})
+        if domain == 'sports':
+            return (f"leagues={s.get('leagues_processed',0)}  "
+                    f"news={s.get('news_inserted',0)}  "
+                    f"scores={s.get('scores_inserted',0)}")
+        if domain == 'markets':
+            return (f"tickers={s.get('stocks_processed',0)}  "
+                    f"cnews={s.get('news_inserted',0)}  "
+                    f"mnews={s.get('market_news_inserted',0)}  "
+                    f"sentiment={s.get('sentiment_upserted',0)}  "
+                    f"econ={s.get('economic_rows_upserted',0)}  "
+                    f"bf={s.get('profiles_backfilled',0)}")
+        if domain == 'news':
+            return (f"sections={s.get('sections_processed',0)}  "
+                    f"articles={s.get('articles_inserted',0)}")
+        if domain == 'media':
+            return (f"spotify={s.get('spotify_releases',0)}  "
+                    f"reddit={s.get('reddit_posts',0)}")
+        return ''
+
+    passed = failed = 0
+    for domain in DOMAIN_ORDER:
         result = results.get(domain)
-        if result:
-            status = "OK" if result.get('success') else "FAILED"
-            print(f"  [{status}] {domain.upper()}")
-            if not result.get('success'):
-                print(f"    Error: {result.get('error')}")
+        if result is None:
+            continue
+        elapsed = domain_elapsed.get(domain, 0)
+        ok = result.get('success', False)
+        status = ' OK ' if ok else 'FAIL'
+        stat_str = _stat_str(domain, result) if ok else result.get('error', '')
+        print(f"  {domain:<8} [{status}]  {stat_str:<48}  {elapsed:.1f}s")
+        errors = result.get('stats', {}).get('errors', [])
+        if errors:
+            for e in errors[:3]:
+                print(f"             ↳ {e}")
+            if len(errors) > 3:
+                print(f"             ↳ … and {len(errors) - 3} more errors")
+        passed += ok
+        failed += (not ok)
+
+    print("-" * W)
+    print(f"  {passed} passed · {failed} failed · {duration:.1f}s total")
+    print("=" * W)
 
     return results
 

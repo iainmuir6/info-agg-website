@@ -33,31 +33,57 @@ CRYPTO_SYMBOL_MAP = {
     'XRP': 'BINANCE:XRPUSDT',
 }
 
-# Finnhub free tier: 60 API calls/minute — sliding-window rate limiter
-_FH_CALL_TIMES: deque = deque()
+# Finnhub free tier: 60 API calls/minute per key — per-key sliding-window rate limiters
 _FH_RATE_LIMIT = 60
 _FH_WINDOW = 60.0
-_FH_LOCK = threading.Lock()
+_FH_CALL_TIMES: Dict[str, deque] = {}
+_FH_KEY_LOCKS: Dict[str, threading.Lock] = {}
+_FH_INIT_LOCK = threading.Lock()
+
+# Round-robin key selector
+_fh_key_index: int = 0
+_fh_key_rotation_lock = threading.Lock()
 
 
-def _fh_rate_limit() -> None:
-    """Sleep only if we're about to exceed 60 req/min on Finnhub."""
-    with _FH_LOCK:
+def _fh_rate_limit(key: str) -> None:
+    """Sleep only if we're about to exceed 60 req/min for this Finnhub key."""
+    if key not in _FH_KEY_LOCKS:
+        with _FH_INIT_LOCK:
+            if key not in _FH_KEY_LOCKS:
+                _FH_CALL_TIMES[key] = deque()
+                _FH_KEY_LOCKS[key] = threading.Lock()
+    with _FH_KEY_LOCKS[key]:
+        times = _FH_CALL_TIMES[key]
         now = time.time()
-        while _FH_CALL_TIMES and now - _FH_CALL_TIMES[0] >= _FH_WINDOW:
-            _FH_CALL_TIMES.popleft()
-        if len(_FH_CALL_TIMES) >= _FH_RATE_LIMIT:
-            sleep_for = _FH_WINDOW - (now - _FH_CALL_TIMES[0]) + 0.05
+        while times and now - times[0] >= _FH_WINDOW:
+            times.popleft()
+        if len(times) >= _FH_RATE_LIMIT:
+            sleep_for = _FH_WINDOW - (now - times[0]) + 0.05
             if sleep_for > 0:
                 time.sleep(sleep_for)
-        _FH_CALL_TIMES.append(time.time())
+        times.append(time.time())
+
+
+def get_finnhub_api_keys() -> List[str]:
+    """Return all configured Finnhub API keys."""
+    keys = []
+    for suffix in ['', '_2', '_3']:
+        k = os.getenv(f'FINNHUB_API_KEY{suffix}')
+        if k and k not in keys:
+            keys.append(k)
+    if not keys:
+        raise ValueError("No FINNHUB_API_KEY* found in environment variables")
+    return keys
 
 
 def get_finnhub_api_key() -> str:
-    api_key = os.getenv('FINNHUB_API_KEY')
-    if not api_key:
-        raise ValueError("FINNHUB_API_KEY not found in environment variables")
-    return api_key
+    """Return the next Finnhub key in round-robin rotation across all configured keys."""
+    global _fh_key_index
+    keys = get_finnhub_api_keys()
+    with _fh_key_rotation_lock:
+        key = keys[_fh_key_index % len(keys)]
+        _fh_key_index += 1
+    return key
 
 
 def fetch_stock_quote(ticker: str, api_key: Optional[str] = None) -> Optional[Dict[str, Any]]:
@@ -74,7 +100,7 @@ def fetch_stock_quote(ticker: str, api_key: Optional[str] = None) -> Optional[Di
     params = {'symbol': ticker, 'token': api_key}
 
     try:
-        _fh_rate_limit()
+        _fh_rate_limit(api_key)
         response = requests.get(url, params=params, timeout=10)
         response.raise_for_status()
         data = response.json()
@@ -151,7 +177,7 @@ def fetch_company_profile(ticker: str, api_key: Optional[str] = None) -> Optiona
     params = {'symbol': ticker, 'token': api_key}
 
     try:
-        _fh_rate_limit()
+        _fh_rate_limit(api_key)
         response = requests.get(url, params=params, timeout=10)
         response.raise_for_status()
         data = response.json()
@@ -195,7 +221,7 @@ def fetch_etf_profile(ticker: str, api_key: Optional[str] = None) -> Optional[Di
     params = {'symbol': ticker, 'token': api_key}
 
     try:
-        _fh_rate_limit()
+        _fh_rate_limit(api_key)
         response = requests.get(url, params=params, timeout=10)
         response.raise_for_status()
         data = response.json()
@@ -247,7 +273,7 @@ def fetch_company_news(
     }
 
     try:
-        _fh_rate_limit()
+        _fh_rate_limit(api_key)
         response = requests.get(url, params=params, timeout=10)
         response.raise_for_status()
         data = response.json()
@@ -284,7 +310,7 @@ def fetch_market_news(category: str = 'general', min_id: int = 0, api_key: Optio
     params = {'category': category, 'minId': min_id, 'token': api_key}
 
     try:
-        _fh_rate_limit()
+        _fh_rate_limit(api_key)
         response = requests.get(url, params=params, timeout=10)
         response.raise_for_status()
         data = response.json()
@@ -321,7 +347,7 @@ def fetch_recommendation_trends(ticker: str, api_key: Optional[str] = None) -> L
     params = {'symbol': ticker, 'token': api_key}
 
     try:
-        _fh_rate_limit()
+        _fh_rate_limit(api_key)
         response = requests.get(url, params=params, timeout=10)
         response.raise_for_status()
         data = response.json()
@@ -357,7 +383,7 @@ def fetch_country_metadata(api_key: Optional[str] = None) -> List[Dict[str, Any]
     params = {'token': api_key}
 
     try:
-        _fh_rate_limit()
+        _fh_rate_limit(api_key)
         response = requests.get(url, params=params, timeout=10)
         response.raise_for_status()
         data = response.json()
@@ -393,7 +419,7 @@ def fetch_usa_spending(api_key: Optional[str] = None) -> Optional[Dict[str, Any]
     params = {'token': api_key}
 
     try:
-        _fh_rate_limit()
+        _fh_rate_limit(api_key)
         response = requests.get(url, params=params, timeout=10)
         response.raise_for_status()
         return {'data': response.json(), 'fetched_at': datetime.now().isoformat()}

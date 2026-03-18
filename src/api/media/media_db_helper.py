@@ -5,6 +5,7 @@
 # Date: 2026-03-04
 # Description: Helper functions to insert media data into Supabase database
 
+from datetime import datetime, timezone
 from typing import Dict, List, Optional, Any
 from supabase import create_client, Client
 from supabase import ClientOptions
@@ -47,60 +48,51 @@ def insert_spotify_releases(supabase: Client, albums: List[Dict[str, Any]]) -> i
     if not albums:
         return 0
 
-    inserted_count = 0
-
+    records = []
     for album in albums:
-        try:
-            # Extract best image (highest resolution)
-            images = album.get('images', [])
-            image_url = None
-            if images:
-                # Prefer ~640px width image, or the largest available
-                for img in images:
-                    if img.get('width', 0) >= 300:
-                        image_url = img.get('url')
-                        break
-                if not image_url and images:
-                    image_url = images[0].get('url')
+        spotify_id = album.get('album_id') or album.get('id')
+        if not spotify_id:
+            continue
 
-            # Extract artist names as text array
-            artist_names = [a.get('name') for a in album.get('artists', []) if a.get('name')]
+        images = album.get('images', [])
+        image_url = None
+        if images:
+            for img in images:
+                if img.get('width', 0) >= 300:
+                    image_url = img.get('url')
+                    break
+            if not image_url:
+                image_url = images[0].get('url')
 
-            # Parse release_date (may be YYYY, YYYY-MM, or YYYY-MM-DD)
-            release_date = album.get('release_date')
-            precision = album.get('release_date_precision', 'day')
-            if release_date and precision == 'year':
-                release_date = f"{release_date}-01-01"
-            elif release_date and precision == 'month':
-                release_date = f"{release_date}-01"
+        artist_names = [a.get('name') for a in album.get('artists', []) if a.get('name')]
 
-            spotify_id = album.get('album_id') or album.get('id')
-            if not spotify_id:
-                continue
+        release_date = album.get('release_date')
+        precision = album.get('release_date_precision', 'day')
+        if release_date and precision == 'year':
+            release_date = f"{release_date}-01-01"
+        elif release_date and precision == 'month':
+            release_date = f"{release_date}-01"
 
-            insert_data = {
-                'spotify_id': spotify_id,
-                'name': album.get('name'),
-                'artists': artist_names,
-                'album_type': album.get('album_type'),
-                'release_date': release_date,
-                'image_url': image_url,
-                'external_url': album.get('external_urls', {}).get('spotify'),
-                'total_tracks': album.get('total_tracks'),
-            }
+        records.append({
+            'spotify_id': spotify_id,
+            'name': album.get('name'),
+            'artists': artist_names,
+            'album_type': album.get('album_type'),
+            'release_date': release_date,
+            'image_url': image_url,
+            'external_url': album.get('external_urls', {}).get('spotify'),
+            'total_tracks': album.get('total_tracks'),
+        })
 
-            response = supabase.table('spotify_releases').upsert(
-                insert_data,
-                on_conflict='spotify_id'
-            ).execute()
+    if not records:
+        return 0
 
-            if response.data:
-                inserted_count += 1
-
-        except Exception as e:
-            print(f"Error inserting Spotify release '{album.get('name', 'unknown')}': {e}")
-
-    return inserted_count
+    try:
+        response = supabase.table('spotify_releases').upsert(records, on_conflict='spotify_id').execute()
+        return len(response.data) if response.data else 0
+    except Exception as e:
+        print(f"Error batch-upserting Spotify releases: {e}")
+        return 0
 
 
 def insert_reddit_posts(supabase: Client, posts: List[Dict[str, Any]]) -> int:
@@ -117,58 +109,49 @@ def insert_reddit_posts(supabase: Client, posts: List[Dict[str, Any]]) -> int:
     if not posts:
         return 0
 
-    inserted_count = 0
-
+    records = []
     for post in posts:
-        try:
-            post_id = post.get('post_id')
-            permalink = post.get('permalink', '')
-            if not post_id:
-                continue
+        post_id = post.get('post_id')
+        title = post.get('title')
+        subreddit = post.get('subreddit')
+        if not post_id or not title or not subreddit:
+            continue
 
-            # Handle thumbnail URL
-            thumbnail = post.get('thumbnail')
-            thumbnail_url = thumbnail if thumbnail and thumbnail.startswith('http') else None
+        thumbnail = post.get('thumbnail')
+        thumbnail_url = thumbnail if thumbnail and thumbnail.startswith('http') else None
 
-            # Convert Unix timestamp to ISO
-            created_utc = post.get('created_utc')
-            posted_at = None
-            if created_utc:
-                from datetime import datetime, timezone
-                posted_at = datetime.fromtimestamp(created_utc, tz=timezone.utc).isoformat()
+        created_utc = post.get('created_utc')
+        posted_at = (
+            datetime.fromtimestamp(created_utc, tz=timezone.utc).isoformat()
+            if created_utc else None
+        )
 
-            insert_data = {
-                'post_id': post_id,
-                'subreddit': post.get('subreddit'),
-                'title': post.get('title'),
-                'author': post.get('author'),
-                'score': post.get('score', 0),
-                'upvote_ratio': post.get('upvote_ratio'),
-                'num_comments': post.get('num_comments', 0),
-                'url': post.get('url'),
-                'permalink': permalink,
-                'selftext': (post.get('selftext') or '')[:2000],  # Truncate long self-posts
-                'thumbnail_url': thumbnail_url,
-                'is_self': post.get('is_self', False),
-                'flair': post.get('link_flair_text') or post.get('flair'),
-                'posted_at': posted_at,
-            }
+        records.append({
+            'post_id': post_id,
+            'subreddit': subreddit,
+            'title': title,
+            'author': post.get('author'),
+            'score': post.get('score', 0),
+            'upvote_ratio': post.get('upvote_ratio'),
+            'num_comments': post.get('num_comments', 0),
+            'url': post.get('url'),
+            'permalink': post.get('permalink', ''),
+            'selftext': (post.get('selftext') or '')[:2000],
+            'thumbnail_url': thumbnail_url,
+            'is_self': post.get('is_self', False),
+            'flair': post.get('link_flair_text') or post.get('flair'),
+            'posted_at': posted_at,
+        })
 
-            if not insert_data.get('title') or not insert_data.get('subreddit'):
-                continue
+    if not records:
+        return 0
 
-            response = supabase.table('reddit_posts').upsert(
-                insert_data,
-                on_conflict='post_id'
-            ).execute()
-
-            if response.data:
-                inserted_count += 1
-
-        except Exception as e:
-            print(f"Error inserting Reddit post '{post.get('title', 'unknown')}': {e}")
-
-    return inserted_count
+    try:
+        response = supabase.table('reddit_posts').upsert(records, on_conflict='post_id').execute()
+        return len(response.data) if response.data else 0
+    except Exception as e:
+        print(f"Error batch-upserting Reddit posts: {e}")
+        return 0
 
 
 def sync_spotify_data(supabase: Client) -> Dict[str, Any]:
@@ -196,23 +179,15 @@ def sync_spotify_data(supabase: Client) -> Dict[str, Any]:
     }
 
     try:
-        print("Getting Spotify access token...")
         access_token = get_spotify_access_token()
         if not access_token:
             stats['errors'].append("Failed to get Spotify access token")
             return stats
-
-        print("Fetching Spotify new releases...")
         result = fetch_spotify_new_releases(country='US', limit=50, access_token=access_token)
         if result and result.get('albums'):
-            count = insert_spotify_releases(supabase, result['albums'])
-            stats['releases_inserted'] = count
-            print(f"  Inserted {count} Spotify releases")
-
+            stats['releases_inserted'] = insert_spotify_releases(supabase, result['albums'])
     except Exception as e:
-        error_msg = f"Error syncing Spotify data: {e}"
-        stats['errors'].append(error_msg)
-        print(error_msg)
+        stats['errors'].append(f"Error syncing Spotify data: {e}")
 
     return stats
 
@@ -246,23 +221,21 @@ def sync_reddit_data(supabase: Client, subreddits: Optional[List[str]] = None) -
         'errors': []
     }
 
+    # Phase 1: Fetch all subreddits sequentially — 1 Reddit credential set means no
+    # concurrent requests. Collect all posts first, then write once.
+    all_posts: List[Dict] = []
     for subreddit in subreddits:
         try:
-            print(f"Fetching Reddit hot posts from r/{subreddit}...")
             posts = fetch_reddit_hot(subreddit=subreddit, limit=25)
             if posts:
-                count = insert_reddit_posts(supabase, posts)
-                stats['posts_inserted'] += count
+                all_posts.extend(posts)
                 stats['subreddits_processed'] += 1
-                print(f"  Inserted {count} posts from r/{subreddit}")
-
-            import time
-            time.sleep(1)  # Be respectful to Reddit's rate limits
-
         except Exception as e:
-            error_msg = f"Error fetching r/{subreddit}: {e}"
-            stats['errors'].append(error_msg)
-            print(error_msg)
+            stats['errors'].append(f"Error fetching r/{subreddit}: {e}")
+
+    # Phase 2: Single batch upsert for all posts.
+    if all_posts:
+        stats['posts_inserted'] = insert_reddit_posts(supabase, all_posts)
 
     return stats
 

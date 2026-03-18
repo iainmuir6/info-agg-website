@@ -5,11 +5,11 @@
 # Date: 2026-03-04
 # Description: Helper functions to insert news data into Supabase database
 
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Dict, List, Optional, Any
 from supabase import create_client, Client
 from supabase import ClientOptions
 import os
+import time
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -60,7 +60,7 @@ def _extract_nyt_popular_image(article: Dict[str, Any]) -> Optional[str]:
 
 def insert_nyt_articles(supabase: Client, articles: List[Dict[str, Any]], source_type: str = 'top_stories') -> int:
     """
-    Insert NYT article records into the news_articles table.
+    Batch-upsert NYT article records into the news_articles table (single DB round-trip).
 
     Args:
         supabase: Supabase client instance
@@ -73,47 +73,53 @@ def insert_nyt_articles(supabase: Client, articles: List[Dict[str, Any]], source
     if not articles:
         return 0
 
-    inserted_count = 0
-
+    records = []
     for article in articles:
-        try:
-            if source_type == 'top_stories':
-                image_url = _extract_nyt_image(article)
-                published_at = article.get('published_date') or article.get('created_date')
-            else:
-                image_url = _extract_nyt_popular_image(article)
-                published_at = article.get('published_date')
+        if source_type == 'top_stories':
+            image_url = _extract_nyt_image(article)
+            published_at = article.get('published_date') or article.get('created_date')
+        else:
+            image_url = _extract_nyt_popular_image(article)
+            published_at = article.get('published_date')
 
-            insert_data = {
-                'source': 'nyt',
-                'section': article.get('section'),
-                'title': article.get('title'),
-                'abstract': article.get('abstract'),
-                'byline': article.get('byline'),
-                'url': article.get('url'),
-                'image_url': image_url,
-                'published_at': published_at,
-            }
+        url = article.get('url')
+        title = article.get('title')
+        if not url or not title:
+            continue
 
-            if not insert_data.get('url') or not insert_data.get('title'):
-                continue
+        records.append({
+            'source': 'nyt',
+            'section': article.get('section'),
+            'title': title,
+            'abstract': article.get('abstract'),
+            'byline': article.get('byline'),
+            'url': url,
+            'image_url': image_url,
+            'published_at': published_at,
+        })
 
-            response = supabase.table('news_articles').upsert(
-                insert_data,
-                on_conflict='url'
-            ).execute()
+    if not records:
+        return 0
 
-            if response.data:
-                inserted_count += 1
+    # Deduplicate by URL — same article can appear in multiple sections; the batch upsert
+    # will error if the same URL appears twice in a single command.
+    seen: set = set()
+    deduped = []
+    for r in records:
+        if r['url'] not in seen:
+            seen.add(r['url'])
+            deduped.append(r)
 
-        except Exception as e:
-            print(f"Error inserting NYT article '{article.get('title', 'unknown')}': {e}")
+    try:
+        response = supabase.table('news_articles').upsert(deduped, on_conflict='url').execute()
+        return len(response.data) if response.data else 0
+    except Exception as e:
+        print(f"Error batch-upserting NYT articles: {e}")
+        return 0
 
-    return inserted_count
 
 
-
-def sync_nyt_data(supabase: Client, sections: Optional[List[str]] = None) -> Dict[str, Any]:
+def sync_nyt_data(supabase: Client, sections: List[str]) -> Dict[str, Any]:
     """
     Sync NYT top stories for given sections to the database.
 
@@ -133,47 +139,38 @@ def sync_nyt_data(supabase: Client, sections: Optional[List[str]] = None) -> Dic
             sys.path.insert(0, current_dir)
         from nyt import fetch_nyt_top_stories, fetch_nyt_most_popular
 
-    if sections is None:
-        sections = ['home', 'technology', 'business', 'science', 'health', 'sports', 'arts', 'world', 'politics', 'us']
-
     stats = {
         'sections_processed': 0,
         'articles_inserted': 0,
         'errors': []
     }
 
-    def _fetch_section(section: str) -> tuple:
-        print(f"Fetching NYT top stories for section: {section}...")
-        result = fetch_nyt_top_stories(section=section)
-        count = 0
-        if result and result.get('articles'):
-            count = insert_nyt_articles(supabase, result['articles'], source_type='top_stories')
-            print(f"  Inserted {count} articles for '{section}'")
-        return section, count
+    # Phase 1: Fetch all sections sequentially — 1 NYT key means no concurrent requests.
+    top_stories_articles: List[Dict] = []
+    popular_articles: List[Dict] = []
 
-    with ThreadPoolExecutor(max_workers=3) as executor:  # NYT allows 10 req/min; 3 concurrent avoids 429s
-        futures = {executor.submit(_fetch_section, s): s for s in sections}
-        for future in as_completed(futures):
-            section = futures[future]
-            try:
-                _, count = future.result()
-                stats['articles_inserted'] += count
-                stats['sections_processed'] += 1
-            except Exception as e:
-                error_msg = f"Error fetching NYT section '{section}': {e}"
-                stats['errors'].append(error_msg)
-                print(error_msg)
+    for section in sections:
+        try:
+            result = fetch_nyt_top_stories(section=section)
+            if result and result.get('articles'):
+                top_stories_articles.extend(result['articles'])
+            stats['sections_processed'] += 1
+        except Exception as e:
+            stats['errors'].append(f"Error fetching NYT section '{section}': {e}")
+        time.sleep(1.1)
 
-    # Fetch most popular (viewed over 7 days)
     try:
-        print("Fetching NYT most popular (7-day viewed)...")
         popular = fetch_nyt_most_popular(type='viewed', period=7)
         if popular and popular.get('articles'):
-            count = insert_nyt_articles(supabase, popular['articles'], source_type='most_popular')
-            stats['articles_inserted'] += count
-            print(f"  Inserted {count} most-popular articles")
+            popular_articles = popular['articles']
     except Exception as e:
         stats['errors'].append(f"Error fetching NYT most popular: {e}")
+
+    # Phase 2: Single batch upsert per article type.
+    if top_stories_articles:
+        stats['articles_inserted'] += insert_nyt_articles(supabase, top_stories_articles, source_type='top_stories')
+    if popular_articles:
+        stats['articles_inserted'] += insert_nyt_articles(supabase, popular_articles, source_type='most_popular')
 
     return stats
 

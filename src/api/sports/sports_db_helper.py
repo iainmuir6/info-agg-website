@@ -54,99 +54,92 @@ def get_league_id(supabase: Client, sport: str, league: str) -> Optional[str]:
 
 def insert_news_articles(supabase: Client, league_id: str, articles: List[Dict[str, Any]]) -> int:
     """
-    Insert news articles into the database
-    
+    Batch-upsert news articles into the database (single DB round-trip).
+
     Args:
         supabase: Supabase client instance
         league_id: League ID from leagues table
         articles: List of article dictionaries from fetch_espn_news()
-    
+
     Returns:
         Number of articles successfully inserted
     """
     if not articles:
         return 0
-    
-    inserted_count = 0
-    
+
+    records = []
     for article in articles:
-        try:
-            # Prepare data for upsert
-            news_data = {
-                'league_id': league_id,
-                'title': article.get('title'),
-                'description': article.get('description'),
-                'url': article.get('url'),
-                'published_at': article.get('published_at'),
-                'source': article.get('source', 'ESPN'),
-                'image_url': article.get('image')
-            }
+        url = article.get('url')
+        if not url:
+            continue
+        records.append({
+            'league_id': league_id,
+            'title': article.get('title'),
+            'description': article.get('description'),
+            'url': url,
+            'published_at': article.get('published_at'),
+            'source': article.get('source', 'ESPN'),
+            'image_url': article.get('image'),
+        })
 
-            response = supabase.table('sports_news').upsert(
-                news_data,
-                on_conflict='url'
-            ).execute()
-            if response.data:
-                inserted_count += 1
+    if not records:
+        return 0
 
-        except Exception as e:
-            print(f"Error upserting news article: {e}")
-    
-    return inserted_count
+    try:
+        response = supabase.table('sports_news').upsert(records, on_conflict='url').execute()
+        return len(response.data) if response.data else 0
+    except Exception as e:
+        print(f"Error batch-upserting sports news: {e}")
+        return 0
 
 
 def insert_scores(supabase: Client, league_id: str, games: List[Dict[str, Any]]) -> int:
     """
-    Insert game scores/schedule into the database
-    
+    Batch-upsert game scores/schedule into the database (single DB round-trip).
+
     Args:
         supabase: Supabase client instance
         league_id: League ID from leagues table
         games: List of game dictionaries from fetch_espn_scores()
-    
+
     Returns:
         Number of games successfully inserted
     """
     if not games:
         return 0
-    
-    inserted_count = 0
-    
+
+    records = []
     for game in games:
-        try:
-            # Prepare data for insertion
-            score_data = {
-                'league_id': league_id,
-                'event_id': str(game.get('event_id')),
-                'home_team': game.get('home_team'),
-                'away_team': game.get('away_team'),
-                'home_score': game.get('home_score'),
-                'away_score': game.get('away_score'),
-                'home_record': game.get('home_record'),
-                'away_record': game.get('away_record'),
-                'status': game.get('status'),
-                'status_detail': game.get('status_detail'),
-                'game_date': game.get('date'),
-                'venue': game.get('venue'),
-                'broadcast': game.get('broadcast'),
-                'week': game.get('week'),
-                'season': game.get('season')
-            }
-            
-            # Insert with ON CONFLICT DO UPDATE to handle duplicates
-            response = supabase.table('sports_scores').upsert(
-                score_data,
-                on_conflict='league_id,event_id'
-            ).execute()
-            
-            if response.data:
-                inserted_count += 1
-                
-        except Exception as e:
-            print(f"Error inserting game score: {e}")
-            print(f"Game data: {game}")
-    
-    return inserted_count
+        event_id = game.get('event_id')
+        if not event_id:
+            continue
+        records.append({
+            'league_id': league_id,
+            'event_id': str(event_id),
+            'home_team': game.get('home_team'),
+            'away_team': game.get('away_team'),
+            'home_score': game.get('home_score'),
+            'away_score': game.get('away_score'),
+            'home_record': game.get('home_record'),
+            'away_record': game.get('away_record'),
+            'status': game.get('status'),
+            'status_detail': game.get('status_detail'),
+            'game_date': game.get('date'),
+            'venue': game.get('venue'),
+            'broadcast': game.get('broadcast'),
+            'week': game.get('week'),
+            'season': game.get('season'),
+        })
+
+    if not records:
+        return 0
+
+    try:
+        response = supabase.table('sports_scores').upsert(records, on_conflict='league_id,event_id').execute()
+        return len(response.data) if response.data else 0
+    except Exception as e:
+        print(f"Error batch-upserting sports scores: {e}")
+        return 0
 
 
 def sync_all_sports_data(supabase: Client, news_limit_per_sport: int = 20) -> Dict[str, Any]:
@@ -179,35 +172,32 @@ def sync_all_sports_data(supabase: Client, news_limit_per_sport: int = 20) -> Di
         'scores_inserted': 0,
         'errors': []
     }
-    
+
+    # Prefetch all league IDs in one query — avoids N sequential DB reads in the hot loop
+    try:
+        resp = supabase.table('leagues').select('id,sport,league').execute()
+        league_id_map = {(r['sport'], r['league']): r['id'] for r in (resp.data or [])}
+    except Exception as e:
+        stats['errors'].append(f"Failed to prefetch league IDs: {e}")
+        return stats
+
     for sport, league in SPORT_CONFIGS:
         try:
-            # Get league ID
-            league_id = get_league_id(supabase, sport, league)
+            league_id = league_id_map.get((sport, league))
             if not league_id:
                 stats['errors'].append(f"League ID not found for {sport}/{league}")
                 continue
-            
+
             stats['leagues_processed'] += 1
-            
-            # Fetch and insert news
-            print(f"Fetching news for {sport}/{league}...")
+
             articles = fetch_espn_news(sport, league, limit=news_limit_per_sport)
-            news_count = insert_news_articles(supabase, league_id, articles)
-            stats['news_inserted'] += news_count
-            print(f"  Inserted {news_count} news articles")
-            
-            # Fetch and insert scores
-            print(f"Fetching scores for {sport}/{league}...")
+            stats['news_inserted'] += insert_news_articles(supabase, league_id, articles)
+
             games = fetch_espn_scores(sport, league)
-            scores_count = insert_scores(supabase, league_id, games)
-            stats['scores_inserted'] += scores_count
-            print(f"  Inserted {scores_count} games/scores")
-            
+            stats['scores_inserted'] += insert_scores(supabase, league_id, games)
+
         except Exception as e:
-            error_msg = f"Error processing {sport}/{league}: {e}"
-            stats['errors'].append(error_msg)
-            print(error_msg)
+            stats['errors'].append(f"Error processing {sport}/{league}: {e}")
     
     return stats
 

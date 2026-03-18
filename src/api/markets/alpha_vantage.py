@@ -413,86 +413,70 @@ def fetch_etf_holdings_av(symbol: str, api_key: Optional[str] = None) -> List[Di
 # News Sentiment Endpoints - DAILY RUN
 # ================================================================================================
 def fetch_news_sentiment(
+    api_key: str,
     tickers: Optional[List[str]] = None,
     topic: Optional[str] = None,
-    api_key: Optional[str] = None
 ) -> List[Dict[str, Any]]:
-    """Fetch news sentiment analysis from Alpha Vantage NEWS_SENTIMENT endpoint.
+    """Fetch news sentiment from Alpha Vantage NEWS_SENTIMENT for a single topic.
 
-    Uses the same key-rotation + per-key rate limiting as fetch_stock_candles_av.
+    Uses the assigned key only — no rotation. Caller is responsible for key assignment.
 
     Args:
+        api_key: The specific AV API key to use for this request.
         tickers: Optional list of ticker symbols to filter by (max 50).
         topic: Optional single topic filter (e.g. 'earnings', 'technology').
-        api_key: Optional specific key; if None, rotates across all configured keys.
     """
-    keys = _get_keys_round_robin(api_key)
+    _av_rate_limit(api_key)
 
-    last_err = None
-    for key in keys:
-        _av_rate_limit(key)
+    params: Dict[str, Any] = {'function': 'NEWS_SENTIMENT', 'apikey': api_key}
+    if tickers:
+        params['tickers'] = ','.join(tickers[:50])
+    if topic:
+        params['topics'] = topic
 
-        params: Dict[str, Any] = {'function': 'NEWS_SENTIMENT', 'apikey': key}
-        if tickers:
-            params['tickers'] = ','.join(tickers[:50])
-        if topic:
-            params['topics'] = topic
+    try:
+        response = requests.get(ALPHA_VANTAGE_BASE_URL, params=params, timeout=15)
+        response.raise_for_status()
+        data = response.json()
 
-        try:
-            response = requests.get(ALPHA_VANTAGE_BASE_URL, params=params, timeout=15)
-            response.raise_for_status()
-            data = response.json()
-
-            if 'Note' in data or 'Information' in data:
-                msg = data.get('Note') or data.get('Information', '')
-                print(f"  Alpha Vantage key rotation triggered (sentiment): {msg[:80]}")
-                last_err = msg
-                continue
-
-            if 'Error Message' in data:
-                print(f"  Alpha Vantage error (sentiment): {data['Error Message']}")
-                return []
-
-            articles = []
-            for article in data.get('feed', []):
-                ticker_sentiments = [
-                    {
-                        'ticker': td.get('ticker'),
-                        'relevance_score': td.get('relevance_score'),
-                        'sentiment_score': td.get('ticker_sentiment_score'),
-                        'sentiment_label': td.get('ticker_sentiment_label')
-                    }
-                    for td in article.get('ticker_sentiment', [])
-                ]
-                articles.append({
-                    'title': article.get('title'),
-                    'url': article.get('url'),
-                    'time_published': article.get('time_published'),
-                    'authors': article.get('authors', []),
-                    'summary': article.get('summary'),
-                    'banner_image': article.get('banner_image'),
-                    'source': article.get('source'),
-                    'category_within_source': article.get('category_within_source'),
-                    'source_domain': article.get('source_domain'),
-                    'topics': article.get('topics', []),
-                    'overall_sentiment_score': article.get('overall_sentiment_score', 0),
-                    'overall_sentiment_label': article.get('overall_sentiment_label', 'Neutral'),
-                    'ticker_sentiments': ticker_sentiments,
-                    'fetched_at': datetime.now().isoformat()
-                })
-
-            return articles
-
-        except requests.exceptions.RequestException as e:
-            last_err = str(e)
-            print(f"  Alpha Vantage request error (sentiment): {e}")
-            continue
-        except Exception as e:
-            print(f"  Alpha Vantage parse error (sentiment): {e}")
+        if 'Note' in data or 'Information' in data:
             return []
 
-    print(f"  All Alpha Vantage keys exhausted (sentiment). Last error: {last_err}")
-    return []
+        if 'Error Message' in data:
+            return []
+
+        articles = []
+        for article in data.get('feed', []):
+            ticker_sentiments = [
+                {
+                    'ticker': td.get('ticker'),
+                    'relevance_score': td.get('relevance_score'),
+                    'sentiment_score': td.get('ticker_sentiment_score'),
+                    'sentiment_label': td.get('ticker_sentiment_label')
+                }
+                for td in article.get('ticker_sentiment', [])
+            ]
+            articles.append({
+                'title': article.get('title'),
+                'url': article.get('url'),
+                'time_published': article.get('time_published'),
+                'authors': article.get('authors', []),
+                'summary': article.get('summary'),
+                'banner_image': article.get('banner_image'),
+                'source': article.get('source'),
+                'category_within_source': article.get('category_within_source'),
+                'source_domain': article.get('source_domain'),
+                'topics': article.get('topics', []),
+                'overall_sentiment_score': article.get('overall_sentiment_score', 0),
+                'overall_sentiment_label': article.get('overall_sentiment_label', 'Neutral'),
+                'ticker_sentiments': ticker_sentiments,
+                'fetched_at': datetime.now().isoformat()
+            })
+
+        return articles
+
+    except Exception:
+        return []
 
 
 # ================================================================================================
@@ -636,15 +620,6 @@ if __name__ == "__main__":
     print("=" * 60)
     print("Testing Alpha Vantage API")
     print("=" * 60)
-
-    print("\n--- Daily Candles (AAPL, 30d) ---")
-    candles = fetch_stock_candles_av('AAPL', days_back=30)
-    if candles:
-        print(f"  {len(candles['timestamps'])} bars returned")
-
-    print("\n--- Historical Quotes (AAPL, 30d) ---")
-    quotes = fetch_historical_quotes('AAPL', days_back=30)
-    print(f"  {len(quotes)} quote records")
 
     print("\n--- News Sentiment (topic=earnings) ---")
     sentiment = fetch_news_sentiment(topic='earnings')

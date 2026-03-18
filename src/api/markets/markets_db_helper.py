@@ -6,14 +6,74 @@
 # Description: Helper functions to insert market data into Supabase database
 
 from typing import Dict, List, Optional, Any
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from supabase import create_client, Client
 from supabase import ClientOptions
 from datetime import datetime, timezone
 import os
+import sys
 import time
 from dotenv import load_dotenv
 
 load_dotenv()
+
+_HERE = os.path.dirname(os.path.abspath(__file__))
+if _HERE not in sys.path:
+    sys.path.insert(0, _HERE)
+
+try:
+    from .finnhub import (
+        fetch_stock_quote,
+        fetch_company_profile,
+        fetch_company_news,
+        fetch_crypto_quote,
+        get_finnhub_api_key,
+        fetch_market_news,
+    )
+except ImportError:
+    from finnhub import (
+        fetch_stock_quote,
+        fetch_company_profile,
+        fetch_company_news,
+        fetch_crypto_quote,
+        get_finnhub_api_key,
+        fetch_market_news,
+    )
+
+try:
+    from .fmp import (
+        fetch_company_profile as fmp_profile,
+        get_fmp_api_key,
+        fetch_fmp_quote,
+        fetch_treasury_rates,
+        fetch_economic_indicator,
+    )
+except ImportError:
+    from fmp import (
+        fetch_company_profile as fmp_profile,
+        get_fmp_api_key,
+        fetch_fmp_quote,
+        fetch_treasury_rates,
+        fetch_economic_indicator,
+    )
+
+try:
+    from .alpha_vantage import (
+        fetch_etf_holdings_av,
+        fetch_news_sentiment,
+        get_alphavantage_api_keys,
+    )
+except ImportError:
+    from alpha_vantage import (
+        fetch_etf_holdings_av,
+        fetch_news_sentiment,
+        get_alphavantage_api_keys,
+    )
+
+try:
+    from .etfdb import scrape_all_etfs
+except ImportError:
+    from etfdb import scrape_all_etfs
 
 
 def get_supabase_client() -> Client:
@@ -209,89 +269,83 @@ def insert_stock_quotes_batch(supabase: Client, stock_id: str, quotes: List[Dict
 
 def insert_company_news(supabase: Client, stock_id: str, articles: List[Dict[str, Any]]) -> int:
     """
-    Insert company news articles
-    
+    Batch-upsert company news articles (single DB round-trip per ticker).
+
     Args:
         supabase: Supabase client instance
         stock_id: Stock ID from stocks table
         articles: List of article dictionaries from fetch_company_news()
-    
+
     Returns:
         Number of articles inserted
     """
     if not articles:
         return 0
-    
-    inserted_count = 0
-    
+
+    records = []
     for article in articles:
-        try:
-            insert_data = {
-                'stock_id': stock_id,
-                'headline': article.get('headline'),
-                'summary': article.get('summary'),
-                'url': article.get('url'),
-                'image_url': article.get('image_url'),
-                'source': article.get('source'),
-                'published_at': article.get('published_at'),
-            }
-            
-            # Use upsert to handle duplicates (based on URL)
-            response = supabase.table('company_news').upsert(
-                insert_data,
-                on_conflict='url'
-            ).execute()
-            
-            if response.data:
-                inserted_count += 1
-                
-        except Exception as e:
-            print(f"Error inserting company news article: {e}")
-    
-    return inserted_count
+        url = article.get('url')
+        if not url:
+            continue
+        records.append({
+            'stock_id': stock_id,
+            'headline': article.get('headline'),
+            'summary': article.get('summary'),
+            'url': url,
+            'image_url': article.get('image_url'),
+            'source': article.get('source'),
+            'published_at': article.get('published_at'),
+        })
+
+    if not records:
+        return 0
+
+    try:
+        response = supabase.table('company_news').upsert(records, on_conflict='url').execute()
+        return len(response.data) if response.data else 0
+    except Exception as e:
+        print(f"Error batch-upserting company news: {e}")
+        return 0
 
 
 def insert_market_news(supabase: Client, articles: List[Dict[str, Any]]) -> int:
     """
-    Insert market news articles
-    
+    Batch-upsert market news articles (single DB round-trip).
+
     Args:
         supabase: Supabase client instance
         articles: List of article dictionaries from fetch_market_news()
-    
+
     Returns:
         Number of articles inserted
     """
     if not articles:
         return 0
-    
-    inserted_count = 0
-    
+
+    records = []
     for article in articles:
-        try:
-            insert_data = {
-                'category': article.get('category'),
-                'headline': article.get('headline'),
-                'summary': article.get('summary'),
-                'url': article.get('url'),
-                'image_url': article.get('image_url'),
-                'source': article.get('source'),
-                'published_at': article.get('published_at'),
-            }
-            
-            # Use upsert to handle duplicates (based on URL)
-            response = supabase.table('market_news').upsert(
-                insert_data,
-                on_conflict='url'
-            ).execute()
-            
-            if response.data:
-                inserted_count += 1
-                
-        except Exception as e:
-            print(f"Error inserting market news article: {e}")
-    
-    return inserted_count
+        url = article.get('url')
+        if not url:
+            continue
+        records.append({
+            'category': article.get('category'),
+            'headline': article.get('headline'),
+            'summary': article.get('summary'),
+            'url': url,
+            'image_url': article.get('image_url'),
+            'source': article.get('source'),
+            'published_at': article.get('published_at'),
+        })
+
+    if not records:
+        return 0
+
+    try:
+        response = supabase.table('market_news').upsert(records, on_conflict='url').execute()
+        return len(response.data) if response.data else 0
+    except Exception as e:
+        print(f"Error batch-upserting market news: {e}")
+        return 0
 
 
 def sync_stock_data(
@@ -300,7 +354,8 @@ def sync_stock_data(
     fetch_quotes: bool = True,
     fetch_news: bool = True,
     fetch_profile: bool = True,
-    asset_type: str = 'stock'
+    asset_type: str = 'stock',
+    write_news: bool = True,
 ) -> Dict[str, Any]:
     """
     Sync daily data for a specific stock, ETF, crypto, forex, or commodity asset.
@@ -316,22 +371,6 @@ def sync_stock_data(
     Returns:
         Dictionary with sync statistics
     """
-    try:
-        from .finnhub import (
-            fetch_stock_quote, fetch_company_profile,
-            fetch_company_news, fetch_crypto_quote, get_finnhub_api_key
-        )
-    except ImportError:
-        import sys
-        import os
-        current_dir = os.path.dirname(os.path.abspath(__file__))
-        if current_dir not in sys.path:
-            sys.path.insert(0, current_dir)
-        from finnhub import (
-            fetch_stock_quote, fetch_company_profile,
-            fetch_company_news, fetch_crypto_quote, get_finnhub_api_key
-        )
-
     stats = {
         'ticker': ticker,
         'profile_updated': False,
@@ -343,23 +382,12 @@ def sync_stock_data(
     try:
         # Forex/commodity: stub row + FMP quote only — no profile, no news, no Finnhub
         if asset_type in ('forex', 'commodity'):
-            try:
-                from .fmp import fetch_fmp_quote, get_fmp_api_key
-            except ImportError:
-                import sys
-                import os
-                current_dir = os.path.dirname(os.path.abspath(__file__))
-                if current_dir not in sys.path:
-                    sys.path.insert(0, current_dir)
-                from fmp import fetch_fmp_quote, get_fmp_api_key
-
             stock_id = get_or_create_stock(supabase, ticker, asset_type=asset_type)
             if not stock_id:
                 stats['errors'].append(f"Failed to get/create stock for {ticker}")
                 return stats
 
             if fetch_quotes:
-                print(f"Fetching FMP quote for {ticker} ({asset_type})...")
                 fmp_key = get_fmp_api_key()
                 quote = fetch_fmp_quote(ticker, fmp_key)
                 if quote:
@@ -385,10 +413,7 @@ def sync_stock_data(
         if asset_type == 'crypto':
             stock_id = get_or_create_stock(supabase, ticker, asset_type=asset_type)
         elif fetch_profile:
-            print(f"Fetching profile for {ticker}...")
             profile = fetch_company_profile(ticker, api_key)
-            if not profile:
-                print(f"  No company profile for {ticker} — skipping profile update")
             if profile:
                 stock_id = get_or_create_stock(supabase, ticker, profile, asset_type=asset_type)
                 if stock_id:
@@ -404,7 +429,6 @@ def sync_stock_data(
 
         # Fetch and insert latest quote
         if fetch_quotes:
-            print(f"Fetching quote for {ticker}...")
             if asset_type == 'crypto':
                 quote = fetch_crypto_quote(ticker, api_key)
             else:
@@ -415,17 +439,27 @@ def sync_stock_data(
 
         # Fetch and insert company news (stocks only — skip ETFs, crypto, forex, commodity)
         if fetch_news and asset_type not in ('crypto', 'etf', 'forex', 'commodity'):
-            print(f"Fetching company news for {ticker}...")
             news = fetch_company_news(ticker, days_back=7, api_key=api_key)
             if news:
-                count = insert_company_news(supabase, stock_id, news)
-                stats['news_inserted'] = count
-                print(f"  Inserted {count} news articles")
+                if write_news:
+                    stats['news_inserted'] = insert_company_news(supabase, stock_id, news)
+                else:
+                    # Return pre-shaped rows for the caller to batch-upsert after all threads complete
+                    stats['pending_news'] = [
+                        {
+                            'stock_id': stock_id,
+                            'headline': a.get('headline'),
+                            'summary': a.get('summary'),
+                            'url': a.get('url'),
+                            'image_url': a.get('image_url'),
+                            'source': a.get('source'),
+                            'published_at': a.get('published_at'),
+                        }
+                        for a in news if a.get('url')
+                    ]
 
     except Exception as e:
-        error_msg = f"Error syncing data for {ticker}: {e}"
-        stats['errors'].append(error_msg)
-        print(error_msg)
+        stats['errors'].append(f"Error syncing data for {ticker}: {e}")
 
     return stats
 
@@ -442,16 +476,6 @@ def sync_market_news(supabase: Client, categories: List[str] = ['general'], api_
     Returns:
         Dictionary with sync statistics
     """
-    try:
-        from .finnhub import fetch_market_news, get_finnhub_api_key
-    except ImportError:
-        import sys
-        import os
-        current_dir = os.path.dirname(os.path.abspath(__file__))
-        if current_dir not in sys.path:
-            sys.path.insert(0, current_dir)
-        from finnhub import fetch_market_news, get_finnhub_api_key
-    
     if api_key is None:
         api_key = get_finnhub_api_key()
     
@@ -463,17 +487,12 @@ def sync_market_news(supabase: Client, categories: List[str] = ['general'], api_
     
     for category in categories:
         try:
-            print(f"Fetching {category} market news...")
             articles = fetch_market_news(category, api_key=api_key)
             if articles:
-                count = insert_market_news(supabase, articles)
-                stats['articles_inserted'] += count
+                stats['articles_inserted'] += insert_market_news(supabase, articles)
                 stats['categories_processed'] += 1
-                print(f"  Inserted {count} articles for {category}")
         except Exception as e:
-            error_msg = f"Error fetching {category} news: {e}"
-            stats['errors'].append(error_msg)
-            print(error_msg)
+            stats['errors'].append(f"Error fetching {category} news: {e}")
     
     return stats
 
@@ -615,16 +634,6 @@ def sync_fmp_data(
     Returns:
         Stats dict
     """
-    try:
-        from .fmp import fetch_company_profile as fmp_profile, get_fmp_api_key
-    except ImportError:
-        import sys
-        import os
-        current_dir = os.path.dirname(os.path.abspath(__file__))
-        if current_dir not in sys.path:
-            sys.path.insert(0, current_dir)
-        from fmp import fetch_company_profile as fmp_profile, get_fmp_api_key
-
     stats: Dict[str, Any] = {
         'profiles_updated': 0,
         'etf_info_updated': 0,
@@ -691,16 +700,6 @@ def sync_av_etf_holdings(supabase: Client, etf_tickers: List[str]) -> Dict[str, 
     Returns:
         Stats dict: etfs_processed, holdings_upserted, errors
     """
-    try:
-        from .alpha_vantage import fetch_etf_holdings_av
-    except ImportError:
-        import sys
-        import os
-        current_dir = os.path.dirname(os.path.abspath(__file__))
-        if current_dir not in sys.path:
-            sys.path.insert(0, current_dir)
-        from alpha_vantage import fetch_etf_holdings_av
-
     stats: Dict[str, Any] = {
         'etfs_processed': 0,
         'holdings_upserted': 0,
@@ -773,26 +772,6 @@ def sync_etfdb_data(supabase: Client, etf_tickers: List[str]) -> Dict[str, Any]:
     Returns:
         Stats dict: etf_info_updated, etf_holdings_upserted, fmp_fallbacks, errors
     """
-    try:
-        from .etfdb import scrape_all_etfs
-    except ImportError:
-        import sys
-        import os
-        current_dir = os.path.dirname(os.path.abspath(__file__))
-        if current_dir not in sys.path:
-            sys.path.insert(0, current_dir)
-        from etfdb import scrape_all_etfs
-
-    try:
-        from .fmp import fetch_company_profile as fmp_profile, get_fmp_api_key
-    except ImportError:
-        import sys
-        import os
-        current_dir = os.path.dirname(os.path.abspath(__file__))
-        if current_dir not in sys.path:
-            sys.path.insert(0, current_dir)
-        from fmp import fetch_company_profile as fmp_profile, get_fmp_api_key
-
     stats: Dict[str, Any] = {
         'etf_info_updated': 0,
         'etf_holdings_upserted': 0,
@@ -944,7 +923,11 @@ def sync_news_sentiment(
     tickers: Optional[List[str]] = None
 ) -> Dict[str, Any]:
     """
-    Fetch and store AV news sentiment for each topic in the list.
+    Fetch and store AV news sentiment using one worker per API key.
+
+    Topics are distributed round-robin across workers. Each worker fetches its
+    assigned topics sequentially with a 1s sleep between requests. After all workers
+    complete, articles are aggregated, deduplicated by URL, and batch-upserted.
 
     Args:
         supabase: Supabase client instance
@@ -971,27 +954,47 @@ def sync_news_sentiment(
     }
 
     try:
-        get_alphavantage_api_keys()  # validate at least one key exists before looping
+        keys = get_alphavantage_api_keys()
     except ValueError as e:
         stats['errors'].append(str(e))
-        print(f"AV sentiment sync skipped: {e}")
         return stats
 
-    for topic in topics:
-        try:
-            print(f"  Fetching AV sentiment for topic={topic}...")
-            articles = fetch_news_sentiment(tickers=tickers, topic=topic)  # rotation handled internally
-            if articles:
-                count = insert_news_sentiment(supabase, articles)
-                stats['articles_upserted'] += count
-                stats['topics_processed'] += 1
-                print(f"    Upserted {count} articles")
-            else:
-                stats['topics_processed'] += 1
-        except Exception as e:
-            msg = f"Error fetching sentiment for topic={topic}: {e}"
-            print(msg)
-            stats['errors'].append(msg)
+    # Distribute topics round-robin across keys
+    worker_topics: List[List[str]] = [[] for _ in keys]
+    for i, topic in enumerate(topics):
+        worker_topics[i % len(keys)].append(topic)
+
+    def _worker(key: str, assigned_topics: List[str]) -> List[Dict[str, Any]]:
+        collected: List[Dict[str, Any]] = []
+        for j, topic in enumerate(assigned_topics):
+            if j > 0:
+                time.sleep(1)
+            try:
+                articles = fetch_news_sentiment(api_key=key, tickers=tickers, topic=topic)
+                collected.extend(articles)
+            except Exception:
+                pass
+        return collected
+
+    all_articles: List[Dict[str, Any]] = []
+    with ThreadPoolExecutor(max_workers=len(keys)) as executor:
+        futures = {
+            executor.submit(_worker, key, worker_topics[i]): key
+            for i, key in enumerate(keys)
+            if worker_topics[i]
+        }
+        for future in as_completed(futures):
+            try:
+                all_articles.extend(future.result())
+            except Exception as e:
+                stats['errors'].append(f"Worker error: {e}")
+
+    stats['topics_processed'] = len(topics)
+
+    if all_articles:
+        seen: set = set()
+        deduped = [a for a in all_articles if a.get('url') and not (a['url'] in seen or seen.add(a['url']))]
+        stats['articles_upserted'] = insert_news_sentiment(supabase, deduped)
 
     return stats
 
@@ -1022,7 +1025,6 @@ def backfill_missing_profiles(supabase: Client, batch_size: int = 100) -> Dict[s
         api_key = get_fmp_api_key()
     except ValueError as e:
         stats['errors'].append(str(e))
-        print(f"Profile backfill skipped: {e}")
         return stats
 
     try:
@@ -1047,17 +1049,11 @@ def backfill_missing_profiles(supabase: Client, batch_size: int = 100) -> Dict[s
             if profile:
                 get_or_create_stock(supabase, ticker, profile, asset_type='stock')
                 stats['updated'] += 1
-                print(f"  [backfill] {ticker}: profile updated")
-            else:
-                print(f"  [backfill] {ticker}: no FMP profile found")
         except RuntimeError as e:
-            print(f"FMP rate limit during profile backfill: {e}")
             stats['errors'].append(str(e))
             break
         except Exception as e:
-            msg = f"{ticker}: {e}"
-            stats['errors'].append(msg)
-            print(f"  [backfill] Error for {ticker}: {e}")
+            stats['errors'].append(f"{ticker}: {e}")
 
     return stats
 
@@ -1089,7 +1085,6 @@ def upsert_economic_indicators(supabase: Client, rows: List[Dict[str, Any]]) -> 
             upserted += len(batch)
         return upserted
     except Exception as e:
-        print(f"Error upserting economic indicators: {e}")
         return 0
 
 
@@ -1127,49 +1122,33 @@ def sync_economic_indicators(supabase: Client) -> Dict[str, Any]:
         api_key = get_fmp_api_key()
     except ValueError as e:
         stats['errors'].append(str(e))
-        print(f"Economic indicators sync skipped: {e}")
         return stats
 
     all_rows: List[Dict[str, Any]] = []
 
-    # Treasury rates (9 terms, 1 API call)
-    print("  Fetching FMP treasury rates...")
     try:
         treasury_rows = fetch_treasury_rates(api_key)
         all_rows.extend(treasury_rows)
         stats['indicators_processed'] += 1
-        print(f"    Got {len(treasury_rows)} treasury rate rows")
     except RuntimeError as e:
-        print(f"FMP rate limit fetching treasury rates: {e}")
         stats['errors'].append(str(e))
-        count = upsert_economic_indicators(supabase, all_rows)
-        stats['rows_upserted'] += count
+        stats['rows_upserted'] += upsert_economic_indicators(supabase, all_rows)
         return stats
     except Exception as e:
-        msg = f"Error fetching treasury rates: {e}"
-        print(msg)
-        stats['errors'].append(msg)
+        stats['errors'].append(f"Error fetching treasury rates: {e}")
 
-    # Macro indicators (7 API calls)
     for name in MACRO_INDICATORS:
-        print(f"  Fetching FMP economic indicator: {name}...")
         try:
             indicator_rows = fetch_economic_indicator(name, api_key)
             all_rows.extend(indicator_rows)
             stats['indicators_processed'] += 1
-            print(f"    Got {len(indicator_rows)} rows")
         except RuntimeError as e:
-            print(f"FMP rate limit fetching {name}: {e}")
             stats['errors'].append(str(e))
             break
         except Exception as e:
-            msg = f"Error fetching {name}: {e}"
-            print(msg)
-            stats['errors'].append(msg)
+            stats['errors'].append(f"Error fetching {name}: {e}")
 
-    count = upsert_economic_indicators(supabase, all_rows)
-    stats['rows_upserted'] += count
-    print(f"  Economic indicators: upserted {count} rows")
+    stats['rows_upserted'] += upsert_economic_indicators(supabase, all_rows)
     return stats
 
 

@@ -10,6 +10,7 @@ from typing import Dict, List, Optional, Any
 from datetime import datetime, timedelta
 import pandas as pd
 import requests
+import time
 import os
 
 # Load Environment Variables
@@ -30,8 +31,8 @@ ALL_NYT_SECTIONS = [
 ]
 NYT_SECTIONS = [
     'us', 'world', 'opinion', 'business', 'insider',
-    'realestate', 'science', 'technology', 'arts', 'sports', 
-    # 'politics', 'movies', 'nyregion', 
+    'realestate', 'science', 'technology', 'arts',
+    # 'sports', 'politics', 'movies', 'nyregion', 
 ]
 
 # NYT Most Popular types
@@ -54,7 +55,6 @@ def get_nyt_api_key() -> str:
 # ============================================================================
 # NEW YORK TIMES API FUNCTIONS
 # ============================================================================
-
 def fetch_nyt_top_stories(section: str = 'home', api_key: Optional[str] = None) -> Optional[Dict[str, Any]]:
     """
     Fetch top stories from New York Times by section
@@ -428,9 +428,7 @@ def fetch_all_nyt_top_stories(api_key: Optional[str] = None) -> Dict[str, Option
         print(f"Fetching top stories for section: {section}...")
         stories = fetch_nyt_top_stories(section, api_key)
         all_stories[section] = stories
-        # Small delay to respect rate limits
-        import time
-        time.sleep(0.1)
+        time.sleep(1.1)
 
     return all_stories
 
