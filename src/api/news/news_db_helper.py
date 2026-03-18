@@ -8,12 +8,13 @@
 from typing import Dict, List, Optional, Any
 from supabase import create_client, Client
 from supabase import ClientOptions
-from datetime import datetime, timedelta, timezone
-import os
-import sys
-import time
-from dotenv import load_dotenv
 
+from datetime import datetime, timedelta, timezone
+import time
+import sys
+import os
+
+from dotenv import load_dotenv
 load_dotenv()
 
 _HERE = os.path.dirname(os.path.abspath(__file__))

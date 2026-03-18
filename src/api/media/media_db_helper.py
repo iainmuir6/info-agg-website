@@ -9,10 +9,10 @@ from datetime import datetime, timezone
 from typing import Dict, List, Optional, Any
 from supabase import create_client, Client
 from supabase import ClientOptions
-import os
 import sys
-from dotenv import load_dotenv
+import os
 
+from dotenv import load_dotenv
 load_dotenv()
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
