@@ -11,19 +11,19 @@ pnpm build        # Production build
 pnpm lint         # ESLint
 
 # ETL (Python — run from repo root)
-source _agg_venv/bin/activate
-python src/api/run_etl.py                          # Daily run (all domains; sentiment uses all 10 topics)
+source _agg_venv/bin/activate && python src/api/run_etl.py  # Daily run (all domains; sentiment uses all 10 topics)
 python src/api/run_etl.py --sports-only
-python src/api/run_etl.py --markets-only           # Quotes + news + sentiment + economic indicators
+python src/api/run_etl.py --markets-only                    # Quotes + news + sentiment + economic indicators
 python src/api/run_etl.py --news-only
 python src/api/run_etl.py --media-only
-python src/api/run_etl.py --skip-sentiment         # Skip AV sentiment (quotes + news only)
+python src/api/run_etl.py --skip-sentiment                  # Skip AV sentiment (quotes + news only)
 
-python src/api/run_db_seed.py                      # Initial seed (interleaved AV backfill)
-python src/api/run_db_seed.py --backfill-quotes 30 # Backfill market OHLCV history
-python src/api/run_db_seed.py --backfill-news 30   # Backfill NYT articles via Archive API*
-python src/api/run_db_seed.py --backfill-sports 30 # Backfill ESPN scores
-python src/api/run_db_seed.py --economic-indicators-only  # FMP treasury rates + macro only
+python src/api/run_db_seed.py                               # Initial seed (interleaved AV backfill)
+python src/api/run_db_seed.py --backfill-quotes 30          # Backfill market OHLCV history
+python src/api/run_db_seed.py --backfill-news 30            # Backfill NYT articles via Archive API*
+python src/api/run_db_seed.py --backfill-sports 30          # Backfill ESPN scores
+python src/api/run_db_seed.py --economic-indicators-only    # FMP treasury rates + macro only
+
 # *Requires Archive API product enabled at developer.nytimes.com/my-apps
 # See src/api/RUNBOOK.md for full seed vs. daily run guide
 ```
