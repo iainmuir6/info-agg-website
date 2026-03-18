@@ -937,16 +937,6 @@ def sync_news_sentiment(
     Returns:
         Stats dict: topics_processed, articles_upserted, errors
     """
-    try:
-        from .alpha_vantage import fetch_news_sentiment, get_alphavantage_api_keys
-    except ImportError:
-        import sys
-        import os
-        current_dir = os.path.dirname(os.path.abspath(__file__))
-        if current_dir not in sys.path:
-            sys.path.insert(0, current_dir)
-        from alpha_vantage import fetch_news_sentiment, get_alphavantage_api_keys
-
     stats: Dict[str, Any] = {
         'topics_processed': 0,
         'articles_upserted': 0,
@@ -1009,16 +999,6 @@ def backfill_missing_profiles(supabase: Client, batch_size: int = 100) -> Dict[s
     Returns:
         {'checked': int, 'updated': int, 'errors': list}
     """
-    try:
-        from .fmp import fetch_company_profile as fmp_profile, get_fmp_api_key
-    except ImportError:
-        import sys
-        import os
-        current_dir = os.path.dirname(os.path.abspath(__file__))
-        if current_dir not in sys.path:
-            sys.path.insert(0, current_dir)
-        from fmp import fetch_company_profile as fmp_profile, get_fmp_api_key
-
     stats: Dict[str, Any] = {'checked': 0, 'updated': 0, 'errors': []}
 
     try:
@@ -1096,16 +1076,6 @@ def sync_economic_indicators(supabase: Client) -> Dict[str, Any]:
     Returns:
         {'indicators_processed': int, 'rows_upserted': int, 'errors': list}
     """
-    try:
-        from .fmp import fetch_treasury_rates, fetch_economic_indicator, get_fmp_api_key
-    except ImportError:
-        import sys
-        import os
-        current_dir = os.path.dirname(os.path.abspath(__file__))
-        if current_dir not in sys.path:
-            sys.path.insert(0, current_dir)
-        from fmp import fetch_treasury_rates, fetch_economic_indicator, get_fmp_api_key
-
     MACRO_INDICATORS = [
         'realGDP',
         'federalFunds',

@@ -8,11 +8,32 @@
 from typing import Dict, List, Optional, Any
 from supabase import create_client, Client
 from supabase import ClientOptions
+from datetime import datetime, timedelta, timezone
 import os
+import sys
 import time
 from dotenv import load_dotenv
 
 load_dotenv()
+
+_HERE = os.path.dirname(os.path.abspath(__file__))
+if _HERE not in sys.path:
+    sys.path.insert(0, _HERE)
+
+try:
+    from .nyt import (
+        fetch_nyt_top_stories,
+        fetch_nyt_most_popular,
+        fetch_nyt_archive,
+        NYT_SECTIONS,
+    )
+except ImportError:
+    from nyt import (
+        fetch_nyt_top_stories,
+        fetch_nyt_most_popular,
+        fetch_nyt_archive,
+        NYT_SECTIONS,
+    )
 
 
 def get_supabase_client() -> Client:
@@ -130,15 +151,6 @@ def sync_nyt_data(supabase: Client, sections: List[str]) -> Dict[str, Any]:
     Returns:
         Dictionary with sync statistics
     """
-    try:
-        from .nyt import fetch_nyt_top_stories, fetch_nyt_most_popular
-    except ImportError:
-        import sys
-        current_dir = os.path.dirname(os.path.abspath(__file__))
-        if current_dir not in sys.path:
-            sys.path.insert(0, current_dir)
-        from nyt import fetch_nyt_top_stories, fetch_nyt_most_popular
-
     stats = {
         'sections_processed': 0,
         'articles_inserted': 0,
@@ -192,17 +204,6 @@ def backfill_nyt_archive(
     Returns:
         Stats dict: months_fetched, articles_inserted, errors
     """
-    try:
-        from .nyt import fetch_nyt_archive, NYT_SECTIONS
-    except ImportError:
-        import sys
-        current_dir = os.path.dirname(os.path.abspath(__file__))
-        if current_dir not in sys.path:
-            sys.path.insert(0, current_dir)
-        from nyt import fetch_nyt_archive, NYT_SECTIONS
-
-    from datetime import datetime, timedelta, timezone
-
     stats: Dict[str, Any] = {
         'months_fetched': 0,
         'articles_inserted': 0,

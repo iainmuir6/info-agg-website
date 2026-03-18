@@ -10,9 +10,24 @@ from typing import Dict, List, Optional, Any
 from supabase import create_client, Client
 from supabase import ClientOptions
 import os
+import sys
 from dotenv import load_dotenv
 
 load_dotenv()
+
+_HERE = os.path.dirname(os.path.abspath(__file__))
+if _HERE not in sys.path:
+    sys.path.insert(0, _HERE)
+
+try:
+    from .spotify import fetch_spotify_new_releases, get_spotify_access_token
+except ImportError:
+    from spotify import fetch_spotify_new_releases, get_spotify_access_token
+
+try:
+    from .reddit import fetch_reddit_hot
+except ImportError:
+    from reddit import fetch_reddit_hot
 
 # Default subreddits to track
 DEFAULT_SUBREDDITS = [
@@ -164,15 +179,6 @@ def sync_spotify_data(supabase: Client) -> Dict[str, Any]:
     Returns:
         Dictionary with sync statistics
     """
-    try:
-        from .spotify import fetch_spotify_new_releases, get_spotify_access_token
-    except ImportError:
-        import sys
-        current_dir = os.path.dirname(os.path.abspath(__file__))
-        if current_dir not in sys.path:
-            sys.path.insert(0, current_dir)
-        from spotify import fetch_spotify_new_releases, get_spotify_access_token
-
     stats = {
         'releases_inserted': 0,
         'errors': []
@@ -203,15 +209,6 @@ def sync_reddit_data(supabase: Client, subreddits: Optional[List[str]] = None) -
     Returns:
         Dictionary with sync statistics
     """
-    try:
-        from .reddit import fetch_reddit_hot
-    except ImportError:
-        import sys
-        current_dir = os.path.dirname(os.path.abspath(__file__))
-        if current_dir not in sys.path:
-            sys.path.insert(0, current_dir)
-        from reddit import fetch_reddit_hot
-
     if subreddits is None:
         subreddits = DEFAULT_SUBREDDITS
 

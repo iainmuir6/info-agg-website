@@ -8,10 +8,23 @@
 from typing import Dict, List, Optional, Any
 from supabase import create_client, Client
 from supabase import ClientOptions
-import os
-from dotenv import load_dotenv
 
+from datetime import datetime, timedelta
+import time
+import sys
+import os
+
+from dotenv import load_dotenv
 load_dotenv()
+
+_HERE = os.path.dirname(os.path.abspath(__file__))
+if _HERE not in sys.path:
+    sys.path.insert(0, _HERE)
+
+try:
+    from .espn import SPORT_CONFIGS, fetch_espn_news, fetch_espn_scores
+except ImportError:
+    from espn import SPORT_CONFIGS, fetch_espn_news, fetch_espn_scores
 
 
 def get_supabase_client() -> Client:
@@ -153,19 +166,6 @@ def sync_all_sports_data(supabase: Client, news_limit_per_sport: int = 20) -> Di
     Returns:
         Dictionary with sync statistics
     """
-    # Import from espn module (same directory)
-    # When running as script, import directly; when imported as module, use relative import
-    try:
-        from .espn import SPORT_CONFIGS, fetch_espn_news, fetch_espn_scores
-    except ImportError:
-        # Fallback for when running as standalone script
-        import sys
-        import os
-        current_dir = os.path.dirname(os.path.abspath(__file__))
-        if current_dir not in sys.path:
-            sys.path.insert(0, current_dir)
-        from espn import SPORT_CONFIGS, fetch_espn_news, fetch_espn_scores
-    
     stats = {
         'leagues_processed': 0,
         'news_inserted': 0,
@@ -219,19 +219,6 @@ def backfill_sports_scores(
     Returns:
         Stats dict: dates_processed, scores_inserted, errors
     """
-    try:
-        from .espn import SPORT_CONFIGS, fetch_espn_scores
-    except ImportError:
-        import sys
-        import os
-        current_dir = os.path.dirname(os.path.abspath(__file__))
-        if current_dir not in sys.path:
-            sys.path.insert(0, current_dir)
-        from espn import SPORT_CONFIGS, fetch_espn_scores
-
-    from datetime import datetime, timedelta
-    import time
-
     stats: Dict[str, Any] = {
         'dates_processed': 0,
         'scores_inserted': 0,

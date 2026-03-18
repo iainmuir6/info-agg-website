@@ -46,6 +46,20 @@ from run_etl import (
     load_baskets, classify_tickers, get_supabase_client,
     MARKET_NEWS_CATEGORIES, SENTIMENT_TOPICS_ALL,
 )
+from markets.alpha_vantage import (
+    fetch_historical_quotes,
+    fetch_crypto_candles_av,
+    get_alphavantage_api_keys,
+)
+from markets.markets_db_helper import (
+    get_or_create_stock,
+    insert_stock_quotes_batch,
+    sync_av_etf_holdings,
+    sync_news_sentiment,
+    sync_market_news,
+    sync_stock_data,
+    sync_economic_indicators,
+)
 
 
 def _phase_header(num: int, description: str) -> None:
