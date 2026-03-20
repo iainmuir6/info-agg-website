@@ -13,6 +13,7 @@ from datetime import datetime, timedelta, timezone
 import time
 import sys
 import os
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from dotenv import load_dotenv
 load_dotenv()
@@ -27,6 +28,7 @@ try:
         fetch_nyt_most_popular,
         fetch_nyt_archive,
         NYT_SECTIONS,
+        is_nyt_key_disabled,
     )
 except ImportError:
     from nyt import (
@@ -34,6 +36,7 @@ except ImportError:
         fetch_nyt_most_popular,
         fetch_nyt_archive,
         NYT_SECTIONS,
+        is_nyt_key_disabled,
     )
 
 
@@ -140,6 +143,15 @@ def insert_nyt_articles(supabase: Client, articles: List[Dict[str, Any]], source
         return 0
 
 
+def get_nyt_api_keys() -> List[str]:
+    """Get New York Times API keys from environment variables."""
+    keys: List[str] = []
+    for suffix in ['_1', '_2', '_3']:
+        key = os.getenv(f'NYT_API_KEY{suffix}')
+        if key:
+            keys.append(key)
+    return keys
+
 
 def sync_nyt_data(supabase: Client, sections: List[str]) -> Dict[str, Any]:
     """
@@ -158,26 +170,77 @@ def sync_nyt_data(supabase: Client, sections: List[str]) -> Dict[str, Any]:
         'errors': []
     }
 
-    # Phase 1: Fetch all sections sequentially — 1 NYT key means no concurrent requests.
-    top_stories_articles: List[Dict] = []
-    popular_articles: List[Dict] = []
+    # Phase 1: Fetch top stories using contiguous 5-call blocks per key.
+    # Daily run typically has 9 top-story sections, plus 1 most-popular call.
+    # This supports up to 3 keys: keys are consumed in blocks of 5 calls:
+    # - calls 0–4 on keys[0]
+    # - calls 5–9 on keys[1]
+    # - calls 10–14 on keys[2] (if present)
+    top_stories_articles: List[Dict[str, Any]] = []
+    popular_articles: List[Dict[str, Any]] = []
 
-    for section in sections:
-        try:
-            result = fetch_nyt_top_stories(section=section)
+    keys = get_nyt_api_keys()[:3]
+    if not keys:
+        raise ValueError("No NYT_API_KEY_* found in environment variables")
+
+    # Assign each section to a key based on its 0-based call index among *top stories*.
+    # Each worker does sequential calls and explicitly sleeps >=1s between calls.
+    sections_by_key_index: Dict[int, List[str]] = {i: [] for i in range(len(keys))}
+    for idx, section in enumerate(sections):
+        key_index = min(idx // 5, len(keys) - 1)
+        sections_by_key_index[key_index].append(section)
+
+    def _worker(api_key: str, assigned_sections: List[str]) -> List[Dict[str, Any]]:
+        collected_top: List[Dict[str, Any]] = []
+        # Worker uses its starting key, but if that key gets disabled due to 429
+        # we will switch to the first available non-disabled key.
+        current_key = api_key
+        for section in assigned_sections:
+            # If the current key is disabled, switch to the first active key.
+            if is_nyt_key_disabled(current_key):
+                active_keys = [k for k in keys if not is_nyt_key_disabled(k)]
+                if not active_keys:
+                    break
+                current_key = active_keys[0]
+
+            result = fetch_nyt_top_stories(section=section, api_key=current_key)
             if result and result.get('articles'):
-                top_stories_articles.extend(result['articles'])
-            stats['sections_processed'] += 1
-        except Exception as e:
-            stats['errors'].append(f"Error fetching NYT section '{section}': {e}")
-        time.sleep(1.1)
+                collected_top.extend(result['articles'])
+            # Explicit spacing requested: keep >=1s between repeated calls.
+            time.sleep(1.1)
+        return collected_top
 
+    active_workers = [i for i, assigned in sections_by_key_index.items() if assigned]
+    with ThreadPoolExecutor(max_workers=len(active_workers) if active_workers else 1) as executor:
+        futures = {
+            executor.submit(_worker, keys[key_index], sections_by_key_index[key_index]): key_index
+            for key_index in active_workers
+        }
+        for future in as_completed(futures):
+            key_index = futures[future]
+            try:
+                top_stories_articles.extend(future.result())
+            except Exception as e:
+                stats['errors'].append(f"NYT worker key_index={key_index} failed: {e}")
+
+    # Phase 2: Fetch most-popular AFTER all workers complete.
+    # most-popular is the (len(sections))-th call overall (after top-story calls).
+    popular_call_index = len(sections)
+    popular_key_index = min(popular_call_index // 5, len(keys) - 1)
+    popular_api_key = keys[popular_key_index]
+    if is_nyt_key_disabled(popular_api_key):
+        active_keys = [k for k in keys if not is_nyt_key_disabled(k)]
+        if active_keys:
+            popular_api_key = active_keys[0]
     try:
-        popular = fetch_nyt_most_popular(type='viewed', period=7)
+        time.sleep(1.1)
+        popular = fetch_nyt_most_popular(type='viewed', period=7, api_key=popular_api_key)
         if popular and popular.get('articles'):
             popular_articles = popular['articles']
     except Exception as e:
         stats['errors'].append(f"Error fetching NYT most popular: {e}")
+
+    stats['sections_processed'] = len(sections)
 
     # Phase 2: Single batch upsert per article type.
     if top_stories_articles:

@@ -12,6 +12,8 @@ from datetime import date, datetime, timedelta
 import requests
 import warnings
 import os
+import threading
+import time
 
 from dotenv import load_dotenv
 load_dotenv()
@@ -25,29 +27,54 @@ _FMP_DAILY_DATE: Optional[date] = None
 _FMP_DAILY_LIMIT = 250
 _FMP_WARN_THRESHOLD = 220
 
+_FMP_MIN_INTERVAL_S = 1.0
+_FMP_LOCK = threading.Lock()
+_FMP_LAST_CALL_TS: Optional[float] = None
+_FMP_DISABLED_DUE_TO_429: bool = False
+
 
 def _fmp_rate_check() -> None:
     """Warn when approaching 250 req/day; block (raise) at the hard limit."""
     global _FMP_DAILY_COUNT, _FMP_DAILY_DATE
+    global _FMP_LAST_CALL_TS
+    global _FMP_DISABLED_DUE_TO_429
 
-    today = date.today()
-    if _FMP_DAILY_DATE != today:
-        _FMP_DAILY_COUNT = 0
-        _FMP_DAILY_DATE = today
+    with _FMP_LOCK:
+        if _FMP_DISABLED_DUE_TO_429:
+            raise RuntimeError("FMP disabled for remainder of this ETL run due to 429")
 
-    _FMP_DAILY_COUNT += 1
+        now = time.time()
+        if _FMP_LAST_CALL_TS is not None:
+            elapsed = now - _FMP_LAST_CALL_TS
+            if elapsed < _FMP_MIN_INTERVAL_S:
+                time.sleep(_FMP_MIN_INTERVAL_S - elapsed)
 
-    if _FMP_DAILY_COUNT >= _FMP_DAILY_LIMIT:
-        raise RuntimeError(
-            f"FMP daily request limit reached ({_FMP_DAILY_LIMIT}). "
-            "Skipping remaining FMP calls for today."
-        )
-    if _FMP_DAILY_COUNT >= _FMP_WARN_THRESHOLD:
-        warnings.warn(
-            f"FMP daily request count is {_FMP_DAILY_COUNT}/{_FMP_DAILY_LIMIT} — "
-            "approaching daily limit.",
-            stacklevel=2
-        )
+        today = date.today()
+        if _FMP_DAILY_DATE != today:
+            _FMP_DAILY_COUNT = 0
+            _FMP_DAILY_DATE = today
+
+        _FMP_DAILY_COUNT += 1
+
+        _FMP_LAST_CALL_TS = time.time()
+
+        if _FMP_DAILY_COUNT >= _FMP_DAILY_LIMIT:
+            raise RuntimeError(
+                f"FMP daily request limit reached ({_FMP_DAILY_LIMIT}). "
+                "Skipping remaining FMP calls for today."
+            )
+        if _FMP_DAILY_COUNT >= _FMP_WARN_THRESHOLD:
+            warnings.warn(
+                f"FMP daily request count is {_FMP_DAILY_COUNT}/{_FMP_DAILY_LIMIT} — "
+                "approaching daily limit.",
+                stacklevel=2
+            )
+
+
+def _fmp_disable_due_to_429() -> None:
+    global _FMP_DISABLED_DUE_TO_429
+    with _FMP_LOCK:
+        _FMP_DISABLED_DUE_TO_429 = True
 
 
 def get_fmp_api_key() -> str:

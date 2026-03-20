@@ -39,9 +39,10 @@ load_dotenv()
 
 BASKETS_PATH = Path(__file__).parent / 'markets' / 'baskets.json'
 
-DEFAULT_NEWS_SECTIONS = [
-    'home', 'technology', 'business', 'science',
-    'health', 'sports', 'arts', 'world', 'politics', 'us'
+DEFAULT_NYT_SECTIONS = [
+    'us', 'world', 'opinion', 'business', 'insider',
+    'realestate', 'science', 'technology', 'arts',
+    # 'sports', 'politics', 'movies', 'nyregion', 
 ]
 
 DEFAULT_SUBREDDITS = [
@@ -194,7 +195,7 @@ def run_markets_etl(
 def run_news_etl(supabase: Client, sections: Optional[List[str]] = None) -> Dict[str, Any]:
     """Run news ETL: NYT top stories."""
     if sections is None:
-        sections = DEFAULT_NEWS_SECTIONS
+        sections = DEFAULT_NYT_SECTIONS
     try:
         return {
             'success': True, 

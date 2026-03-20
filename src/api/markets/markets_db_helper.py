@@ -956,14 +956,14 @@ def sync_news_sentiment(
 
     def _worker(key: str, assigned_topics: List[str]) -> List[Dict[str, Any]]:
         collected: List[Dict[str, Any]] = []
-        for j, topic in enumerate(assigned_topics):
-            if j > 0:
-                time.sleep(1)
+        for topic in assigned_topics:
             try:
                 articles = fetch_news_sentiment(api_key=key, tickers=tickers, topic=topic)
                 collected.extend(articles)
+                time.sleep(1.1)
             except Exception:
-                pass
+                stats['errors'].append(f"Error fetching news sentiment for topic: {topic}")
+            
         return collected
 
     all_articles: List[Dict[str, Any]] = []
@@ -989,7 +989,7 @@ def sync_news_sentiment(
     return stats
 
 
-def backfill_missing_profiles(supabase: Client, batch_size: int = 100) -> Dict[str, Any]:
+def backfill_missing_profiles(supabase: Client, batch_size: int = 50) -> Dict[str, Any]:
     """
     Fetch FMP company profiles for stocks that have no name yet.
 
@@ -1007,6 +1007,7 @@ def backfill_missing_profiles(supabase: Client, batch_size: int = 100) -> Dict[s
         stats['errors'].append(str(e))
         return stats
 
+    batch_size = min(50, batch_size)
     try:
         resp = (
             supabase.table('stocks')
@@ -1034,6 +1035,7 @@ def backfill_missing_profiles(supabase: Client, batch_size: int = 100) -> Dict[s
             break
         except Exception as e:
             stats['errors'].append(f"{ticker}: {e}")
+        time.sleep(1.0)
 
     return stats
 

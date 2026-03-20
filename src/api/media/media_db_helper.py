@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 from typing import Dict, List, Optional, Any
 from supabase import create_client, Client
 from supabase import ClientOptions
+import time
 import sys
 import os
 
@@ -184,6 +185,7 @@ def sync_spotify_data(supabase: Client) -> Dict[str, Any]:
         'errors': []
     }
 
+    # Phase 1: Fetch new releases
     try:
         access_token = get_spotify_access_token()
         if not access_token:
@@ -194,6 +196,9 @@ def sync_spotify_data(supabase: Client) -> Dict[str, Any]:
             stats['releases_inserted'] = insert_spotify_releases(supabase, result['albums'])
     except Exception as e:
         stats['errors'].append(f"Error syncing Spotify data: {e}")
+        
+    time.sleep(1.1)
+    # Phase 2: TBD
 
     return stats
 
@@ -229,6 +234,7 @@ def sync_reddit_data(supabase: Client, subreddits: Optional[List[str]] = None) -
                 stats['subreddits_processed'] += 1
         except Exception as e:
             stats['errors'].append(f"Error fetching r/{subreddit}: {e}")
+        time.sleep(1.1)
 
     # Phase 2: Single batch upsert for all posts.
     if all_posts:

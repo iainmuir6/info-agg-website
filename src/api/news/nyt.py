@@ -11,6 +11,7 @@ from datetime import datetime, timedelta
 import pandas as pd
 import requests
 import time
+import threading
 import os
 
 # Load Environment Variables
@@ -38,6 +39,44 @@ NYT_SECTIONS = [
 # NYT Most Popular types
 NYT_POPULAR_TYPES = ['viewed', 'shared', 'emailed']
 
+# Enforce a simple >=1s minimum between any NYT HTTP calls in this module.
+# This satisfies the “no endpoint burst in loops” requirement even when callers
+# don't explicitly sleep.
+_NYT_MIN_INTERVAL_S = 1.0
+_NYT_LOCK = threading.Lock()
+_NYT_LAST_CALL_TS: Optional[float] = None
+
+# If NYT returns 429 for a specific key, we stop using that key for the
+# remainder of the current ETL run.
+_NYT_DISABLED_KEYS: set[str] = set()
+
+
+def _nyt_min_interval() -> None:
+    global _NYT_LAST_CALL_TS
+    with _NYT_LOCK:
+        now = time.time()
+        if _NYT_LAST_CALL_TS is not None:
+            elapsed = now - _NYT_LAST_CALL_TS
+            if elapsed < _NYT_MIN_INTERVAL_S:
+                time.sleep(_NYT_MIN_INTERVAL_S - elapsed)
+                now = time.time()
+        _NYT_LAST_CALL_TS = now
+
+
+def _nyt_is_key_disabled(api_key: str) -> bool:
+    return api_key in _NYT_DISABLED_KEYS
+
+
+def _nyt_disable_key(api_key: str) -> None:
+    # Use the same lock as min-interval to keep state updates serialized.
+    with _NYT_LOCK:
+        _NYT_DISABLED_KEYS.add(api_key)
+
+
+# Public helpers for callers that want to react to key lockouts.
+def is_nyt_key_disabled(api_key: str) -> bool:
+    return _nyt_is_key_disabled(api_key)
+
 
 def get_nyt_api_key() -> str:
     """
@@ -46,9 +85,10 @@ def get_nyt_api_key() -> str:
     Returns:
         API key string
     """
-    api_key = os.getenv('NYT_API_KEY')
+    # Default to key 1 for daily switching/Archive backfill.
+    api_key = os.getenv('NYT_API_KEY_1') or os.getenv('NYT_API_KEY')
     if not api_key:
-        raise ValueError("NYT_API_KEY not found in environment variables")
+        raise ValueError("NYT_API_KEY_1 not found in environment variables")
     return api_key
 
 
@@ -75,7 +115,11 @@ def fetch_nyt_top_stories(section: str = 'home', api_key: Optional[str] = None) 
     }
 
     try:
+        _nyt_min_interval()
         response = requests.get(url, params=params, timeout=10)
+        if response.status_code == 429:
+            _nyt_disable_key(api_key)
+            return None
         response.raise_for_status()
         data = response.json()
 
@@ -170,7 +214,11 @@ def fetch_nyt_most_popular(
     }
 
     try:
+        _nyt_min_interval()
         response = requests.get(url, params=params, timeout=10)
+        if response.status_code == 429:
+            _nyt_disable_key(api_key)
+            return None
         response.raise_for_status()
         data = response.json()
 
@@ -310,7 +358,11 @@ def fetch_nyt_archive(
     params = {'api-key': api_key}
 
     try:
+        _nyt_min_interval()
         response = requests.get(url, params=params, timeout=30)
+        if response.status_code == 429:
+            _nyt_disable_key(api_key)
+            return []
         if response.status_code in (401, 403):
             print(
                 f"  NYT Archive {response.status_code}: Archive API product not yet active "

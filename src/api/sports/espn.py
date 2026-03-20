@@ -12,6 +12,8 @@ from typing import Dict, List, Optional, Any
 from datetime import datetime
 import requests
 import os
+import time
+import threading
 
 # Load Environment Variables
 from dotenv import load_dotenv
@@ -19,6 +21,24 @@ load_dotenv()
 
 
 ESPN_BASE_URL = "https://site.api.espn.com/apis/site/v2/sports"
+
+# Enforce strict >=1s minimum spacing between repeated ESPN HTTP calls from
+# this module (sports ETL is sequential, but backfills are loop-driven).
+_ESPN_MIN_INTERVAL_S = 1.0
+_ESPN_LOCK = threading.Lock()
+_ESPN_LAST_CALL_TS: Optional[float] = None
+
+
+def _espn_min_interval() -> None:
+    global _ESPN_LAST_CALL_TS
+    with _ESPN_LOCK:
+        now = time.time()
+        if _ESPN_LAST_CALL_TS is not None:
+            elapsed = now - _ESPN_LAST_CALL_TS
+            if elapsed < _ESPN_MIN_INTERVAL_S:
+                time.sleep(_ESPN_MIN_INTERVAL_S - elapsed)
+                now = time.time()
+        _ESPN_LAST_CALL_TS = now
 SPORT_CONFIGS = [
     # Football
     ('football', 'nfl'),
@@ -58,6 +78,7 @@ def fetch_espn_news(sport: str, league: str, limit: int = 20) -> List[Dict[str, 
     url = f"{ESPN_BASE_URL}/{sport}/{league}/news"
 
     try:
+        _espn_min_interval()
         response = requests.get(url, timeout=10)
         response.raise_for_status()
         data = response.json()
@@ -102,6 +123,7 @@ def fetch_espn_teams(sport: str, league: str) -> List[Dict[str, Any]]:
     url = f"{ESPN_BASE_URL}/{sport}/{league}/teams"
 
     try:
+        _espn_min_interval()
         response = requests.get(url, timeout=10)
         response.raise_for_status()
         data = response.json()
@@ -243,6 +265,7 @@ def fetch_espn_scores(sport: str, league: str, dates: Optional[str] = None) -> L
         params['dates'] = dates
 
     try:
+        _espn_min_interval()
         response = requests.get(url, params=params, timeout=10)
         response.raise_for_status()
         data = response.json()
@@ -342,6 +365,7 @@ def fetch_soccer_scores():
     url = 'https://api.football-data.org/v4/matches'
 
     try:
+        _espn_min_interval()
         response = requests.get(url, headers=headers, timeout=10)
         response.raise_for_status()
         data = response.json()
