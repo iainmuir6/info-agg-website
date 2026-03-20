@@ -64,7 +64,8 @@ def _nyt_min_interval() -> None:
 
 
 def _nyt_is_key_disabled(api_key: str) -> bool:
-    return api_key in _NYT_DISABLED_KEYS
+    with _NYT_LOCK:
+        return api_key in _NYT_DISABLED_KEYS
 
 
 def _nyt_disable_key(api_key: str) -> None:

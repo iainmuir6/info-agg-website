@@ -26,9 +26,9 @@ except ImportError:
     from spotify import fetch_spotify_new_releases, get_spotify_access_token
 
 try:
-    from .reddit import fetch_reddit_hot
+    from .reddit import fetch_reddit_hot, RedditRateLimited
 except ImportError:
-    from reddit import fetch_reddit_hot
+    from reddit import fetch_reddit_hot, RedditRateLimited
 
 # Default subreddits to track
 DEFAULT_SUBREDDITS = [
@@ -232,6 +232,9 @@ def sync_reddit_data(supabase: Client, subreddits: Optional[List[str]] = None) -
             if posts:
                 all_posts.extend(posts)
                 stats['subreddits_processed'] += 1
+        except RedditRateLimited as e:
+            stats['errors'].append(str(e))
+            break
         except Exception as e:
             stats['errors'].append(f"Error fetching r/{subreddit}: {e}")
         time.sleep(1.1)

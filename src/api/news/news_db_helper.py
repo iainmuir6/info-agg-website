@@ -240,6 +240,19 @@ def sync_nyt_data(supabase: Client, sections: List[str]) -> Dict[str, Any]:
     except Exception as e:
         stats['errors'].append(f"Error fetching NYT most popular: {e}")
 
+    # If the chosen key got rate-limited (429), try a fallback active key once.
+    if not popular_articles and is_nyt_key_disabled(popular_api_key):
+        active_keys = [k for k in keys if not is_nyt_key_disabled(k)]
+        if active_keys:
+            fallback_key = active_keys[0]
+            try:
+                time.sleep(1.1)
+                popular = fetch_nyt_most_popular(type='viewed', period=7, api_key=fallback_key)
+                if popular and popular.get('articles'):
+                    popular_articles = popular['articles']
+            except Exception as e:
+                stats['errors'].append(f"Error fetching NYT most popular (fallback key): {e}")
+
     stats['sections_processed'] = len(sections)
 
     # Phase 2: Single batch upsert per article type.

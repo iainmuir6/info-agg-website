@@ -15,6 +15,13 @@ load_dotenv()
 REDDIT_BASE_URL = "https://www.reddit.com"
 
 
+class RedditRateLimited(RuntimeError):
+    pass
+
+
+_REDDIT_DISABLED_DUE_TO_429: bool = False
+
+
 def fetch_reddit_hot(subreddit: str = 'all', limit: int = 25) -> Optional[List[Dict[str, Any]]]:
     """
     Fetch hot posts from a subreddit.
@@ -29,9 +36,16 @@ def fetch_reddit_hot(subreddit: str = 'all', limit: int = 25) -> Optional[List[D
     url = f"{REDDIT_BASE_URL}/r/{subreddit}/hot.json"
     headers = {'User-Agent': 'InfoAggregator/1.0'}
     params = {'limit': min(limit, 100)}
+    global _REDDIT_DISABLED_DUE_TO_429
 
     try:
+        if _REDDIT_DISABLED_DUE_TO_429:
+            raise RedditRateLimited("Reddit disabled due to a rate/blocked response in this ETL run")
         response = requests.get(url, headers=headers, params=params, timeout=10)
+        if response.status_code in (403, 429):
+            _REDDIT_DISABLED_DUE_TO_429 = True
+            reason = "403 blocked" if response.status_code == 403 else "429 rate-limited"
+            raise RedditRateLimited(f"Reddit {reason}; stopping remaining subreddits")
         response.raise_for_status()
         data = response.json()
 
@@ -61,6 +75,10 @@ def fetch_reddit_hot(subreddit: str = 'all', limit: int = 25) -> Optional[List[D
         return posts
 
     except requests.exceptions.RequestException as e:
+        msg = str(e)
+        if ("403" in msg and "Client Error" in msg) or ("Blocked for url" in msg):
+            _REDDIT_DISABLED_DUE_TO_429 = True
+            raise RedditRateLimited("Reddit blocked (403) in this ETL run; stopping remaining subreddits")
         print(f"Error fetching Reddit data for r/{subreddit}: {e}")
         return None
     except Exception as e:

@@ -103,6 +103,9 @@ def fetch_company_profile(ticker: str, api_key: Optional[str] = None) -> Optiona
     try:
         _fmp_rate_check()
         response = requests.get(url, params=params, timeout=10)
+        if response.status_code == 429:
+            _fmp_disable_due_to_429()
+            raise RuntimeError("FMP disabled for remainder of this ETL run due to 429")
         response.raise_for_status()
         data = response.json()
 
@@ -170,6 +173,9 @@ def fetch_etf_info(ticker: str, api_key: Optional[str] = None) -> Optional[Dict[
     try:
         _fmp_rate_check()
         response = requests.get(url, params=params, timeout=10)
+        if response.status_code == 429:
+            _fmp_disable_due_to_429()
+            raise RuntimeError("FMP disabled for remainder of this ETL run due to 429")
         response.raise_for_status()
         data = response.json()
 
@@ -233,6 +239,9 @@ def fetch_etf_holdings(ticker: str, api_key: Optional[str] = None) -> List[Dict[
     try:
         _fmp_rate_check()
         response = requests.get(url, params=params, timeout=10)
+        if response.status_code == 429:
+            _fmp_disable_due_to_429()
+            raise RuntimeError("FMP disabled for remainder of this ETL run due to 429")
         response.raise_for_status()
         data = response.json()
 
@@ -279,6 +288,9 @@ def fetch_fmp_quote(symbol: str, api_key: Optional[str] = None) -> Optional[Dict
     try:
         _fmp_rate_check()
         response = requests.get(url, params=params, timeout=10)
+        if response.status_code == 429:
+            _fmp_disable_due_to_429()
+            raise RuntimeError("FMP disabled for remainder of this ETL run due to 429")
         response.raise_for_status()
         data = response.json()
 
@@ -340,6 +352,9 @@ def fetch_treasury_rates(api_key: Optional[str] = None) -> List[Dict[str, Any]]:
     try:
         _fmp_rate_check()
         response = requests.get(url, params=params, timeout=10)
+        if response.status_code == 429:
+            _fmp_disable_due_to_429()
+            raise RuntimeError("FMP disabled for remainder of this ETL run due to 429")
         response.raise_for_status()
         data = response.json()
 
