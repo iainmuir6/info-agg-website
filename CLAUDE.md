@@ -38,7 +38,7 @@ See [`src/api/RATE_LIMITS.md`](src/api/RATE_LIMITS.md) for per-API limits, daily
 - `NEXT_PUBLIC_SUPABASE_URL` — Supabase project URL
 - `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` — Supabase anon/publishable key (frontend)
 - `SUPABASE_SERVICE_ROLE_KEY` — Service role key (ETL writes only)
-- API keys for fetchers: `NYT_API_KEY`, `NEWS_API_KEY`, `FINNHUB_API_KEY`, `FMP_API_KEY`, `SPOTIFY_CLIENT_ID`, `SPOTIFY_CLIENT_SECRET`
+- API keys for fetchers: `NYT_API_KEY_1`, `NYT_API_KEY_2`, `FINNHUB_API_KEY_1`, `FINNHUB_API_KEY_2`, `FMP_API_KEY`, `ALPHA_VANTAGE_API_KEY` (+ `_1/_2`), `SPOTIFY_CLIENT_ID`, `SPOTIFY_CLIENT_SECRET`
 
 ## Architecture
 
