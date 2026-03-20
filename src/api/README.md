@@ -54,14 +54,16 @@ src/api/
    SUPABASE_SERVICE_ROLE_KEY=<service-role-key>
 
    # Markets
-   FINNHUB_API_KEY=<key>
+   FINNHUB_API_KEY_1=<key>
+   FINNHUB_API_KEY_2=<key>
    FMP_API_KEY=<key>
    ALPHA_VANTAGE_API_KEY=<key>
    ALPHA_VANTAGE_API_KEY_1=<key>   # optional second key for rotation
    ALPHA_VANTAGE_API_KEY_2=<key>   # optional third key
 
-   # News
-   NYT_API_KEY=<key>
+   # News (NYT)
+   NYT_API_KEY_1=<key>
+   NYT_API_KEY_2=<key>
 
    # Media
    SPOTIFY_CLIENT_ID=<id>
@@ -128,8 +130,8 @@ python src/api/run_etl.py --media-only
 | `run_db_seed.py` | All domains + backfill | ~12–18 min | 3 AV keys; scales with key count |
 | `run_etl.py` | All domains, no backfill | ~5–7 min | Auto catch-up if >24h since last run |
 | `run_etl.py --markets-only` | Quotes + news + sentiment | ~2–3 min | 36 Finnhub calls + 5 AV calls |
-| `run_etl.py --sports-only` | ESPN news + scores | ~10–15s | No rate limiting applied |
-| `run_etl.py --news-only` | NYT top stories | ~90–120s | 10 sections × 7s sleep = 70s minimum |
+| `run_etl.py --sports-only` | ESPN news + scores | ~10–15s | ESPN calls spaced >=1s between requests |
+| `run_etl.py --news-only` | NYT top stories | ~10–25s | 9 sections × ~1.1s minimum sleep between calls + 1 most-popular |
 | `run_etl.py --media-only` | Spotify + Reddit | ~15–20s | 8 Reddit calls × 1s sleep |
 
 > **Vercel Cron (Hobby plan, 60s limit):** A full daily run exceeds the limit. Partial
@@ -217,7 +219,7 @@ See [`RATE_LIMITS.md`](RATE_LIMITS.md) for full details. Quick reference:
 | Finnhub | 60 s | 60 req | Sliding-window deque — burst then sleep |
 | Alpha Vantage | 60 s / key | 5 req | Sliding-window deque per key — burst then sleep |
 | FMP | 1 day | 250 req | Daily counter; warns at 220, raises at 250 |
-| NYT | 60 s | 10 req | Fixed 7 s sleep between section calls |
+| NYT | 60 s | 5 req/key | Daily run switches keys after 5 calls (10 calls/day total) and enforces >=1s between NYT HTTP calls |
 | Reddit | 60 s | 60 req | 1 s sleep between subreddit calls |
 | Spotify | — | ~30/s | No explicit limiting needed at current volume |
 | ESPN | — | Unknown | No limiting applied (unofficial API, low call count) |

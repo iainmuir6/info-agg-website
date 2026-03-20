@@ -67,7 +67,7 @@ key exhausts its daily cap mid-run. Phase 0 prints a live budget breakdown befor
 | 2 | FMP: 33 profiles (~30s); AV ETF_PROFILE: 23 calls (~1.5 min) | ~2 min |
 | 3 | ESPN: 30d × ~10 leagues + news | ~1–2 min |
 | 4 | 10 AV calls (window reset by Phase 3) | ~1 min |
-| 5 | NYT Archive (1–2 months) + Top Stories (10 sections × 7s sleep) | ~2 min |
+| 5 | NYT Archive (1–2 months) + Top Stories (9 sections; >=1s between calls) | ~2 min |
 | 6 | 10 AV calls (window reset by Phase 5) | ~1 min |
 | 7 | Spotify + Reddit (8 subs × 1s sleep) | ~15–20s |
 | 8 | 6 AV ticker calls + 10 sentiment calls | ~1 min |
@@ -110,14 +110,14 @@ Leagues: NFL, NBA, NHL, MLB, EPL, WNBA, college football/basketball.
 | Action | Source | Table |
 |--------|--------|-------|
 | Backfill N days via Archive API* | NYT `/archive/v1/{year}/{month}.json` | `news_articles` |
-| Fetch current top stories (10 sections) | NYT `/topstories/v2/{section}` | `news_articles` |
+| Fetch current top stories (9 sections) + most-popular (1 call) | NYT `/topstories/v2/{section}` + `/mostpopular/v2/viewed/{period}` | `news_articles` |
 
 Archive results are filtered to the 10 configured sections, articles since the cutoff date,
 and capped at **5 articles per section per day**.
 
 > **Archive API prerequisite:** The "Archive API" product must be enabled at
 > [developer.nytimes.com/my-apps](https://developer.nytimes.com/my-apps) for your
-> `NYT_API_KEY`. If not enabled, `--backfill-news` is silently skipped and only
+> `NYT_API_KEY_1` (default key for Archive backfill). If not enabled, `--backfill-news` is silently skipped and only
 > current top stories are fetched.
 
 **Media**
@@ -146,7 +146,7 @@ Runs all four domains sequentially: **sports → markets → news → media**.
 |--------|---------------|---------------|
 | Sports | ESPN: news + scores for ~10 leagues | ~10–15s |
 | Markets | Finnhub: 36 quotes + 36 company-news + 4 market-news; AV: 5 sentiment topics | ~90–120s |
-| News | NYT Top Stories: 10 sections × 7s sleep = 70s minimum | ~90–120s |
+| News | NYT Top Stories: 9 sections × >=1s pacing + 1 most-popular call | ~90–120s |
 | Media | Spotify (1–2 calls) + Reddit (8 subs × 1s sleep) | ~15–20s |
 | **Total** | | **~5–7 min** |
 

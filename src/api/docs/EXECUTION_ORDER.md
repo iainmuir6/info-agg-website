@@ -32,16 +32,17 @@ Each league: fetch ESPN news → insert → fetch ESPN scores → insert
 
 ---
 
-## NEWS (~10–15s, semi-parallel)
+## NEWS (~10–20s, sequential)
 
 ```
-Step 1 — NYT top stories, max 3 sections concurrent:
-  [home, tech, biz] → [science, health, sports] → [arts, world, politics] → [us]
-  ~3–4 rounds × ~2s ≈ 6–8s
+Step 1 — NYT top stories (sequential, 9 sections):
+  `run_etl.py` default sections:
+  us → world → opinion → business → insider → realestate → science → technology → arts
+  Minimum pacing: `time.sleep(1.1)` between section calls.
 
-Step 2 — NYT most popular (sequential, after sections): ~1–2s
+Step 2 — NYT most popular (1 call, after sections): uses `NYT_API_KEY_2` (daily: calls 5–10)
 
-Total: ~8–10s
+Total: ~10s+ (network + JSON parsing dependent)
 ```
 
 ---
