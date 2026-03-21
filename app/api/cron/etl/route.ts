@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
-import { exec } from "child_process";
+import { execFile } from "child_process";
 import path from "path";
+import { getEtlPythonExecutable } from "@/lib/etl-python";
 
 // Vercel Cron — daily ETL at 12:00 UTC (7am EST / 8am EDT).
 // Note: Vercel cron does not support timezone-aware schedules; 12:00 UTC
@@ -11,16 +12,19 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const scriptPath = path.join(process.cwd(), "src", "api", "run_etl.py");
+  const cwd = process.cwd();
+  const scriptPath = path.join(cwd, "src", "api", "run_etl.py");
+  const python = getEtlPythonExecutable(cwd);
 
   return new Promise<NextResponse>((resolve) => {
-    exec(
-      `python3 ${scriptPath} --no-candles`,
+    execFile(
+      python,
+      [scriptPath],
       {
         timeout: 55_000, // 55s — 5s buffer before Vercel's 60s function limit
         env: {
           ...process.env,
-          PYTHONPATH: path.join(process.cwd(), "src", "api"),
+          PYTHONPATH: path.join(cwd, "src", "api"),
         },
       },
       (err, stdout, stderr) => {

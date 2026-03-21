@@ -80,7 +80,7 @@ Each domain follows the same pattern:
 - `media/` → Spotify API (new releases) + Reddit API (hot posts)
 - `misc/` — placeholder for additional sources
 
-Python venv: `_agg_venv/` (at repo root). Dependencies: `src/api/requirements.txt`.
+Python venv: `_agg_venv/` (at repo root). Dependencies: `requirements.txt` (repo root).
 
 ### Supabase Database (`supabase/`)
 

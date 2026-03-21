@@ -6,6 +6,7 @@ import Link from "next/link";
 type QuoteRow = {
   ticker: string;
   name?: string | null;
+  asset_type: string;
   quote: {
     current_price: number;
     percent_change: number;
@@ -13,7 +14,7 @@ type QuoteRow = {
 };
 
 type CompanyNewsItem = {
-  id: number;
+  id: string;
   headline: string;
   url: string;
   source: string | null;
@@ -22,7 +23,7 @@ type CompanyNewsItem = {
 };
 
 type NyTimesArticle = {
-  id: number;
+  id: string;
   title: string;
   section: string | null;
   source: string | null;
@@ -31,7 +32,7 @@ type NyTimesArticle = {
 };
 
 type LeagueRow = {
-  id: number;
+  id: string;
   sport: string;
   league: string;
   display_name: string;
@@ -49,7 +50,7 @@ type ScoreRowType = {
 };
 
 type SportsNewsItem = {
-  id: number;
+  id: string;
   title: string;
   url: string;
   published_at: string | null;
@@ -63,65 +64,76 @@ type LeagueSnapshot = {
   news: SportsNewsItem[];
 };
 
-// ─── Data fetching ────────────────────────────────────────────────────────────
+const ASSET_TYPE_ORDER = ["stock", "etf", "forex", "commodity"] as const;
 
-async function getEquityQuotes(
-  supabase: Awaited<ReturnType<typeof createClient>>
-): Promise<QuoteRow[]> {
-  const MAG7 = ["AAPL", "GOOGL", "MSFT", "AMZN", "NVDA", "META", "TSLA"];
+function assetTypeLabel(t: string): string {
+  const m: Record<string, string> = {
+    stock: "Stocks",
+    etf: "ETFs",
+    forex: "FX",
+    commodity: "Commodities",
+  };
+  return m[t] ?? t;
+}
+
+function latestQuoteRow(s: any): QuoteRow {
+  const quotes = (s.stock_quotes ?? []).sort(
+    (a: any, b: any) => new Date(b.fetched_at).getTime() - new Date(a.fetched_at).getTime()
+  );
+  return {
+    ticker: s.ticker,
+    name: s.name,
+    asset_type: (s.asset_type as string) ?? "stock",
+    quote: quotes[0] ?? null,
+  };
+}
+
+async function getCoreStocksBundle(supabase: Awaited<ReturnType<typeof createClient>>): Promise<{
+  watchlistNonCrypto: QuoteRow[];
+  cryptoQuotes: QuoteRow[];
+  coreTickers: string[];
+}> {
   try {
     const { data } = await supabase
       .from("stocks")
-      .select(`ticker, name, stock_quotes(current_price, percent_change, fetched_at)`)
-      .in("ticker", MAG7)
+      .select("ticker, name, asset_type, stock_quotes(current_price, percent_change, fetched_at)")
+      .eq("is_core", true)
       .eq("is_active", true);
 
-    return (data ?? [])
-      .map((s: any) => {
-        const quotes = (s.stock_quotes ?? []).sort(
-          (a: any, b: any) => new Date(b.fetched_at).getTime() - new Date(a.fetched_at).getTime()
-        );
-        return { ticker: s.ticker, name: s.name, quote: quotes[0] ?? null };
-      })
-      .filter((s: any) => s.quote)
-      .sort((a: any, b: any) => MAG7.indexOf(a.ticker) - MAG7.indexOf(b.ticker));
+    const rows = (data ?? []).map(latestQuoteRow);
+    const coreTickers = [...new Set(rows.map((r) => r.ticker).filter(Boolean))];
+    const withQuote = rows.filter((r) => r.quote);
+    return {
+      watchlistNonCrypto: withQuote.filter((r) => r.asset_type !== "crypto"),
+      cryptoQuotes: withQuote.filter((r) => r.asset_type === "crypto"),
+      coreTickers,
+    };
   } catch {
-    return [];
+    return { watchlistNonCrypto: [], cryptoQuotes: [], coreTickers: [] };
   }
 }
 
-async function getEtfQuotes(
-  supabase: Awaited<ReturnType<typeof createClient>>
-): Promise<QuoteRow[]> {
-  const ETFS = ["SPY", "QQQ", "DIA", "IWM", "VTI"];
-  try {
-    const { data } = await supabase
-      .from("stocks")
-      .select(`ticker, name, stock_quotes(current_price, percent_change, fetched_at)`)
-      .in("ticker", ETFS)
-      .eq("is_active", true);
-
-    return (data ?? [])
-      .map((s: any) => {
-        const quotes = (s.stock_quotes ?? []).sort(
-          (a: any, b: any) => new Date(b.fetched_at).getTime() - new Date(a.fetched_at).getTime()
-        );
-        return { ticker: s.ticker, name: s.name, quote: quotes[0] ?? null };
-      })
-      .filter((s: any) => s.quote);
-  } catch {
-    return [];
+function groupQuotesByAssetType(rows: QuoteRow[]): Map<string, QuoteRow[]> {
+  const map = new Map<string, QuoteRow[]>();
+  for (const r of rows) {
+    const at = r.asset_type || "stock";
+    if (!map.has(at)) map.set(at, []);
+    map.get(at)!.push(r);
   }
+  for (const [, list] of map) {
+    list.sort((a, b) => a.ticker.localeCompare(b.ticker));
+  }
+  return map;
 }
 
-async function getCryptoNews(supabase: Awaited<ReturnType<typeof createClient>>) {
+async function getCryptoMarketHeadlines(supabase: Awaited<ReturnType<typeof createClient>>) {
   try {
     const { data } = await supabase
       .from("market_news")
-      .select("id, headline, url, source, published_at, related_tickers")
+      .select("id, headline, url, source, published_at")
       .eq("category", "crypto")
       .order("published_at", { ascending: false })
-      .limit(6);
+      .limit(3);
     return data ?? [];
   } catch {
     return [];
@@ -129,67 +141,63 @@ async function getCryptoNews(supabase: Awaited<ReturnType<typeof createClient>>)
 }
 
 async function getCompanyNews(
-  supabase: Awaited<ReturnType<typeof createClient>>
+  supabase: Awaited<ReturnType<typeof createClient>>,
+  coreTickers: string[]
 ): Promise<CompanyNewsItem[]> {
+  if (coreTickers.length === 0) return [];
   try {
-    const MAG7 = ["AAPL", "GOOGL", "MSFT", "AMZN", "NVDA", "META", "TSLA"];
     const { data } = await supabase
       .from("company_news")
       .select("id, headline, url, source, published_at, related_tickers")
-      .contains("related_tickers", MAG7.slice(0, 3)) // basic filter for key names
+      .overlaps("related_tickers", coreTickers)
       .order("published_at", { ascending: false })
-      .limit(10);
+      .limit(14);
     return (data ?? []) as CompanyNewsItem[];
   } catch {
     return [];
   }
 }
 
-async function getMarketNews(
-  supabase: Awaited<ReturnType<typeof createClient>>
-): Promise<CompanyNewsItem[]> {
+async function getMarketNews(supabase: Awaited<ReturnType<typeof createClient>>) {
   try {
     const { data } = await supabase
       .from("market_news")
       .select("id, headline, url, source, published_at, related_tickers, category")
       .order("published_at", { ascending: false })
-      .limit(20);
-    return (data ?? []) as any;
+      .limit(18);
+    return data ?? [];
   } catch {
     return [];
   }
 }
 
-async function getNyTimesTopStories(
-  supabase: Awaited<ReturnType<typeof createClient>>
+/** Single query; split client-side. Uses existing `section` for grouping (no schema changes). */
+async function getNytRecentForHome(
+  supabase: Awaited<ReturnType<typeof createClient>>,
+  total: number
 ): Promise<NyTimesArticle[]> {
   try {
     const { data } = await supabase
       .from("news_articles")
-      .select("id, title, section, source, url, published_at, image_url")
-      .eq("source", "NYT Top Stories")
-      .order("published_at", { ascending: false })
-      .limit(8);
+      .select("id, title, section, source, url, published_at")
+      .eq("source", "nyt")
+      .order("published_at", { ascending: false, nullsFirst: false })
+      .limit(total);
     return (data ?? []) as NyTimesArticle[];
   } catch {
     return [];
   }
 }
 
-async function getNyTimesMore(
-  supabase: Awaited<ReturnType<typeof createClient>>
-): Promise<NyTimesArticle[]> {
-  try {
-    const { data } = await supabase
-      .from("news_articles")
-      .select("id, title, section, source, url, published_at, image_url")
-      .neq("source", "NYT Top Stories")
-      .order("published_at", { ascending: false })
-      .limit(8);
-    return (data ?? []) as NyTimesArticle[];
-  } catch {
-    return [];
+function groupNytBySection(articles: NyTimesArticle[]): { section: string; items: NyTimesArticle[] }[] {
+  const map = new Map<string, NyTimesArticle[]>();
+  for (const a of articles) {
+    const key = (a.section?.trim() || "General") || "General";
+    if (!map.has(key)) map.set(key, []);
+    map.get(key)!.push(a);
   }
+  const keys = [...map.keys()].sort((a, b) => a.localeCompare(b));
+  return keys.map((section) => ({ section, items: map.get(section)! }));
 }
 
 async function getSpotifyReleases(supabase: Awaited<ReturnType<typeof createClient>>) {
@@ -284,7 +292,6 @@ async function getLeagueSnapshot(
     const news = (newsRes.data ?? []) as SportsNewsItem[];
 
     if (!leagueRow.is_active) {
-      // Off-season: show news only
       return {
         league: leagueRow as LeagueRow,
         recentGames: [],
@@ -310,10 +317,11 @@ function ChangeTag({ pct }: { pct: number }) {
   const isPos = pct >= 0;
   return (
     <span
-      className="text-xs font-mono font-bold tabular-nums"
+      className="text-[10px] font-mono font-bold tabular-nums leading-none"
       style={{ color: isPos ? "hsl(142 65% 42%)" : "hsl(0 72% 50%)" }}
     >
-      {isPos ? "+" : ""}{pct.toFixed(2)}%
+      {isPos ? "+" : ""}
+      {pct.toFixed(2)}%
     </span>
   );
 }
@@ -330,19 +338,22 @@ function CardHeader({
   count?: number;
 }) {
   return (
-    <div className="flex items-center justify-between px-4 py-3 border-b border-border">
-      <div className="flex items-center gap-2">
-        <div className="w-1.5 h-4 shrink-0" style={{ backgroundColor: accent }} />
-        <span className="text-[10px] font-mono tracking-widest uppercase font-bold" style={{ color: accent }}>
+    <div className="flex items-center justify-between px-2.5 py-2 border-b border-border">
+      <div className="flex items-center gap-1.5 min-w-0">
+        <div className="w-1 h-3 shrink-0" style={{ backgroundColor: accent }} />
+        <span
+          className="text-[9px] font-mono tracking-wider uppercase font-bold truncate"
+          style={{ color: accent }}
+        >
           {label}
         </span>
         {count != null && (
-          <span className="text-[10px] font-mono text-muted-foreground">{count}</span>
+          <span className="text-[9px] font-mono text-muted-foreground shrink-0">{count}</span>
         )}
       </div>
       <Link
         href={href}
-        className="text-[10px] font-mono tracking-wider uppercase text-muted-foreground hover:text-foreground transition-colors"
+        className="text-[9px] font-mono tracking-wider uppercase text-muted-foreground hover:text-foreground transition-colors shrink-0"
       >
         All →
       </Link>
@@ -352,8 +363,8 @@ function CardHeader({
 
 function EmptyState({ msg }: { msg: string }) {
   return (
-    <div className="px-4 py-6 text-center">
-      <p className="text-[10px] font-mono text-muted-foreground">{msg}</p>
+    <div className="px-2.5 py-4 text-center">
+      <p className="text-[9px] font-mono text-muted-foreground leading-snug">{msg}</p>
     </div>
   );
 }
@@ -364,44 +375,48 @@ function ScoreRow({ game }: { game: ScoreRowType }) {
   const isFinal = status.includes("final");
 
   return (
-    <div className="px-4 py-2.5 border-b border-border last:border-0 hover:bg-secondary/50 transition-colors">
-      <div className="flex items-center justify-between text-xs font-mono">
-        <span className="text-muted-foreground w-[38%] truncate">{game.away_team}</span>
-        <div className="flex items-center gap-2">
-          <span className="font-bold tabular-nums w-6 text-right">{game.away_score ?? "—"}</span>
-          <span className="text-muted-foreground text-[10px]">–</span>
-          <span className="font-bold tabular-nums w-6">{game.home_score ?? "—"}</span>
+    <div className="px-2 py-1 border-b border-border last:border-0 hover:bg-secondary/50 transition-colors">
+      <div className="flex items-center justify-between text-[10px] font-mono leading-tight gap-1">
+        <span className="text-muted-foreground w-[36%] truncate">{game.away_team}</span>
+        <div className="flex items-center gap-1 shrink-0">
+          <span className="font-bold tabular-nums w-5 text-right">{game.away_score ?? "—"}</span>
+          <span className="text-muted-foreground text-[9px]">–</span>
+          <span className="font-bold tabular-nums w-5">{game.home_score ?? "—"}</span>
         </div>
-        <span className="text-muted-foreground w-[38%] truncate text-right">{game.home_team}</span>
+        <span className="text-muted-foreground w-[36%] truncate text-right">{game.home_team}</span>
       </div>
       {isLive && (
         <div className="flex items-center gap-1 mt-0.5">
-          <div className="w-1 h-1 rounded-full animate-pulse-dot" style={{ backgroundColor: "hsl(0 72% 50%)" }} />
-          <span className="text-[9px] font-mono" style={{ color: "hsl(0 72% 50%)" }}>
+          <div
+            className="w-1 h-1 rounded-full animate-pulse-dot"
+            style={{ backgroundColor: "hsl(0 72% 50%)" }}
+          />
+          <span className="text-[8px] font-mono leading-none" style={{ color: "hsl(0 72% 50%)" }}>
             {game.status_detail ?? "LIVE"}
           </span>
         </div>
       )}
       {isFinal && (
-        <p className="text-[9px] font-mono text-muted-foreground mt-0.5">FINAL</p>
+        <p className="text-[8px] font-mono text-muted-foreground mt-0.5 leading-none">FINAL</p>
       )}
     </div>
   );
 }
 
+const NYT_FIRST = 28;
+const NYT_TOTAL = 44;
+
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
 export default async function CommandCenter() {
   const supabase = await createClient();
+  const coreBundle = await getCoreStocksBundle(supabase);
 
   const [
-    equities,
-    etfs,
-    cryptoNews,
+    cryptoHeadlines,
     companyNews,
     marketNews,
-    nytTop,
-    nytMore,
+    nytAll,
     spotifyReleases,
     redditPosts,
     nba,
@@ -412,13 +427,10 @@ export default async function CommandCenter() {
     ncaaf,
     wnba,
   ] = await Promise.all([
-    getEquityQuotes(supabase),
-    getEtfQuotes(supabase),
-    getCryptoNews(supabase),
-    getCompanyNews(supabase),
+    getCryptoMarketHeadlines(supabase),
+    getCompanyNews(supabase, coreBundle.coreTickers),
     getMarketNews(supabase),
-    getNyTimesTopStories(supabase),
-    getNyTimesMore(supabase),
+    getNytRecentForHome(supabase, NYT_TOTAL),
     getSpotifyReleases(supabase),
     getRedditTopPosts(supabase),
     getLeagueSnapshot(supabase, "basketball", "nba"),
@@ -430,13 +442,29 @@ export default async function CommandCenter() {
     getLeagueSnapshot(supabase, "basketball", "wnba"),
   ]);
 
-  const hasEquities = equities.length > 0;
-  const hasEtfs = etfs.length > 0;
-  const hasCrypto = cryptoNews.length > 0;
+  const nytFirstSlice = nytAll.slice(0, NYT_FIRST);
+  const nytSecondSlice = nytAll.slice(NYT_FIRST, NYT_TOTAL);
+  const nytGrouped = groupNytBySection(nytFirstSlice);
+
+  const watchlistByType = groupQuotesByAssetType(coreBundle.watchlistNonCrypto);
+  const watchlistOrdered: { type: string; rows: QuoteRow[] }[] = ASSET_TYPE_ORDER.filter(
+    (t) => (watchlistByType.get(t)?.length ?? 0) > 0
+  ).map((t) => ({ type: t, rows: watchlistByType.get(t)! }));
+  const orderedSet = new Set<string>(ASSET_TYPE_ORDER);
+  for (const [t, rows] of watchlistByType) {
+    if (!orderedSet.has(t)) {
+      watchlistOrdered.push({ type: t, rows });
+    }
+  }
+
+  const hasWatchlist = coreBundle.watchlistNonCrypto.length > 0;
+  const hasCryptoQuotes = coreBundle.cryptoQuotes.length > 0;
+  const hasCryptoHeadlines = cryptoHeadlines.length > 0;
+  const hasCryptoCard = hasCryptoQuotes || hasCryptoHeadlines;
   const hasCompanyNews = companyNews.length > 0;
   const hasMarketNews = marketNews.length > 0;
-  const hasNytTop = nytTop.length > 0;
-  const hasNytMore = nytMore.length > 0;
+  const hasNytTop = nytFirstSlice.length > 0;
+  const hasNytMore = nytSecondSlice.length > 0;
   const hasSpotify = spotifyReleases.length > 0;
   const hasReddit = redditPosts.length > 0;
 
@@ -445,122 +473,115 @@ export default async function CommandCenter() {
   return (
     <div className="px-3 md:px-4 py-3 md:py-4">
       <div className="grid grid-cols-1 md:grid-cols-3 xl:grid-cols-4 gap-3 md:gap-4 auto-rows-min">
-        {/* Stocks / Equities */}
-        <div className="border border-border bg-card">
+        {/* Core watchlist (non-crypto), grouped by asset_type */}
+        <div className="border border-border bg-card md:col-span-2 xl:col-span-2">
           <CardHeader
-            label="Equities — MAG7"
+            label="Core watchlist"
             accent="hsl(142 65% 42%)"
             href="/markets"
-            count={equities.length}
+            count={coreBundle.watchlistNonCrypto.length}
           />
-          {!hasEquities ? (
-            <EmptyState msg="Run ETL to sync stock data" />
+          {!hasWatchlist ? (
+            <EmptyState msg="No core quotes — run ETL or check is_core stocks" />
           ) : (
-            <div>
-              {equities.map((s) => {
-                const pct = parseFloat(String(s.quote?.percent_change ?? 0));
-                const price = parseFloat(String(s.quote?.current_price ?? 0));
-                return (
-                  <div
-                    key={s.ticker}
-                    className="flex items-center justify-between px-3 py-1.5 border-b border-border last:border-0 hover:bg-secondary/50 transition-colors"
-                  >
-                    <span className="text-[11px] font-mono font-black w-12">{s.ticker}</span>
-                    <span className="text-[10px] text-muted-foreground flex-1 truncate px-1 hidden sm:block">
-                      {s.name}
-                    </span>
-                    <div className="flex items-center gap-2">
-                      <span className="text-[11px] font-mono tabular-nums font-bold">
-                        ${price.toFixed(2)}
-                      </span>
-                      <ChangeTag pct={pct} />
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          )}
-        </div>
-
-        {/* ETFs */}
-        <div className="border border-border bg-card">
-          <CardHeader label="Stocks — ETFs" accent="hsl(142 65% 42%)" href="/markets" />
-          {!hasEtfs ? (
-            <EmptyState msg="No ETF data" />
-          ) : (
-            <div>
-              {etfs.map((s) => {
-                const pct = parseFloat(String(s.quote?.percent_change ?? 0));
-                const price = parseFloat(String(s.quote?.current_price ?? 0));
-                return (
-                  <div
-                    key={s.ticker}
-                    className="flex items-center justify-between px-3 py-1.5 border-b border-border last:border-0 hover:bg-secondary/50 transition-colors"
-                  >
-                    <span className="text-[11px] font-mono font-black">{s.ticker}</span>
-                    <div className="flex flex-col items-end">
-                      <span className="text-[11px] font-mono tabular-nums font-bold">
-                        ${price.toFixed(2)}
-                      </span>
-                      <ChangeTag pct={pct} />
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          )}
-        </div>
-
-        {/* Crypto news */}
-        <div className="border border-border bg-card">
-          <CardHeader label="Crypto" accent="hsl(45 93% 47%)" href="/markets" />
-          {!hasCrypto ? (
-            <EmptyState msg="No crypto data" />
-          ) : (
-            <div>
-              {cryptoNews.map((item: any) => (
-                <a
-                  key={item.id}
-                  href={item.url}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="block px-3 py-2 border-b border-border last:border-0 hover:bg-secondary/50 transition-colors group"
-                >
-                  <p className="text-[11px] font-medium leading-snug line-clamp-2 group-hover:underline">
-                    {item.headline}
+            <div className="max-h-[min(70vh,520px)] overflow-y-auto">
+              {watchlistOrdered.map(({ type, rows }) => (
+                <div key={type}>
+                  <p className="px-2 py-1 text-[8px] font-mono uppercase tracking-widest text-muted-foreground bg-secondary/40 border-b border-border sticky top-0">
+                    {assetTypeLabel(type)}
                   </p>
-                  <div className="flex items-center gap-1.5 mt-0.5">
-                    {item.source && (
-                      <span className="text-[9px] font-mono text-muted-foreground">
-                        {item.source}
-                      </span>
-                    )}
-                    {(item.related_tickers ?? []).slice(0, 2).map((t: string) => (
-                      <span
-                        key={t}
-                        className="text-[9px] font-mono px-1 bg-secondary"
-                        style={{ color: "hsl(45 93% 47%)" }}
-                      >
-                        {t}
-                      </span>
-                    ))}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-2">
+                    {rows.map((s) => {
+                      const pct = parseFloat(String(s.quote?.percent_change ?? 0));
+                      const price = parseFloat(String(s.quote?.current_price ?? 0));
+                      return (
+                        <div
+                          key={s.ticker}
+                          className="flex items-center justify-between gap-1 px-2 py-1 border-b border-border hover:bg-secondary/50 transition-colors"
+                        >
+                          <span className="text-[10px] font-mono font-black w-11 shrink-0">{s.ticker}</span>
+                          <span className="text-[9px] text-muted-foreground flex-1 truncate hidden sm:block">
+                            {s.name}
+                          </span>
+                          <div className="flex items-center gap-1.5 shrink-0">
+                            <span className="text-[10px] font-mono tabular-nums font-bold">
+                              ${price.toFixed(2)}
+                            </span>
+                            <ChangeTag pct={pct} />
+                          </div>
+                        </div>
+                      );
+                    })}
                   </div>
-                </a>
+                </div>
               ))}
             </div>
           )}
         </div>
 
-        {/* Stock company news */}
+        {/* Crypto: quotes first, then headlines */}
+        <div className="border border-border bg-card">
+          <CardHeader label="Crypto" accent="hsl(45 93% 47%)" href="/markets" />
+          {!hasCryptoCard ? (
+            <EmptyState msg="No core crypto quotes or headlines" />
+          ) : (
+            <div>
+              {hasCryptoQuotes && (
+                <div className="border-b border-border">
+                  {coreBundle.cryptoQuotes.map((s) => {
+                    const pct = parseFloat(String(s.quote?.percent_change ?? 0));
+                    const price = parseFloat(String(s.quote?.current_price ?? 0));
+                    return (
+                      <div
+                        key={s.ticker}
+                        className="flex items-center justify-between px-2 py-1 border-b border-border last:border-b-0 hover:bg-secondary/50 transition-colors"
+                      >
+                        <span className="text-[10px] font-mono font-black">{s.ticker}</span>
+                        <div className="flex items-center gap-1.5">
+                          <span className="text-[10px] font-mono tabular-nums font-bold">
+                            ${price.toFixed(2)}
+                          </span>
+                          <ChangeTag pct={pct} />
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+              {hasCryptoHeadlines && (
+                <div>
+                  {cryptoHeadlines.map((item: any) => (
+                    <a
+                      key={item.id}
+                      href={item.url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="block px-2 py-1 border-b border-border last:border-0 hover:bg-secondary/50 transition-colors group"
+                    >
+                      <p className="text-[10px] font-medium leading-tight line-clamp-1 group-hover:underline">
+                        {item.headline}
+                      </p>
+                      {item.source && (
+                        <span className="text-[8px] font-mono text-muted-foreground">{item.source}</span>
+                      )}
+                    </a>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+
+        {/* Company news */}
         <div className="border border-border bg-card">
           <CardHeader
-            label="Stock News"
+            label="Stock news"
             accent="hsl(142 65% 42%)"
             href="/markets"
             count={companyNews.length}
           />
           {!hasCompanyNews ? (
-            <EmptyState msg="No stock news" />
+            <EmptyState msg="No company news for core tickers" />
           ) : (
             <div>
               {companyNews.map((item) => (
@@ -569,19 +590,17 @@ export default async function CommandCenter() {
                   href={item.url}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="block px-3 py-2 border-b border-border last:border-0 hover:bg-secondary/50 transition-colors group"
+                  className="block px-2 py-1 border-b border-border last:border-0 hover:bg-secondary/50 transition-colors group"
                 >
-                  <p className="text-[11px] font-medium leading-snug line-clamp-2 group-hover:underline">
+                  <p className="text-[10px] font-medium leading-tight line-clamp-1 group-hover:underline">
                     {item.headline}
                   </p>
-                  <div className="flex items-center gap-1.5 mt-0.5">
+                  <div className="flex items-center gap-1 flex-wrap mt-0.5">
                     {item.source && (
-                      <span className="text-[9px] font-mono text-muted-foreground">
-                        {item.source}
-                      </span>
+                      <span className="text-[8px] font-mono text-muted-foreground">{item.source}</span>
                     )}
-                    {(item.related_tickers ?? []).slice(0, 2).map((t) => (
-                      <span key={t} className="text-[9px] font-mono px-1 bg-secondary">
+                    {(item.related_tickers ?? []).slice(0, 4).map((t) => (
+                      <span key={t} className="text-[8px] font-mono px-0.5 bg-secondary leading-none">
                         {t}
                       </span>
                     ))}
@@ -595,7 +614,7 @@ export default async function CommandCenter() {
         {/* Market news */}
         <div className="border border-border bg-card">
           <CardHeader
-            label="Market News"
+            label="Market news"
             accent="hsl(142 65% 42%)"
             href="/markets"
             count={marketNews.length}
@@ -610,24 +629,22 @@ export default async function CommandCenter() {
                   href={item.url}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="block px-3 py-2 border-b border-border last:border-0 hover:bg-secondary/50 transition-colors group"
+                  className="block px-2 py-1 border-b border-border last:border-0 hover:bg-secondary/50 transition-colors group"
                 >
-                  <div className="flex items-center gap-1.5 mb-0.5">
+                  <div className="flex items-center gap-1 flex-wrap">
                     {item.category && (
                       <span
-                        className="text-[9px] font-mono uppercase tracking-wider"
+                        className="text-[8px] font-mono uppercase tracking-wider"
                         style={{ color: "hsl(142 65% 42%)" }}
                       >
                         {item.category}
                       </span>
                     )}
                     {item.source && (
-                      <span className="text-[9px] font-mono text-muted-foreground">
-                        · {item.source}
-                      </span>
+                      <span className="text-[8px] font-mono text-muted-foreground">· {item.source}</span>
                     )}
                   </div>
-                  <p className="text-[11px] font-medium leading-snug line-clamp-2 group-hover:underline">
+                  <p className="text-[10px] font-medium leading-tight line-clamp-1 group-hover:underline">
                     {item.headline}
                   </p>
                 </a>
@@ -636,82 +653,75 @@ export default async function CommandCenter() {
           )}
         </div>
 
-        {/* NYT Top Stories */}
-        <div className="border border-border bg-card">
+        {/* NYT — grouped by section (existing column) */}
+        <div className="border border-border bg-card md:col-span-2">
           <CardHeader
-            label="NYT — Top Stories"
+            label="NYT — by section"
             accent="hsl(220 90% 52%)"
             href="/news"
-            count={nytTop.length}
+            count={nytFirstSlice.length}
           />
           {!hasNytTop ? (
-            <EmptyState msg="No NYT top stories" />
+            <EmptyState msg="No NYT articles (source=nyt)" />
           ) : (
-            <div>
-              {nytTop.map((a) => (
-                <a
-                  key={a.id}
-                  href={a.url}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="block px-3 py-2 border-b border-border last:border-0 hover:bg-secondary/50 transition-colors group"
-                >
-                  <div className="flex items-center gap-1.5 mb-0.5">
-                    {a.section && (
-                      <span
-                        className="text-[9px] font-mono uppercase tracking-wider"
-                        style={{ color: "hsl(220 90% 52%)" }}
-                      >
-                        {a.section}
-                      </span>
-                    )}
-                  </div>
-                  <p className="text-[11px] font-bold leading-snug line-clamp-2 group-hover:underline">
-                    {a.title}
+            <div className="max-h-[min(60vh,440px)] overflow-y-auto">
+              {nytGrouped.map(({ section, items }) => (
+                <div key={section}>
+                  <p className="px-2 py-0.5 text-[8px] font-mono uppercase tracking-widest text-muted-foreground bg-secondary/40 border-b border-border sticky top-0">
+                    {section}
                   </p>
-                </a>
+                  {items.map((a) => (
+                    <a
+                      key={a.id}
+                      href={a.url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="block px-2 py-1 border-b border-border hover:bg-secondary/50 transition-colors group"
+                    >
+                      <p className="text-[10px] font-semibold leading-tight line-clamp-1 group-hover:underline">
+                        {a.title}
+                      </p>
+                    </a>
+                  ))}
+                </div>
               ))}
             </div>
           )}
         </div>
 
-        {/* NYT More */}
+        {/* NYT — more recent (same feed, later rows; no extra DB column) */}
         <div className="border border-border bg-card">
           <CardHeader
-            label="NYT — More"
+            label="NYT — more"
             accent="hsl(220 90% 52%)"
             href="/news"
-            count={nytMore.length}
+            count={nytSecondSlice.length}
           />
           {!hasNytMore ? (
-            <EmptyState msg="No additional NYT articles" />
+            <EmptyState msg="No additional NYT rows" />
           ) : (
             <div>
-              {nytMore.map((a) => (
+              {nytSecondSlice.map((a) => (
                 <a
                   key={a.id}
                   href={a.url}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="block px-3 py-2 border-b border-border last:border-0 hover:bg-secondary/50 transition-colors group"
+                  className="block px-2 py-1 border-b border-border last:border-0 hover:bg-secondary/50 transition-colors group"
                 >
-                  <div className="flex items-center gap-1.5 mb-0.5">
+                  <div className="flex items-center gap-1">
                     {a.section && (
-                      <span className="text-[9px] font-mono text-muted-foreground">
-                        {a.section}
-                      </span>
+                      <span className="text-[8px] font-mono text-muted-foreground shrink-0">{a.section}</span>
                     )}
                   </div>
-                  <p className="text-[11px] font-medium leading-snug line-clamp-2 group-hover:underline">
-                    {a.title}
-                  </p>
+                  <p className="text-[10px] leading-tight line-clamp-1 group-hover:underline">{a.title}</p>
                 </a>
               ))}
             </div>
           )}
         </div>
 
-        {/* Sports cards */}
+        {/* Sports */}
         {Object.entries(sportsSnapshots).map(([key, snapshot]) => {
           const snap = snapshot as LeagueSnapshot;
           if (!snap.league) return null;
@@ -739,18 +749,16 @@ export default async function CommandCenter() {
               {!hasScores && snap.news.length === 0 ? (
                 <EmptyState msg={offSeason ? "Off season — no data" : "No games yet"} />
               ) : (
-                <div className="px-3 py-2 space-y-2">
+                <div className="px-2 py-1 space-y-1.5">
                   {offSeason && (
-                    <p className="text-[9px] font-mono text-muted-foreground uppercase tracking-widest">
+                    <p className="text-[8px] font-mono text-muted-foreground uppercase tracking-widest">
                       Off season — news only
                     </p>
                   )}
 
                   {snap.recentGames.length > 0 && (
                     <div>
-                      <p className="text-[9px] font-mono text-muted-foreground uppercase mb-1">
-                        Recent
-                      </p>
+                      <p className="text-[8px] font-mono text-muted-foreground uppercase mb-0.5">Recent</p>
                       {snap.recentGames.map((g, i) => (
                         <ScoreRow key={`recent-${i}`} game={g} />
                       ))}
@@ -759,7 +767,7 @@ export default async function CommandCenter() {
 
                   {snap.upcomingGames.length > 0 && (
                     <div>
-                      <p className="text-[9px] font-mono text-muted-foreground uppercase mt-1 mb-1">
+                      <p className="text-[8px] font-mono text-muted-foreground uppercase mt-0.5 mb-0.5">
                         Upcoming
                       </p>
                       {snap.upcomingGames.map((g, i) => (
@@ -770,17 +778,17 @@ export default async function CommandCenter() {
 
                   {snap.news.length > 0 && (
                     <div>
-                      <p className="text-[9px] font-mono text-muted-foreground uppercase mt-1 mb-1">
+                      <p className="text-[8px] font-mono text-muted-foreground uppercase mt-0.5 mb-0.5">
                         News
                       </p>
-                      <div className="space-y-1">
+                      <div className="space-y-0.5">
                         {snap.news.map((n) => (
                           <a
                             key={n.id}
                             href={n.url}
                             target="_blank"
                             rel="noopener noreferrer"
-                            className="block text-[11px] leading-snug line-clamp-2 hover:underline"
+                            className="block text-[10px] leading-tight line-clamp-1 hover:underline"
                           >
                             {n.title}
                           </a>
@@ -794,10 +802,10 @@ export default async function CommandCenter() {
           );
         })}
 
-        {/* Spotify new releases */}
+        {/* Spotify */}
         <div className="border border-border bg-card">
           <CardHeader
-            label="Spotify — New Releases"
+            label="Spotify"
             accent="hsl(340 78% 50%)"
             href="/media"
             count={spotifyReleases.length}
@@ -812,21 +820,14 @@ export default async function CommandCenter() {
                   href={r.external_url ?? "#"}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="flex items-center gap-2.5 px-3 py-2 border-b border-border last:border-0 hover:bg-secondary/50 transition-colors group"
+                  className="flex items-center gap-2 px-2 py-1 border-b border-border last:border-0 hover:bg-secondary/50 transition-colors group"
                 >
-                  <div className="w-7 h-7 shrink-0 bg-secondary flex items-center justify-center">
-                    <span
-                      className="text-[11px]"
-                      style={{ color: "hsl(340 78% 50%)" }}
-                    >
-                      ♫
-                    </span>
+                  <div className="w-6 h-6 shrink-0 bg-secondary flex items-center justify-center text-[10px]">
+                    <span style={{ color: "hsl(340 78% 50%)" }}>♫</span>
                   </div>
                   <div className="min-w-0">
-                    <p className="text-[11px] font-bold line-clamp-1 group-hover:underline">
-                      {r.name}
-                    </p>
-                    <p className="text-[9px] text-muted-foreground line-clamp-1">
+                    <p className="text-[10px] font-bold line-clamp-1 group-hover:underline">{r.name}</p>
+                    <p className="text-[8px] text-muted-foreground line-clamp-1">
                       {(r.artists ?? []).join(", ")}
                     </p>
                   </div>
@@ -836,10 +837,10 @@ export default async function CommandCenter() {
           )}
         </div>
 
-        {/* Reddit top posts */}
+        {/* Reddit */}
         <div className="border border-border bg-card">
           <CardHeader
-            label="Reddit — Top Posts"
+            label="Reddit"
             accent="hsl(220 15% 60%)"
             href="/media"
             count={redditPosts.length}
@@ -854,19 +855,13 @@ export default async function CommandCenter() {
                   href={p.url}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="block px-3 py-2 border-b border-border last:border-0 hover:bg-secondary/50 transition-colors group"
+                  className="block px-2 py-1 border-b border-border last:border-0 hover:bg-secondary/50 transition-colors group"
                 >
-                  <div className="flex items-center justify-between mb-0.5">
-                    <span className="text-[9px] font-mono text-muted-foreground">
-                      r/{p.subreddit}
-                    </span>
-                    <span className="text-[9px] font-mono text-muted-foreground">
-                      ▲ {p.score}
-                    </span>
+                  <div className="flex items-center justify-between gap-1">
+                    <span className="text-[8px] font-mono text-muted-foreground truncate">r/{p.subreddit}</span>
+                    <span className="text-[8px] font-mono text-muted-foreground shrink-0">▲ {p.score}</span>
                   </div>
-                  <p className="text-[11px] leading-snug line-clamp-2 group-hover:underline">
-                    {p.title}
-                  </p>
+                  <p className="text-[10px] leading-tight line-clamp-1 group-hover:underline">{p.title}</p>
                 </a>
               ))}
             </div>

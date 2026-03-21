@@ -3,6 +3,11 @@ python-dotenv==1.0.0
 pandas==2.1.4
 beautifulsoup4==4.12.2
 lxml==4.9.3
-supabase==2.3.4
+# supabase-auth / supabase-functions 2.28.x require httpx>=0.26. If you upgraded from supabase<2.4, run:
+#   pip uninstall -y gotrue supafunc
+httpx[http2]>=0.26,<0.29
+# realtime (supabase) imports websockets.asyncio — requires websockets 14+
+websockets>=14,<16
+supabase==2.28.3
 selenium>=4.0.0
 webdriver-manager>=4.0.0

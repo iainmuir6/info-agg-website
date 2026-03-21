@@ -15,7 +15,6 @@ source _agg_venv/bin/activate
 ```
 src/api/
 ├── run_etl.py               # Orchestrator — entry point for all ETL runs
-├── requirements.txt         # Python dependencies
 ├── RATE_LIMITS.md           # Per-API rate limits and budget notes
 │
 ├── markets/
@@ -39,13 +38,15 @@ src/api/
     └── media_db_helper.py   # DB layer: upserts for spotify_releases, reddit_posts
 ```
 
+Python dependencies live in **`requirements.txt` at the repo root** (same level as `src/`).
+
 ---
 
 ## Setup
 
 1. **Install dependencies**
    ```bash
-   pip install -r src/api/requirements.txt
+   pip install -r requirements.txt
    ```
 
 2. **Configure `.env.local`** in the repo root:

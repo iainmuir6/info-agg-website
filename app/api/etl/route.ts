@@ -1,8 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { isSuperAdmin } from "@/lib/rbac";
-import { exec } from "child_process";
+import { execFile } from "child_process";
 import path from "path";
+import { getEtlPythonExecutable } from "@/lib/etl-python";
 
 // Only allow triggering from super_admin users
 export async function POST(request: NextRequest) {
@@ -26,19 +27,21 @@ export async function POST(request: NextRequest) {
     if (domain && ["sports", "markets", "news", "media"].includes(domain)) {
       args.push(`--${domain}-only`);
     }
-    args.push("--no-candles"); // Skip slow candle fetching on manual triggers
+    // OHLCV/candle backfill is not part of run_etl.py (use run_db_seed.py); no --no-candles flag.
 
-    const scriptPath = path.join(process.cwd(), "src", "api", "run_etl.py");
-    const command = `python3 ${scriptPath} ${args.join(" ")}`;
+    const cwd = process.cwd();
+    const scriptPath = path.join(cwd, "src", "api", "run_etl.py");
+    const python = getEtlPythonExecutable(cwd);
 
     return new Promise<NextResponse>((resolve) => {
-      exec(
-        command,
+      execFile(
+        python,
+        [scriptPath, ...args],
         {
           timeout: 120_000, // 2 minute timeout
           env: {
             ...process.env,
-            PYTHONPATH: path.join(process.cwd(), "src", "api"),
+            PYTHONPATH: path.join(cwd, "src", "api"),
           },
         },
         (err, stdout, stderr) => {

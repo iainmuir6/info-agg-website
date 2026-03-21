@@ -317,8 +317,9 @@ def backfill_nyt_archive(
                 inserted = 0
                 for article in articles:
                     try:
+                        row = {k: v for k, v in article.items() if k != 'news_desk'}
                         response = supabase.table('news_articles').upsert(
-                            article, on_conflict='url'
+                            row, on_conflict='url'
                         ).execute()
                         if response.data:
                             inserted += 1
