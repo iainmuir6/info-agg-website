@@ -35,9 +35,12 @@ See [`src/api/RATE_LIMITS.md`](src/api/RATE_LIMITS.md) for per-API limits, daily
 ## Environment Variables
 
 `.env.local` (Next.js frontend + ETL):
+- `NEXT_PUBLIC_SITE_URL` — Public site origin with no trailing slash (e.g. `https://your-app.vercel.app` or `http://localhost:3000`). Used for metadata, auth email `redirectTo` URLs, and the invite API’s `app_url` / callback links. On Vercel, set this to your production (or preview) URL.
 - `NEXT_PUBLIC_SUPABASE_URL` — Supabase project URL
 - `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` — Supabase anon/publishable key (frontend)
-- `SUPABASE_SERVICE_ROLE_KEY` — Service role key (ETL writes only)
+- `SUPABASE_SERVICE_ROLE_KEY` — Service role key (ETL writes, `POST /api/auth/invite`)
+
+**Supabase Auth → URL configuration:** Add redirect URLs for the auth callback route, e.g. `http://localhost:3000/auth/callback` and `${NEXT_PUBLIC_SITE_URL}/auth/callback`.
 - API keys for fetchers: `NYT_API_KEY_1`, `NYT_API_KEY_2`, `FINNHUB_API_KEY_1`, `FINNHUB_API_KEY_2`, `FMP_API_KEY`, `ALPHA_VANTAGE_API_KEY` (+ `_1/_2`), `SPOTIFY_CLIENT_ID`, `SPOTIFY_CLIENT_SECRET`
 
 ## Architecture
@@ -49,14 +52,16 @@ This is a personal information aggregator ("Info Hub") with two layers:
 **Route groups:**
 - `app/(public)/` — Public-facing pages with a shared newspaper-style layout (`layout.tsx`). Routes: `/` (Command Center dashboard), `/news`, `/sports`, `/markets`, `/media`
 - `app/(auth)/auth/` — Auth pages: login, sign-up, forgot-password, update-password
+- `app/auth/callback/route.ts` — Supabase PKCE exchange (`GET /auth/callback?code=…&next=…`)
 - `app/api/etl/` — REST endpoint (`POST /api/etl`) that triggers the Python ETL pipeline for authenticated users
+- `app/api/auth/invite/` — `POST /api/auth/invite` with `{ "email": "…" }` — `super_admin` only; sends Supabase invite email (callback → update-password)
 
 **Supabase client pattern:**
 - `lib/supabase/server.ts` — Server Components and Route Handlers (cookie-based auth)
 - `lib/supabase/client.ts` — Client Components
-- `lib/supabase/middleware.ts` — Session refresh in middleware
+- `lib/supabase/proxy.ts` — Session refresh (`proxy.ts` at repo root runs on matched routes)
 - All clients target the custom `info_agg` schema (not `public`) via `db: { schema: "info_agg" }`
-- `middleware.ts` runs on every request to refresh sessions
+- `proxy.ts` runs on matched requests to refresh sessions
 
 **UI:**
 - shadcn/ui components in `components/ui/` (badge, button, card, checkbox, dropdown-menu, input, label)

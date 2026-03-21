@@ -1,20 +1,60 @@
 import type { Metadata } from "next";
 import localFont from "next/font/local";
 import { ThemeProvider } from "next-themes";
+import { getSiteUrl } from "@/lib/site-url";
 import "./globals.css";
 
-const defaultUrl = process.env.VERCEL_URL
-  ? `https://${process.env.VERCEL_URL}`
-  : "http://localhost:3000";
+const SITE_URL = getSiteUrl();
+
+const siteDescription =
+  "Personal information aggregator with news, sports, markets, media, and more";
 
 export const metadata: Metadata = {
-  metadataBase: new URL(defaultUrl),
-  title: "Info Aggregator",
-  description: "Personal information aggregator with news, sports, markets, media, and more",
+  metadataBase: new URL(SITE_URL),
+  title: "Info Hub",
+  description: siteDescription,
+  authors: [{ name: "Info Hub" }],
+  creator: "Info Hub",
+  publisher: "Info Hub",
   icons: {
-    icon: "/assets/website_logos/info_agg.svg",
-    shortcut: "/assets/website_logos/info_agg.svg",
-    apple: "/assets/website_logos/info_agg.svg",
+    icon: "/icon.svg",
+    apple: "/apple-touch-icon.png",
+  },
+  appleWebApp: {
+    capable: true,
+    title: "Info Hub",
+  },
+  openGraph: {
+    type: "website",
+    url: SITE_URL,
+    title: "Info Hub",
+    description: siteDescription,
+    images: [
+      {
+        url: `${SITE_URL}/opengraph-image`,
+        width: 1200,
+        height: 630,
+        alt: "Info Hub",
+      },
+    ],
+  },
+  twitter: {
+    card: "summary_large_image",
+    title: "Info Hub",
+    description: siteDescription,
+    images: [`${SITE_URL}/twitter-image`],
+  },
+  manifest: "/manifest.json",
+  robots: {
+    index: true,
+    follow: true,
+    googleBot: {
+      index: true,
+      follow: true,
+      "max-video-preview": -1,
+      "max-image-preview": "large",
+      "max-snippet": -1,
+    },
   },
 };
 
