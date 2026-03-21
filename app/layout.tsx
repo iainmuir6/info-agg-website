@@ -31,7 +31,7 @@ export const metadata: Metadata = {
     description: siteDescription,
     images: [
       {
-        url: `${SITE_URL}/opengraph-image`,
+        url: `${SITE_URL}/opengraph-image.png`,
         width: 1200,
         height: 630,
         alt: "Info Hub",
@@ -42,7 +42,7 @@ export const metadata: Metadata = {
     card: "summary_large_image",
     title: "Info Hub",
     description: siteDescription,
-    images: [`${SITE_URL}/twitter-image`],
+    images: [`${SITE_URL}/twitter-image.png`],
   },
   manifest: "/manifest.json",
   robots: {
