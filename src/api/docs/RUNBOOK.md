@@ -178,9 +178,10 @@ Then once (not per-ticker):
 | Fetch market news (4 categories) | Finnhub `/news` | `market_news` |
 | Fetch AV sentiment (5 topics) | AV `NEWS_SENTIMENT` | `news_sentiment` |
 | Treasury rates + 7 macro indicators | FMP `/stable/treasury-rates`, `/stable/economic-indicators` | `economic_indicators` |
-| Missing profile backfill (≤100 stubs) | FMP `/stable/profile` | `stocks` |
 
-Profile/info updates beyond stub backfill are **not** run daily — trigger manually with `--scrape-etf-info` (ETFdb).
+Stub **missing-profile backfill** (FMP profile for `name IS NULL` stocks) was **removed from the daily ETL**; `backfill_missing_profiles()` in `markets_db_helper.py` is deprecated for one-off use only.
+
+Profile/info updates are **not** run daily — trigger manually with FMP (`run_fmp_etl` / `sync_fmp_data`) or `--scrape-etf-info` (ETFdb).
 
 #### Sports / News / Media
 

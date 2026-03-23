@@ -75,9 +75,7 @@ Step 3 — AV sentiment, 10 topics sequential (1 AV call each):
 
 Step 4 — Economic indicators (FMP): ~2–3s
 
-Step 5 — Backfill missing profiles (FMP): ~1–2s
-
-Total: ~40–45s
+Total: ~38–43s (missing-profile FMP backfill no longer in daily ETL)
 ```
 
 ---

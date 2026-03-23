@@ -13,6 +13,7 @@ from datetime import datetime, timezone
 import os
 import sys
 import time
+import warnings
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -217,6 +218,52 @@ def insert_stock_quote(supabase: Client, stock_id: str, quote_data: Dict[str, An
         return False
 
 
+def build_stock_quote_row(stock_id: str, quote_data: Dict[str, Any]) -> Dict[str, Any]:
+    """Map Finnhub- or FMP-shaped quote dict to a stock_quotes upsert row."""
+    ts = quote_data.get('timestamp')
+    if ts is None:
+        ts = quote_data.get('quote_timestamp')
+    if ts and isinstance(ts, (int, float)):
+        quote_timestamp = datetime.fromtimestamp(ts, tz=timezone.utc).isoformat()
+    elif ts:
+        quote_timestamp = str(ts)
+    else:
+        quote_timestamp = datetime.now(timezone.utc).isoformat()
+    return {
+        'stock_id': stock_id,
+        'current_price': quote_data.get('current_price'),
+        'change_amount': quote_data.get('change'),
+        'percent_change': quote_data.get('percent_change'),
+        'high_price': quote_data.get('high_price'),
+        'low_price': quote_data.get('low_price'),
+        'open_price': quote_data.get('open_price'),
+        'previous_close': quote_data.get('previous_close'),
+        'volume': quote_data.get('volume'),
+        'quote_timestamp': quote_timestamp,
+    }
+
+
+def upsert_daily_stock_quotes_batch(supabase: Client, rows: List[Dict[str, Any]]) -> int:
+    """
+    Upsert many daily quote rows (e.g. after parallel fetch with persist=False).
+    Chunks to respect PostgREST payload limits.
+    """
+    if not rows:
+        return 0
+    inserted = 0
+    batch_size = 100
+    try:
+        for i in range(0, len(rows), batch_size):
+            batch = rows[i : i + batch_size]
+            supabase.table('stock_quotes').upsert(
+                batch, on_conflict='stock_id,quote_timestamp'
+            ).execute()
+            inserted += len(batch)
+        return inserted
+    except Exception as e:
+        print(f"Error batch-upserting daily stock quotes: {e}")
+        return inserted
+
 
 def insert_stock_quotes_batch(supabase: Client, stock_id: str, quotes: List[Dict[str, Any]]) -> int:
     """
@@ -349,39 +396,64 @@ def insert_market_news(supabase: Client, articles: List[Dict[str, Any]]) -> int:
 
 
 def sync_stock_data(
-    supabase: Client,
+    supabase: Optional[Client],
     ticker: str,
     fetch_quotes: bool = True,
     fetch_news: bool = True,
     fetch_profile: bool = True,
     asset_type: str = 'stock',
     write_news: bool = True,
+    persist: bool = True,
 ) -> Dict[str, Any]:
     """
     Sync daily data for a specific stock, ETF, crypto, forex, or commodity asset.
 
     Args:
-        supabase: Supabase client instance
+        supabase: Supabase client (required when persist=True)
         ticker: Ticker symbol
         fetch_quotes: Whether to fetch and insert the latest quote
         fetch_news: Whether to fetch and insert company news (stocks only)
         fetch_profile: Whether to fetch and insert company profile (stocks/ETFs only)
         asset_type: 'stock', 'etf', 'crypto', 'forex', or 'commodity'
+        write_news: When persist=True, upsert news per ticker; when False, return pending_news
+        persist: When False, no Supabase calls — return pending_quote / pending_news for batch upsert
 
     Returns:
         Dictionary with sync statistics
     """
-    stats = {
+    stats: Dict[str, Any] = {
         'ticker': ticker,
         'profile_updated': False,
         'quotes_inserted': 0,
         'news_inserted': 0,
-        'errors': []
+        'errors': [],
     }
 
+    def _fmp_quote_as_insert_shape(q: Dict[str, Any]) -> Dict[str, Any]:
+        return {
+            'current_price': q.get('current_price'),
+            'change': q.get('change_amount'),
+            'percent_change': q.get('percent_change'),
+            'high_price': q.get('high_price'),
+            'low_price': q.get('low_price'),
+            'open_price': q.get('open_price'),
+            'previous_close': q.get('previous_close'),
+            'volume': q.get('volume'),
+            'timestamp': q.get('quote_timestamp'),
+        }
+
     try:
-        # Forex/commodity: stub row + FMP quote only — no profile, no news, no Finnhub
+        # Forex/commodity: FMP quote only — no Finnhub profile/news
         if asset_type in ('forex', 'commodity'):
+            if not persist:
+                if fetch_quotes:
+                    fmp_key = get_fmp_api_key()
+                    quote = fetch_fmp_quote(ticker, fmp_key)
+                    if quote:
+                        stats['pending_quote'] = _fmp_quote_as_insert_shape(quote)
+                return stats
+
+            assert supabase is not None
             stock_id = get_or_create_stock(supabase, ticker, asset_type=asset_type)
             if not stock_id:
                 stats['errors'].append(f"Failed to get/create stock for {ticker}")
@@ -391,25 +463,42 @@ def sync_stock_data(
                 fmp_key = get_fmp_api_key()
                 quote = fetch_fmp_quote(ticker, fmp_key)
                 if quote:
-                    # Map fetch_fmp_quote keys to insert_stock_quote expectations
-                    quote_mapped = {
-                        'current_price': quote.get('current_price'),
-                        'change': quote.get('change_amount'),
-                        'percent_change': quote.get('percent_change'),
-                        'high_price': quote.get('high_price'),
-                        'low_price': quote.get('low_price'),
-                        'open_price': quote.get('open_price'),
-                        'previous_close': quote.get('previous_close'),
-                        'volume': quote.get('volume'),
-                        'timestamp': quote.get('quote_timestamp'),
-                    }
-                    if insert_stock_quote(supabase, stock_id, quote_mapped):
+                    qm = _fmp_quote_as_insert_shape(quote)
+                    if insert_stock_quote(supabase, stock_id, qm):
                         stats['quotes_inserted'] = 1
             return stats
 
         api_key = get_finnhub_api_key()
 
-        # Crypto assets: skip profile fetch (no Finnhub/FMP profile) — just ensure row exists
+        if not persist:
+            if fetch_quotes:
+                if asset_type == 'crypto':
+                    quote = fetch_crypto_quote(ticker, api_key)
+                else:
+                    quote = fetch_stock_quote(ticker, api_key)
+                if quote:
+                    stats['pending_quote'] = quote
+
+            if fetch_news and asset_type == 'stock':
+                news = fetch_company_news(ticker, days_back=7, api_key=api_key)
+                if news:
+                    stats['pending_news'] = [
+                        {
+                            'ticker': ticker,
+                            'headline': a.get('headline'),
+                            'summary': a.get('summary'),
+                            'url': a.get('url'),
+                            'image_url': a.get('image_url'),
+                            'source': a.get('source'),
+                            'published_at': a.get('published_at'),
+                        }
+                        for a in news
+                        if a.get('url')
+                    ]
+            return stats
+
+        assert supabase is not None
+
         if asset_type == 'crypto':
             stock_id = get_or_create_stock(supabase, ticker, asset_type=asset_type)
         elif fetch_profile:
@@ -427,7 +516,6 @@ def sync_stock_data(
             stats['errors'].append(f"Failed to get/create stock for {ticker}")
             return stats
 
-        # Fetch and insert latest quote
         if fetch_quotes:
             if asset_type == 'crypto':
                 quote = fetch_crypto_quote(ticker, api_key)
@@ -437,14 +525,12 @@ def sync_stock_data(
                 if insert_stock_quote(supabase, stock_id, quote):
                     stats['quotes_inserted'] = 1
 
-        # Fetch and insert company news (stocks only — skip ETFs, crypto, forex, commodity)
         if fetch_news and asset_type not in ('crypto', 'etf', 'forex', 'commodity'):
             news = fetch_company_news(ticker, days_back=7, api_key=api_key)
             if news:
                 if write_news:
                     stats['news_inserted'] = insert_company_news(supabase, stock_id, news)
                 else:
-                    # Return pre-shaped rows for the caller to batch-upsert after all threads complete
                     stats['pending_news'] = [
                         {
                             'stock_id': stock_id,
@@ -455,7 +541,8 @@ def sync_stock_data(
                             'source': a.get('source'),
                             'published_at': a.get('published_at'),
                         }
-                        for a in news if a.get('url')
+                        for a in news
+                        if a.get('url')
                     ]
 
     except Exception as e:
@@ -484,16 +571,27 @@ def sync_market_news(supabase: Client, categories: List[str] = ['general'], api_
         'articles_inserted': 0,
         'errors': []
     }
-    
+
+    all_articles: List[Dict[str, Any]] = []
     for category in categories:
         try:
             articles = fetch_market_news(category, api_key=api_key)
             if articles:
-                stats['articles_inserted'] += insert_market_news(supabase, articles)
+                all_articles.extend(articles)
                 stats['categories_processed'] += 1
         except Exception as e:
             stats['errors'].append(f"Error fetching {category} news: {e}")
-    
+
+    if all_articles:
+        # Same URL in multiple categories: keep first occurrence's row (category preserved)
+        seen_urls: set = set()
+        deduped = [
+            a
+            for a in all_articles
+            if a.get('url') and not (a['url'] in seen_urls or seen_urls.add(a['url']))
+        ]
+        stats['articles_inserted'] = insert_market_news(supabase, deduped)
+
     return stats
 
 
@@ -991,14 +1089,22 @@ def sync_news_sentiment(
 
 def backfill_missing_profiles(supabase: Client, batch_size: int = 50) -> Dict[str, Any]:
     """
+    Deprecated — no longer run from the daily ETL.
+
     Fetch FMP company profiles for stocks that have no name yet.
 
-    Queries stocks WHERE name IS NULL AND asset_type = 'stock', fetches
-    FMP company profile for each, and updates the row via get_or_create_stock.
+    Prefer manual FMP enrichment (`sync_fmp_data` / `run_fmp_etl` in `run_etl.py`)
+    when you need profile updates.
 
     Returns:
         {'checked': int, 'updated': int, 'errors': list}
     """
+    warnings.warn(
+        "backfill_missing_profiles is deprecated and excluded from run_etl; "
+        "use sync_fmp_data / run_fmp_etl for profile updates.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
     stats: Dict[str, Any] = {'checked': 0, 'updated': 0, 'errors': []}
 
     try:
