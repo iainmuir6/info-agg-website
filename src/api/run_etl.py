@@ -28,7 +28,6 @@ from markets.markets_db_helper import (
     sync_market_news,
     sync_news_sentiment,
     sync_economic_indicators,
-    backfill_missing_profiles,
     sync_fmp_data,
     sync_etfdb_data,
 )
@@ -131,9 +130,12 @@ def run_markets_etl(
             'market_news_inserted': 0,
             'sentiment_upserted': 0,
             'economic_rows_upserted': 0,
-            'profiles_backfilled': 0,
             'errors': []
         }
+
+        # Pre-load all stock IDs in one query so threads make zero DB calls
+        stock_rows = supabase.table('stocks').select('id,ticker').in_('ticker', watchlist).execute()
+        stock_id_map: Dict[str, str] = {r['ticker']: r['id'] for r in (stock_rows.data or [])}
 
         def _fetch_ticker(ticker: str) -> tuple:
             at = asset_type_map.get(ticker, 'stock')
@@ -144,22 +146,35 @@ def run_markets_etl(
                 fetch_news=(at == 'stock'),
                 fetch_profile=False,
                 asset_type=at,
-                write_news=False,  # threads only fetch; news is batch-upserted after pool drains
+                write_news=False,    # batch-upserted after pool drains
+                write_quotes=False,  # batch-upserted after pool drains
+                stock_id=stock_id_map.get(ticker),  # pre-loaded — no DB call in thread
             )
             return ticker, result
 
-        # Phase 1: fetch quotes + news from all tickers (2 concurrent threads, no DB news writes)
+        # Phase 1: fetch quotes + news from all tickers — threads make NO DB calls
         all_pending_news: List[Dict[str, Any]] = []
+        all_pending_quotes: List[Dict[str, Any]] = []
         with ThreadPoolExecutor(max_workers=2) as executor:  # 2 Finnhub keys → 2 concurrent workers
             futures = {executor.submit(_fetch_ticker, t): t for t in watchlist}
             for future in as_completed(futures):
                 ticker, stats = future.result()
                 total_stats['stocks_processed'] += 1
-                total_stats['quotes_inserted'] += stats.get('quotes_inserted', 0)
                 total_stats['errors'].extend(stats.get('errors', []))
                 all_pending_news.extend(stats.get('pending_news', []))
+                all_pending_quotes.extend(stats.get('pending_quotes', []))
 
-        # Phase 2: single batch upsert for all company news after all threads complete
+        # Phase 2: single batch upsert for all quotes after all threads complete
+        if all_pending_quotes:
+            try:
+                resp = supabase.table('stock_quotes').upsert(
+                    all_pending_quotes, on_conflict='stock_id,quote_timestamp'
+                ).execute()
+                total_stats['quotes_inserted'] = len(resp.data) if resp.data else 0
+            except Exception as e:
+                total_stats['errors'].append(f"Error batch-upserting quotes: {e}")
+
+        # Phase 3: single batch upsert for all company news after all threads complete
         if all_pending_news:
             seen: set = set()
             deduped = [r for r in all_pending_news if not (r['url'] in seen or seen.add(r['url']))]
@@ -169,22 +184,36 @@ def run_markets_etl(
             except Exception as e:
                 total_stats['errors'].append(f"Error batch-upserting company news: {e}")
 
-        news_stats = sync_market_news(supabase, categories=MARKET_NEWS_CATEGORIES)
-        total_stats['market_news_inserted'] = news_stats.get('articles_inserted', 0)
-        total_stats['errors'].extend(news_stats.get('errors', []))
-
+        # Run market-news, sentiment, and econ-indicators in parallel —
+        # each hits a different API (Finnhub / AV / FMP) so there is no contention.
+        post_fns: Dict[str, Any] = {
+            'market_news': lambda: sync_market_news(supabase, categories=MARKET_NEWS_CATEGORIES),
+            'econ':        lambda: sync_economic_indicators(supabase),
+        }
         if not skip_sentiment:
-            sentiment_stats = sync_news_sentiment(supabase, topics=SENTIMENT_TOPICS_ALL, tickers=watchlist)
-            total_stats['sentiment_upserted'] = sentiment_stats.get('articles_upserted', 0)
-            total_stats['errors'].extend(sentiment_stats.get('errors', []))
+            post_fns['sentiment'] = lambda: sync_news_sentiment(
+                supabase, topics=SENTIMENT_TOPICS_ALL, tickers=watchlist
+            )
 
-        econ_stats = sync_economic_indicators(supabase)
-        total_stats['economic_rows_upserted'] = econ_stats.get('rows_upserted', 0)
-        total_stats['errors'].extend(econ_stats.get('errors', []))
+        with ThreadPoolExecutor(max_workers=len(post_fns)) as post_pool:
+            post_futures = {post_pool.submit(fn): name for name, fn in post_fns.items()}
+            for future in as_completed(post_futures):
+                name = post_futures[future]
+                try:
+                    s = future.result()
+                except Exception as e:
+                    total_stats['errors'].append(f"Error in {name}: {e}")
+                    continue
+                if name == 'market_news':
+                    total_stats['market_news_inserted'] = s.get('articles_inserted', 0)
+                    total_stats['errors'].extend(s.get('errors', []))
+                elif name == 'sentiment':
+                    total_stats['sentiment_upserted'] = s.get('articles_upserted', 0)
+                    total_stats['errors'].extend(s.get('errors', []))
+                elif name == 'econ':
+                    total_stats['economic_rows_upserted'] = s.get('rows_upserted', 0)
+                    total_stats['errors'].extend(s.get('errors', []))
 
-        bp_stats = backfill_missing_profiles(supabase)
-        total_stats['profiles_backfilled'] = bp_stats.get('updated', 0)
-        total_stats['errors'].extend(bp_stats.get('errors', []))
 
         return {'success': True, 'stats': total_stats}
 
@@ -350,8 +379,13 @@ def run_full_etl(
             domain = domain_futures[future]
             try:
                 results[domain] = future.result()
+                elapsed = domain_elapsed.get(domain, 0)
+                ok = results[domain].get('success', False)
+                status = 'OK  ' if ok else 'FAIL'
+                print(f"  [{status}] {domain:<8}  {elapsed:.1f}s")
             except Exception as e:
                 results[domain] = {'success': False, 'error': str(e)}
+                print(f"  [FAIL] {domain:<8}  {str(e)[:60]}")
 
     end_time = datetime.now()
     duration = (end_time - start_time).total_seconds()
@@ -378,8 +412,7 @@ def run_full_etl(
                     f"cnews={s.get('news_inserted',0)}  "
                     f"mnews={s.get('market_news_inserted',0)}  "
                     f"sentiment={s.get('sentiment_upserted',0)}  "
-                    f"econ={s.get('economic_rows_upserted',0)}  "
-                    f"bf={s.get('profiles_backfilled',0)}")
+                    f"econ={s.get('economic_rows_upserted',0)}")
         if domain == 'news':
             return (f"sections={s.get('sections_processed',0)}  "
                     f"articles={s.get('articles_inserted',0)}")

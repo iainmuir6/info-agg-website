@@ -348,6 +348,26 @@ def insert_market_news(supabase: Client, articles: List[Dict[str, Any]]) -> int:
         return 0
 
 
+def _shape_quote_row(stock_id: str, quote: Dict[str, Any]) -> Dict[str, Any]:
+    """Shape a raw quote dict into a stock_quotes table row (for batch upserts)."""
+    ts = quote.get('timestamp')
+    return {
+        'stock_id':       stock_id,
+        'current_price':  quote.get('current_price'),
+        'change_amount':  quote.get('change'),
+        'percent_change': quote.get('percent_change'),
+        'high_price':     quote.get('high_price'),
+        'low_price':      quote.get('low_price'),
+        'open_price':     quote.get('open_price'),
+        'previous_close': quote.get('previous_close'),
+        'volume':         quote.get('volume'),
+        'quote_timestamp': (
+            datetime.fromtimestamp(ts, tz=timezone.utc).isoformat() if ts
+            else datetime.now(timezone.utc).isoformat()
+        ),
+    }
+
+
 def sync_stock_data(
     supabase: Client,
     ticker: str,
@@ -356,6 +376,8 @@ def sync_stock_data(
     fetch_profile: bool = True,
     asset_type: str = 'stock',
     write_news: bool = True,
+    write_quotes: bool = True,
+    stock_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Sync daily data for a specific stock, ETF, crypto, forex, or commodity asset.
@@ -367,6 +389,9 @@ def sync_stock_data(
         fetch_news: Whether to fetch and insert company news (stocks only)
         fetch_profile: Whether to fetch and insert company profile (stocks/ETFs only)
         asset_type: 'stock', 'etf', 'crypto', 'forex', or 'commodity'
+        write_news: If False, return pending_news rows instead of writing to DB
+        write_quotes: If False, return pending_quotes rows instead of writing to DB
+        stock_id: Pre-loaded stock UUID — skips get_or_create_stock DB call when provided
 
     Returns:
         Dictionary with sync statistics
@@ -382,7 +407,8 @@ def sync_stock_data(
     try:
         # Forex/commodity: stub row + FMP quote only — no profile, no news, no Finnhub
         if asset_type in ('forex', 'commodity'):
-            stock_id = get_or_create_stock(supabase, ticker, asset_type=asset_type)
+            if not stock_id:
+                stock_id = get_or_create_stock(supabase, ticker, asset_type=asset_type)
             if not stock_id:
                 stats['errors'].append(f"Failed to get/create stock for {ticker}")
                 return stats
@@ -403,25 +429,29 @@ def sync_stock_data(
                         'volume': quote.get('volume'),
                         'timestamp': quote.get('quote_timestamp'),
                     }
-                    if insert_stock_quote(supabase, stock_id, quote_mapped):
-                        stats['quotes_inserted'] = 1
+                    if write_quotes:
+                        if insert_stock_quote(supabase, stock_id, quote_mapped):
+                            stats['quotes_inserted'] = 1
+                    else:
+                        stats['pending_quotes'] = [_shape_quote_row(stock_id, quote_mapped)]
             return stats
 
         api_key = get_finnhub_api_key()
 
-        # Crypto assets: skip profile fetch (no Finnhub/FMP profile) — just ensure row exists
-        if asset_type == 'crypto':
-            stock_id = get_or_create_stock(supabase, ticker, asset_type=asset_type)
-        elif fetch_profile:
-            profile = fetch_company_profile(ticker, api_key)
-            if profile:
-                stock_id = get_or_create_stock(supabase, ticker, profile, asset_type=asset_type)
-                if stock_id:
-                    stats['profile_updated'] = True
+        # Resolve stock_id — use pre-loaded value if provided, else query DB
+        if not stock_id:
+            if asset_type == 'crypto':
+                stock_id = get_or_create_stock(supabase, ticker, asset_type=asset_type)
+            elif fetch_profile:
+                profile = fetch_company_profile(ticker, api_key)
+                if profile:
+                    stock_id = get_or_create_stock(supabase, ticker, profile, asset_type=asset_type)
+                    if stock_id:
+                        stats['profile_updated'] = True
+                else:
+                    stock_id = get_or_create_stock(supabase, ticker, asset_type=asset_type)
             else:
                 stock_id = get_or_create_stock(supabase, ticker, asset_type=asset_type)
-        else:
-            stock_id = get_or_create_stock(supabase, ticker, asset_type=asset_type)
 
         if not stock_id:
             stats['errors'].append(f"Failed to get/create stock for {ticker}")
@@ -434,8 +464,11 @@ def sync_stock_data(
             else:
                 quote = fetch_stock_quote(ticker, api_key)
             if quote:
-                if insert_stock_quote(supabase, stock_id, quote):
-                    stats['quotes_inserted'] = 1
+                if write_quotes:
+                    if insert_stock_quote(supabase, stock_id, quote):
+                        stats['quotes_inserted'] = 1
+                else:
+                    stats['pending_quotes'] = [_shape_quote_row(stock_id, quote)]
 
         # Fetch and insert company news (stocks only — skip ETFs, crypto, forex, commodity)
         if fetch_news and asset_type not in ('crypto', 'etf', 'forex', 'commodity'):
@@ -960,7 +993,6 @@ def sync_news_sentiment(
             try:
                 articles = fetch_news_sentiment(api_key=key, tickers=tickers, topic=topic)
                 collected.extend(articles)
-                time.sleep(1.1)
             except Exception:
                 stats['errors'].append(f"Error fetching news sentiment for topic: {topic}")
             

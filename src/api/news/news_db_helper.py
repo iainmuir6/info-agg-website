@@ -206,8 +206,6 @@ def sync_nyt_data(supabase: Client, sections: List[str]) -> Dict[str, Any]:
             result = fetch_nyt_top_stories(section=section, api_key=current_key)
             if result and result.get('articles'):
                 collected_top.extend(result['articles'])
-            # Explicit spacing requested: keep >=1s between repeated calls.
-            time.sleep(1.1)
         return collected_top
 
     active_workers = [i for i, assigned in sections_by_key_index.items() if assigned]
@@ -233,7 +231,6 @@ def sync_nyt_data(supabase: Client, sections: List[str]) -> Dict[str, Any]:
         if active_keys:
             popular_api_key = active_keys[0]
     try:
-        time.sleep(1.1)
         popular = fetch_nyt_most_popular(type='viewed', period=7, api_key=popular_api_key)
         if popular and popular.get('articles'):
             popular_articles = popular['articles']
@@ -246,7 +243,6 @@ def sync_nyt_data(supabase: Client, sections: List[str]) -> Dict[str, Any]:
         if active_keys:
             fallback_key = active_keys[0]
             try:
-                time.sleep(1.1)
                 popular = fetch_nyt_most_popular(type='viewed', period=7, api_key=fallback_key)
                 if popular and popular.get('articles'):
                     popular_articles = popular['articles']

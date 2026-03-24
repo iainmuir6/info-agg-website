@@ -40,12 +40,6 @@ _FH_CALL_TIMES: Dict[str, deque] = {}
 _FH_KEY_LOCKS: Dict[str, threading.Lock] = {}
 _FH_INIT_LOCK = threading.Lock()
 
-# Also enforce a simple >=1s minimum between any two Finnhub requests made from
-# this module (markets ETL runs with threads, but this keeps the spacing strict).
-_FH_MIN_INTERVAL_S = 1.0
-_FH_GLOBAL_LOCK = threading.Lock()
-_FH_LAST_CALL_TS: Optional[float] = None
-
 # Round-robin key selector
 _fh_key_index: int = 0
 _fh_key_rotation_lock = threading.Lock()
@@ -53,35 +47,23 @@ _fh_key_rotation_lock = threading.Lock()
 
 def _fh_rate_limit(key: str) -> None:
     """Sleep only if we're about to exceed 60 req/min for this Finnhub key."""
-    global _FH_LAST_CALL_TS
-    with _FH_GLOBAL_LOCK:
+    if key not in _FH_KEY_LOCKS:
+        with _FH_INIT_LOCK:
+            if key not in _FH_KEY_LOCKS:
+                _FH_CALL_TIMES[key] = deque()
+                _FH_KEY_LOCKS[key] = threading.Lock()
+
+    with _FH_KEY_LOCKS[key]:
+        times = _FH_CALL_TIMES[key]
         now = time.time()
-        if _FH_LAST_CALL_TS is not None:
-            elapsed = now - _FH_LAST_CALL_TS
-            if elapsed < _FH_MIN_INTERVAL_S:
-                time.sleep(_FH_MIN_INTERVAL_S - elapsed)
-                now = time.time()
+        while times and now - times[0] >= _FH_WINDOW:
+            times.popleft()
+        if len(times) >= _FH_RATE_LIMIT:
+            sleep_for = _FH_WINDOW - (now - times[0]) + 0.05
+            if sleep_for > 0:
+                time.sleep(sleep_for)
 
-        if key not in _FH_KEY_LOCKS:
-            # Safe under the global lock; still keep init lock for clarity.
-            with _FH_INIT_LOCK:
-                if key not in _FH_KEY_LOCKS:
-                    _FH_CALL_TIMES[key] = deque()
-                    _FH_KEY_LOCKS[key] = threading.Lock()
-
-        with _FH_KEY_LOCKS[key]:
-            times = _FH_CALL_TIMES[key]
-            now = time.time()
-            while times and now - times[0] >= _FH_WINDOW:
-                times.popleft()
-            if len(times) >= _FH_RATE_LIMIT:
-                sleep_for = _FH_WINDOW - (now - times[0]) + 0.05
-                if sleep_for > 0:
-                    time.sleep(sleep_for)
-
-            # Record after any sleeps so other callers see the true request spacing.
-            times.append(time.time())
-            _FH_LAST_CALL_TS = time.time()
+        times.append(time.time())
 
 
 def get_finnhub_api_keys() -> List[str]:
