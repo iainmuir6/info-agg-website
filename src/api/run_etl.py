@@ -137,6 +137,10 @@ def run_markets_etl(
             'errors': []
         }
 
+        # Pre-load all stock IDs in one query so threads make zero DB calls
+        stock_rows = supabase.table('stocks').select('id,ticker').in_('ticker', watchlist).execute()
+        stock_id_map: Dict[str, str] = {r['ticker']: r['id'] for r in (stock_rows.data or [])}
+
         def _fetch_ticker(ticker: str) -> tuple:
             at = asset_type_map.get(ticker, 'stock')
             # persist=False: no Supabase in workers; stubs + batch writes on main thread
@@ -147,51 +151,35 @@ def run_markets_etl(
                 fetch_news=(at == 'stock'),
                 fetch_profile=False,
                 asset_type=at,
-                write_news=False,
-                persist=False,
+                write_news=False,    # batch-upserted after pool drains
+                write_quotes=False,  # batch-upserted after pool drains
+                stock_id=stock_id_map.get(ticker),  # pre-loaded — no DB call in thread
             )
             return ticker, result
 
-        unique_watchlist = list(dict.fromkeys(watchlist))
-        by_type: Dict[str, List[str]] = defaultdict(list)
-        for t in unique_watchlist:
-            by_type[asset_type_map.get(t, 'stock')].append(t)
-        for at, tickers in by_type.items():
-            insert_stub_stocks(supabase, tickers, asset_type=at)
-
-        try:
-            id_resp = (
-                supabase.table('stocks')
-                .select('id,ticker')
-                .in_('ticker', unique_watchlist)
-                .execute()
-            )
-            ticker_to_id = {r['ticker']: r['id'] for r in (id_resp.data or [])}
-        except Exception as e:
-            total_stats['errors'].append(f"Failed to load stock ids: {e}")
-            ticker_to_id = {}
-
-        # Phase 1: fetch quotes + news from all tickers (2 concurrent threads, no DB writes)
+        # Phase 1: fetch quotes + news from all tickers — threads make NO DB calls
         all_pending_news: List[Dict[str, Any]] = []
-        quote_rows: List[Dict[str, Any]] = []
+        all_pending_quotes: List[Dict[str, Any]] = []
         with ThreadPoolExecutor(max_workers=2) as executor:  # 2 Finnhub keys → 2 concurrent workers
             futures = {executor.submit(_fetch_ticker, t): t for t in watchlist}
             for future in as_completed(futures):
                 ticker, st = future.result()
                 total_stats['stocks_processed'] += 1
-                total_stats['errors'].extend(st.get('errors', []))
-                pq = st.get('pending_quote')
-                if pq:
-                    sid = ticker_to_id.get(ticker)
-                    if sid:
-                        quote_rows.append(build_stock_quote_row(sid, pq))
-                    else:
-                        total_stats['errors'].append(f"No stock_id for quote ticker {ticker}")
-                all_pending_news.extend(st.get('pending_news', []))
-        if quote_rows:
-            total_stats['quotes_inserted'] = upsert_daily_stock_quotes_batch(supabase, quote_rows)
+                total_stats['errors'].extend(stats.get('errors', []))
+                all_pending_news.extend(stats.get('pending_news', []))
+                all_pending_quotes.extend(stats.get('pending_quotes', []))
 
-        # Phase 2: single batch upsert for all company news after all threads complete
+        # Phase 2: single batch upsert for all quotes after all threads complete
+        if all_pending_quotes:
+            try:
+                resp = supabase.table('stock_quotes').upsert(
+                    all_pending_quotes, on_conflict='stock_id,quote_timestamp'
+                ).execute()
+                total_stats['quotes_inserted'] = len(resp.data) if resp.data else 0
+            except Exception as e:
+                total_stats['errors'].append(f"Error batch-upserting quotes: {e}")
+
+        # Phase 3: single batch upsert for all company news after all threads complete
         if all_pending_news:
             news_for_db: List[Dict[str, Any]] = []
             for r in all_pending_news:
@@ -222,18 +210,36 @@ def run_markets_etl(
             except Exception as e:
                 total_stats['errors'].append(f"Error batch-upserting company news: {e}")
 
-        news_stats = sync_market_news(supabase, categories=MARKET_NEWS_CATEGORIES)
-        total_stats['market_news_inserted'] = news_stats.get('articles_inserted', 0)
-        total_stats['errors'].extend(news_stats.get('errors', []))
-
+        # Run market-news, sentiment, and econ-indicators in parallel —
+        # each hits a different API (Finnhub / AV / FMP) so there is no contention.
+        post_fns: Dict[str, Any] = {
+            'market_news': lambda: sync_market_news(supabase, categories=MARKET_NEWS_CATEGORIES),
+            'econ':        lambda: sync_economic_indicators(supabase),
+        }
         if not skip_sentiment:
-            sentiment_stats = sync_news_sentiment(supabase, topics=SENTIMENT_TOPICS_ALL, tickers=watchlist)
-            total_stats['sentiment_upserted'] = sentiment_stats.get('articles_upserted', 0)
-            total_stats['errors'].extend(sentiment_stats.get('errors', []))
+            post_fns['sentiment'] = lambda: sync_news_sentiment(
+                supabase, topics=SENTIMENT_TOPICS_ALL, tickers=watchlist
+            )
 
-        econ_stats = sync_economic_indicators(supabase)
-        total_stats['economic_rows_upserted'] = econ_stats.get('rows_upserted', 0)
-        total_stats['errors'].extend(econ_stats.get('errors', []))
+        with ThreadPoolExecutor(max_workers=len(post_fns)) as post_pool:
+            post_futures = {post_pool.submit(fn): name for name, fn in post_fns.items()}
+            for future in as_completed(post_futures):
+                name = post_futures[future]
+                try:
+                    s = future.result()
+                except Exception as e:
+                    total_stats['errors'].append(f"Error in {name}: {e}")
+                    continue
+                if name == 'market_news':
+                    total_stats['market_news_inserted'] = s.get('articles_inserted', 0)
+                    total_stats['errors'].extend(s.get('errors', []))
+                elif name == 'sentiment':
+                    total_stats['sentiment_upserted'] = s.get('articles_upserted', 0)
+                    total_stats['errors'].extend(s.get('errors', []))
+                elif name == 'econ':
+                    total_stats['economic_rows_upserted'] = s.get('rows_upserted', 0)
+                    total_stats['errors'].extend(s.get('errors', []))
+
 
         return {'success': True, 'stats': total_stats}
 
@@ -396,34 +402,17 @@ def run_full_etl(
             executor.submit(_timed, domain, fn): domain
             for domain, fn in domain_fns.items()
         }
-        try:
-            for future in as_completed(domain_futures):
-                domain = domain_futures[future]
-                try:
-                    results[domain] = future.result()
-                    print(
-                        f"[ETL] {domain} finished ({domain_elapsed[domain]:.1f}s)",
-                        flush=True,
-                    )
-                except Exception as e:
-                    results[domain] = {'success': False, 'error': str(e)}
-                    print(
-                        f"[ETL] {domain} failed ({domain_elapsed.get(domain, 0):.1f}s): {e}",
-                        flush=True,
-                    )
-        except KeyboardInterrupt:
-            # Default ThreadPoolExecutor __exit__ uses shutdown(wait=True), which blocks
-            # until workers finish — feels "hung" if APIs are slow. Exit immediately.
-            sys.stderr.write(
-                "\nETL interrupted — cancelling queued domains. "
-                "Active HTTP calls end when their timeouts fire.\n"
-            )
-            executor.shutdown(wait=False, cancel_futures=True)
-            os._exit(130)
-        else:
-            executor.shutdown(wait=True)
-    else:
-        print("No ETL domains to run (all skipped).", file=sys.stderr)
+        for future in as_completed(domain_futures):
+            domain = domain_futures[future]
+            try:
+                results[domain] = future.result()
+                elapsed = domain_elapsed.get(domain, 0)
+                ok = results[domain].get('success', False)
+                status = 'OK  ' if ok else 'FAIL'
+                print(f"  [{status}] {domain:<8}  {elapsed:.1f}s")
+            except Exception as e:
+                results[domain] = {'success': False, 'error': str(e)}
+                print(f"  [FAIL] {domain:<8}  {str(e)[:60]}")
 
     end_time = datetime.now()
     duration = (end_time - start_time).total_seconds()

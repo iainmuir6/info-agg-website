@@ -1,5 +1,6 @@
 import { createClient } from "@/lib/supabase/server";
 import Link from "next/link";
+import { CollapsibleCard } from "@/components/collapsible-card";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -86,6 +87,19 @@ function latestQuoteRow(s: any): QuoteRow {
     asset_type: (s.asset_type as string) ?? "stock",
     quote: quotes[0] ?? null,
   };
+}
+
+/** Derive a compact 2-3 char abbreviation from a team display name. */
+function abbrevTeam(name: string): string {
+  if (!name) return "—";
+  const words = name.trim().split(/\s+/).filter((w) => w.length > 0);
+  if (words.length === 1) return words[0].slice(0, 3).toUpperCase();
+  // Initials from each word, up to 3
+  const initials = words.map((w) => w[0].toUpperCase()).join("");
+  if (initials.length >= 3) return initials.slice(0, 3);
+  // Pad with chars from the last (longest) word
+  const last = words[words.length - 1].toUpperCase();
+  return (initials + last.slice(1)).slice(0, 3);
 }
 
 async function getCoreStocksBundle(supabase: Awaited<ReturnType<typeof createClient>>): Promise<{
@@ -326,41 +340,6 @@ function ChangeTag({ pct }: { pct: number }) {
   );
 }
 
-function CardHeader({
-  label,
-  accent,
-  href,
-  count,
-}: {
-  label: string;
-  accent: string;
-  href: string;
-  count?: number;
-}) {
-  return (
-    <div className="flex items-center justify-between px-2.5 py-2 border-b border-border">
-      <div className="flex items-center gap-1.5 min-w-0">
-        <div className="w-1 h-3 shrink-0" style={{ backgroundColor: accent }} />
-        <span
-          className="text-[9px] font-mono tracking-wider uppercase font-bold truncate"
-          style={{ color: accent }}
-        >
-          {label}
-        </span>
-        {count != null && (
-          <span className="text-[9px] font-mono text-muted-foreground shrink-0">{count}</span>
-        )}
-      </div>
-      <Link
-        href={href}
-        className="text-[9px] font-mono tracking-wider uppercase text-muted-foreground hover:text-foreground transition-colors shrink-0"
-      >
-        All →
-      </Link>
-    </div>
-  );
-}
-
 function EmptyState({ msg }: { msg: string }) {
   return (
     <div className="px-2.5 py-4 text-center">
@@ -369,35 +348,35 @@ function EmptyState({ msg }: { msg: string }) {
   );
 }
 
+/** Compact single-line score row with abbreviated team names */
 function ScoreRow({ game }: { game: ScoreRowType }) {
   const status = (game.status ?? "").toLowerCase();
   const isLive = status.includes("in") || status.includes("progress") || status.includes("live");
   const isFinal = status.includes("final");
 
+  const awayAbbr = abbrevTeam(game.away_team);
+  const homeAbbr = abbrevTeam(game.home_team);
+
   return (
-    <div className="px-2 py-1 border-b border-border last:border-0 hover:bg-secondary/50 transition-colors">
-      <div className="flex items-center justify-between text-[10px] font-mono leading-tight gap-1">
-        <span className="text-muted-foreground w-[36%] truncate">{game.away_team}</span>
-        <div className="flex items-center gap-1 shrink-0">
-          <span className="font-bold tabular-nums w-5 text-right">{game.away_score ?? "—"}</span>
-          <span className="text-muted-foreground text-[9px]">–</span>
-          <span className="font-bold tabular-nums w-5">{game.home_score ?? "—"}</span>
-        </div>
-        <span className="text-muted-foreground w-[36%] truncate text-right">{game.home_team}</span>
-      </div>
+    <div className="flex items-center gap-1 px-2 py-0.5 border-b border-border last:border-0 hover:bg-secondary/50 transition-colors text-[10px] font-mono leading-tight">
+      <span className="font-black w-7 shrink-0 tabular-nums">{awayAbbr}</span>
+      <span className="font-bold tabular-nums w-4 text-right shrink-0">{game.away_score ?? "—"}</span>
+      <span className="text-muted-foreground text-[9px] shrink-0">–</span>
+      <span className="font-bold tabular-nums w-4 shrink-0">{game.home_score ?? "—"}</span>
+      <span className="font-black w-7 shrink-0">{homeAbbr}</span>
       {isLive && (
-        <div className="flex items-center gap-1 mt-0.5">
+        <>
           <div
-            className="w-1 h-1 rounded-full animate-pulse-dot"
+            className="w-1 h-1 rounded-full animate-pulse-dot shrink-0"
             style={{ backgroundColor: "hsl(0 72% 50%)" }}
           />
-          <span className="text-[8px] font-mono leading-none" style={{ color: "hsl(0 72% 50%)" }}>
+          <span className="text-[8px] leading-none shrink-0 truncate" style={{ color: "hsl(0 72% 50%)" }}>
             {game.status_detail ?? "LIVE"}
           </span>
-        </div>
+        </>
       )}
       {isFinal && (
-        <p className="text-[8px] font-mono text-muted-foreground mt-0.5 leading-none">FINAL</p>
+        <span className="text-[8px] text-muted-foreground shrink-0">FINAL</span>
       )}
     </div>
   );
@@ -470,17 +449,27 @@ export default async function CommandCenter() {
 
   const sportsSnapshots = { nba, mlb, nfl, nhl, ncaab, ncaaf, wnba };
 
+  // ── Watchlist summary ──────────────────────────────────────────────────────
+  const watchlistSummary = watchlistOrdered
+    .map(({ type, rows }) => `${rows.length} ${assetTypeLabel(type).toLowerCase()}`)
+    .join(" · ");
+
+  // ── NYT section count ──────────────────────────────────────────────────────
+  const nytSectionCount = nytGrouped.length;
+
   return (
     <div className="px-3 md:px-4 py-3 md:py-4">
       <div className="grid grid-cols-1 md:grid-cols-3 xl:grid-cols-4 gap-3 md:gap-4 auto-rows-min">
-        {/* Core watchlist (non-crypto), grouped by asset_type */}
-        <div className="border border-border bg-card md:col-span-2 xl:col-span-2">
-          <CardHeader
-            label="Core watchlist"
-            accent="hsl(142 65% 42%)"
-            href="/markets"
-            count={coreBundle.watchlistNonCrypto.length}
-          />
+
+        {/* Core watchlist — 3-column ticker grid, no name */}
+        <CollapsibleCard
+          label="Core Watchlist"
+          accent="hsl(142 65% 42%)"
+          href="/markets"
+          count={coreBundle.watchlistNonCrypto.length}
+          summary={watchlistSummary}
+          className="md:col-span-2 xl:col-span-2"
+        >
           {!hasWatchlist ? (
             <EmptyState msg="No core quotes — run ETL or check is_core stocks" />
           ) : (
@@ -490,21 +479,18 @@ export default async function CommandCenter() {
                   <p className="px-2 py-1 text-[8px] font-mono uppercase tracking-widest text-muted-foreground bg-secondary/40 border-b border-border sticky top-0">
                     {assetTypeLabel(type)}
                   </p>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-2">
+                  <div className="grid grid-cols-3">
                     {rows.map((s) => {
                       const pct = parseFloat(String(s.quote?.percent_change ?? 0));
                       const price = parseFloat(String(s.quote?.current_price ?? 0));
                       return (
                         <div
                           key={s.ticker}
-                          className="flex items-center justify-between gap-1 px-2 py-1 border-b border-border hover:bg-secondary/50 transition-colors"
+                          className="flex items-center justify-between gap-1 px-2 py-1 border-b border-r border-border hover:bg-secondary/50 transition-colors"
                         >
-                          <span className="text-[10px] font-mono font-black w-11 shrink-0">{s.ticker}</span>
-                          <span className="text-[9px] text-muted-foreground flex-1 truncate hidden sm:block">
-                            {s.name}
-                          </span>
-                          <div className="flex items-center gap-1.5 shrink-0">
-                            <span className="text-[10px] font-mono tabular-nums font-bold">
+                          <span className="text-[10px] font-mono font-black shrink-0">{s.ticker}</span>
+                          <div className="flex flex-col items-end shrink-0 min-w-0">
+                            <span className="text-[9px] font-mono tabular-nums font-bold leading-none">
                               ${price.toFixed(2)}
                             </span>
                             <ChangeTag pct={pct} />
@@ -517,11 +503,16 @@ export default async function CommandCenter() {
               ))}
             </div>
           )}
-        </div>
+        </CollapsibleCard>
 
         {/* Crypto: quotes first, then headlines */}
-        <div className="border border-border bg-card">
-          <CardHeader label="Crypto" accent="hsl(45 93% 47%)" href="/markets" />
+        <CollapsibleCard
+          label="Crypto"
+          accent="hsl(45 93% 47%)"
+          href="/markets"
+          count={hasCryptoQuotes ? coreBundle.cryptoQuotes.length : undefined}
+          summary={`${coreBundle.cryptoQuotes.length} coins · ${cryptoHeadlines.length} headlines`}
+        >
           {!hasCryptoCard ? (
             <EmptyState msg="No core crypto quotes or headlines" />
           ) : (
@@ -570,16 +561,16 @@ export default async function CommandCenter() {
               )}
             </div>
           )}
-        </div>
+        </CollapsibleCard>
 
         {/* Company news */}
-        <div className="border border-border bg-card">
-          <CardHeader
-            label="Stock news"
-            accent="hsl(142 65% 42%)"
-            href="/markets"
-            count={companyNews.length}
-          />
+        <CollapsibleCard
+          label="Stock News"
+          accent="hsl(142 65% 42%)"
+          href="/markets"
+          count={companyNews.length}
+          summary={`${companyNews.length} articles`}
+        >
           {!hasCompanyNews ? (
             <EmptyState msg="No company news for core tickers" />
           ) : (
@@ -609,16 +600,16 @@ export default async function CommandCenter() {
               ))}
             </div>
           )}
-        </div>
+        </CollapsibleCard>
 
         {/* Market news */}
-        <div className="border border-border bg-card">
-          <CardHeader
-            label="Market news"
-            accent="hsl(142 65% 42%)"
-            href="/markets"
-            count={marketNews.length}
-          />
+        <CollapsibleCard
+          label="Market News"
+          accent="hsl(142 65% 42%)"
+          href="/markets"
+          count={marketNews.length}
+          summary={`${marketNews.length} articles`}
+        >
           {!hasMarketNews ? (
             <EmptyState msg="No market news" />
           ) : (
@@ -651,16 +642,17 @@ export default async function CommandCenter() {
               ))}
             </div>
           )}
-        </div>
+        </CollapsibleCard>
 
-        {/* NYT — grouped by section (existing column) */}
-        <div className="border border-border bg-card md:col-span-2">
-          <CardHeader
-            label="NYT — by section"
-            accent="hsl(220 90% 52%)"
-            href="/news"
-            count={nytFirstSlice.length}
-          />
+        {/* NYT — grouped by section */}
+        <CollapsibleCard
+          label="NYT — By Section"
+          accent="hsl(220 90% 52%)"
+          href="/news"
+          count={nytFirstSlice.length}
+          summary={`${nytFirstSlice.length} articles · ${nytSectionCount} sections`}
+          className="md:col-span-2"
+        >
           {!hasNytTop ? (
             <EmptyState msg="No NYT articles (source=nyt)" />
           ) : (
@@ -687,16 +679,16 @@ export default async function CommandCenter() {
               ))}
             </div>
           )}
-        </div>
+        </CollapsibleCard>
 
-        {/* NYT — more recent (same feed, later rows; no extra DB column) */}
-        <div className="border border-border bg-card">
-          <CardHeader
-            label="NYT — more"
-            accent="hsl(220 90% 52%)"
-            href="/news"
-            count={nytSecondSlice.length}
-          />
+        {/* NYT — more recent */}
+        <CollapsibleCard
+          label="NYT — More"
+          accent="hsl(220 90% 52%)"
+          href="/news"
+          count={nytSecondSlice.length}
+          summary={`${nytSecondSlice.length} articles`}
+        >
           {!hasNytMore ? (
             <EmptyState msg="No additional NYT rows" />
           ) : (
@@ -719,7 +711,7 @@ export default async function CommandCenter() {
               ))}
             </div>
           )}
-        </div>
+        </CollapsibleCard>
 
         {/* Sports */}
         {Object.entries(sportsSnapshots).map(([key, snapshot]) => {
@@ -738,27 +730,38 @@ export default async function CommandCenter() {
             wnba: "WNBA",
           };
 
+          const totalGames = snap.recentGames.length + snap.upcomingGames.length;
+          const sportsSummary = [
+            totalGames > 0 && `${totalGames} games`,
+            snap.news.length > 0 && `${snap.news.length} news`,
+          ]
+            .filter(Boolean)
+            .join(" · ") || (offSeason ? "off season" : "no data");
+
           return (
-            <div key={key} className="border border-border bg-card">
-              <CardHeader
-                label={labelMap[key] ?? snap.league.display_name}
-                accent="hsl(25 95% 50%)"
-                href="/sports"
-                count={snap.recentGames.length + snap.upcomingGames.length}
-              />
+            <CollapsibleCard
+              key={key}
+              label={labelMap[key] ?? snap.league.display_name}
+              accent="hsl(25 95% 50%)"
+              href="/sports"
+              count={totalGames || undefined}
+              summary={sportsSummary}
+            >
               {!hasScores && snap.news.length === 0 ? (
                 <EmptyState msg={offSeason ? "Off season — no data" : "No games yet"} />
               ) : (
-                <div className="px-2 py-1 space-y-1.5">
+                <div>
                   {offSeason && (
-                    <p className="text-[8px] font-mono text-muted-foreground uppercase tracking-widest">
+                    <p className="px-2 py-1 text-[8px] font-mono text-muted-foreground uppercase tracking-widest border-b border-border">
                       Off season — news only
                     </p>
                   )}
 
                   {snap.recentGames.length > 0 && (
                     <div>
-                      <p className="text-[8px] font-mono text-muted-foreground uppercase mb-0.5">Recent</p>
+                      <p className="px-2 py-0.5 text-[8px] font-mono text-muted-foreground uppercase tracking-widest bg-secondary/40 border-b border-border">
+                        Recent
+                      </p>
                       {snap.recentGames.map((g, i) => (
                         <ScoreRow key={`recent-${i}`} game={g} />
                       ))}
@@ -767,7 +770,7 @@ export default async function CommandCenter() {
 
                   {snap.upcomingGames.length > 0 && (
                     <div>
-                      <p className="text-[8px] font-mono text-muted-foreground uppercase mt-0.5 mb-0.5">
+                      <p className="px-2 py-0.5 text-[8px] font-mono text-muted-foreground uppercase tracking-widest bg-secondary/40 border-b border-border">
                         Upcoming
                       </p>
                       {snap.upcomingGames.map((g, i) => (
@@ -778,17 +781,17 @@ export default async function CommandCenter() {
 
                   {snap.news.length > 0 && (
                     <div>
-                      <p className="text-[8px] font-mono text-muted-foreground uppercase mt-0.5 mb-0.5">
+                      <p className="px-2 py-0.5 text-[8px] font-mono text-muted-foreground uppercase tracking-widest bg-secondary/40 border-b border-border">
                         News
                       </p>
-                      <div className="space-y-0.5">
+                      <div>
                         {snap.news.map((n) => (
                           <a
                             key={n.id}
                             href={n.url}
                             target="_blank"
                             rel="noopener noreferrer"
-                            className="block text-[10px] leading-tight line-clamp-1 hover:underline"
+                            className="block px-2 py-1 border-b border-border last:border-0 text-[10px] leading-tight line-clamp-1 hover:underline hover:bg-secondary/50 transition-colors"
                           >
                             {n.title}
                           </a>
@@ -798,18 +801,18 @@ export default async function CommandCenter() {
                   )}
                 </div>
               )}
-            </div>
+            </CollapsibleCard>
           );
         })}
 
         {/* Spotify */}
-        <div className="border border-border bg-card">
-          <CardHeader
-            label="Spotify"
-            accent="hsl(340 78% 50%)"
-            href="/media"
-            count={spotifyReleases.length}
-          />
+        <CollapsibleCard
+          label="Spotify"
+          accent="hsl(340 78% 50%)"
+          href="/media"
+          count={spotifyReleases.length}
+          summary={`${spotifyReleases.length} releases`}
+        >
           {!hasSpotify ? (
             <EmptyState msg="No Spotify data" />
           ) : (
@@ -835,16 +838,16 @@ export default async function CommandCenter() {
               ))}
             </div>
           )}
-        </div>
+        </CollapsibleCard>
 
         {/* Reddit */}
-        <div className="border border-border bg-card">
-          <CardHeader
-            label="Reddit"
-            accent="hsl(220 15% 60%)"
-            href="/media"
-            count={redditPosts.length}
-          />
+        <CollapsibleCard
+          label="Reddit"
+          accent="hsl(220 15% 60%)"
+          href="/media"
+          count={redditPosts.length}
+          summary={`${redditPosts.length} posts`}
+        >
           {!hasReddit ? (
             <EmptyState msg="No Reddit data" />
           ) : (
@@ -866,7 +869,8 @@ export default async function CommandCenter() {
               ))}
             </div>
           )}
-        </div>
+        </CollapsibleCard>
+
       </div>
     </div>
   );
