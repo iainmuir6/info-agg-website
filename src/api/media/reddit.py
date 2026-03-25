@@ -34,7 +34,7 @@ def fetch_reddit_hot(subreddit: str = 'all', limit: int = 25) -> Optional[List[D
         List of post dicts, or None on error
     """
     url = f"{REDDIT_BASE_URL}/r/{subreddit}/hot.json"
-    headers = {'User-Agent': 'InfoAggregator/1.0'}
+    headers = {'User-Agent': 'python:com.iainmuir.infoagg:v1.0 (by /u/ValuableJuice8310)'}
     params = {'limit': min(limit, 100)}
     global _REDDIT_DISABLED_DUE_TO_429
 
@@ -74,15 +74,15 @@ def fetch_reddit_hot(subreddit: str = 'all', limit: int = 25) -> Optional[List[D
 
         return posts
 
+    except RedditRateLimited:
+        raise  # always propagate — never let except Exception swallow it
     except requests.exceptions.RequestException as e:
         msg = str(e)
         if ("403" in msg and "Client Error" in msg) or ("Blocked for url" in msg):
             _REDDIT_DISABLED_DUE_TO_429 = True
             raise RedditRateLimited("Reddit blocked (403) in this ETL run; stopping remaining subreddits")
-        print(f"Error fetching Reddit data for r/{subreddit}: {e}")
         return None
-    except Exception as e:
-        print(f"Error parsing Reddit data for r/{subreddit}: {e}")
+    except Exception:
         return None
 
 

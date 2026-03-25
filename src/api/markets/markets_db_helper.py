@@ -1176,6 +1176,7 @@ def upsert_economic_indicators(supabase: Client, rows: List[Dict[str, Any]]) -> 
             upserted += len(batch)
         return upserted
     except Exception as e:
+        print(f"Error upserting economic indicators: {e}")
         return 0
 
 

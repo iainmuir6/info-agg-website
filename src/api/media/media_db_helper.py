@@ -232,8 +232,8 @@ def sync_reddit_data(supabase: Client, subreddits: Optional[List[str]] = None) -
             if posts:
                 all_posts.extend(posts)
                 stats['subreddits_processed'] += 1
-        except RedditRateLimited as e:
-            stats['errors'].append(str(e))
+        except RedditRateLimited:
+            print("Reddit 403/429 — disabled for this ETL run")
             break
         except Exception as e:
             stats['errors'].append(f"Error fetching r/{subreddit}: {e}")

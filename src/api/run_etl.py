@@ -165,9 +165,9 @@ def run_markets_etl(
             for future in as_completed(futures):
                 ticker, st = future.result()
                 total_stats['stocks_processed'] += 1
-                total_stats['errors'].extend(stats.get('errors', []))
-                all_pending_news.extend(stats.get('pending_news', []))
-                all_pending_quotes.extend(stats.get('pending_quotes', []))
+                total_stats['errors'].extend(st.get('errors', []))
+                all_pending_news.extend(st.get('pending_news', []))
+                all_pending_quotes.extend(st.get('pending_quotes', []))
 
         # Phase 2: single batch upsert for all quotes after all threads complete
         if all_pending_quotes:
@@ -185,7 +185,7 @@ def run_markets_etl(
             for r in all_pending_news:
                 tid = r.get('ticker')
                 if tid:
-                    sid = ticker_to_id.get(tid)
+                    sid = stock_id_map.get(tid)
                     if not sid:
                         total_stats['errors'].append(f"No stock_id for company news ticker {tid}")
                         continue
