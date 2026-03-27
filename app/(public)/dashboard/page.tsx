@@ -3,50 +3,85 @@ import { createClient } from "@/lib/supabase/server";
 import { isSuperAdmin } from "@/lib/rbac";
 import { EtlTriggerButton } from "@/components/etl-trigger";
 
+type TableRow = { label: string; count: number | null };
+
 type DomainStat = {
   domain: string;
   accent: string;
-  count: number | null;
+  rows: TableRow[];
   lastFetch: string | null;
 };
 
 async function getDomainStats(): Promise<DomainStat[]> {
   const supabase = await createClient();
 
-  const [sportsRes, marketsRes, newsRes, mediaRes] = await Promise.all([
-    supabase.from("sports_news").select("created_at", { count: "exact", head: false }).order("created_at", { ascending: false }).limit(1),
-    supabase.from("stock_quotes").select("fetched_at", { count: "exact", head: false }).order("fetched_at", { ascending: false }).limit(1),
-    supabase.from("news_articles").select("created_at", { count: "exact", head: false }).order("created_at", { ascending: false }).limit(1),
-    supabase.from("spotify_releases").select("created_at", { count: "exact", head: false }).order("created_at", { ascending: false }).limit(1),
-  ]);
+  const [
+    sportsNewsCount,
+    sportsScoresCount,
+    sportsLastFetch,
+    stocksCount,
+    quotesCount,
+    companyNewsCount,
+    marketsLastFetch,
+    newsCount,
+    newsLastFetch,
+    spotifyCount,
+    redditCount,
+    mediaLastFetch,
+  ] = await Promise.all([
+    supabase.from("sports_news").select("*",      { count: "exact", head: true }),
+    supabase.from("sports_scores").select("*",    { count: "exact", head: true }),
+    supabase.from("sports_news").select("created_at").order("created_at", { ascending: false }).limit(1),
 
-  const lastOf = (res: { data: any[] | null }, key: string) =>
-    res.data?.[0]?.[key] ?? null;
+    supabase.from("stocks").select("*",           { count: "exact", head: true }).eq("is_active", true),
+    supabase.from("stock_quotes").select("*",     { count: "exact", head: true }),
+    supabase.from("company_news").select("*",     { count: "exact", head: true }),
+    supabase.from("stock_quotes").select("fetched_at").order("fetched_at", { ascending: false }).limit(1),
+
+    supabase.from("news_articles").select("*",    { count: "exact", head: true }),
+    supabase.from("news_articles").select("created_at").order("created_at", { ascending: false }).limit(1),
+
+    supabase.from("spotify_releases").select("*", { count: "exact", head: true }),
+    supabase.from("reddit_posts").select("*",     { count: "exact", head: true }),
+    supabase.from("spotify_releases").select("created_at").order("created_at", { ascending: false }).limit(1),
+  ]);
 
   return [
     {
       domain: "Sports",
       accent: "hsl(25 95% 50%)",
-      count: sportsRes.count,
-      lastFetch: lastOf(sportsRes, "created_at"),
+      rows: [
+        { label: "News articles", count: sportsNewsCount.count },
+        { label: "Score records", count: sportsScoresCount.count },
+      ],
+      lastFetch: sportsLastFetch.data?.[0]?.created_at ?? null,
     },
     {
       domain: "Markets",
       accent: "hsl(142 65% 42%)",
-      count: marketsRes.count,
-      lastFetch: lastOf(marketsRes, "fetched_at"),
+      rows: [
+        { label: "Tracked stocks", count: stocksCount.count },
+        { label: "Quote snapshots", count: quotesCount.count },
+        { label: "Company news",   count: companyNewsCount.count },
+      ],
+      lastFetch: marketsLastFetch.data?.[0]?.fetched_at ?? null,
     },
     {
       domain: "News",
       accent: "hsl(220 90% 52%)",
-      count: newsRes.count,
-      lastFetch: lastOf(newsRes, "created_at"),
+      rows: [
+        { label: "Articles", count: newsCount.count },
+      ],
+      lastFetch: newsLastFetch.data?.[0]?.created_at ?? null,
     },
     {
       domain: "Media",
       accent: "hsl(340 78% 50%)",
-      count: mediaRes.count,
-      lastFetch: lastOf(mediaRes, "created_at"),
+      rows: [
+        { label: "Spotify releases", count: spotifyCount.count },
+        { label: "Reddit posts",     count: redditCount.count },
+      ],
+      lastFetch: mediaLastFetch.data?.[0]?.created_at ?? null,
     },
   ];
 }
@@ -72,7 +107,7 @@ export default async function DashboardPage() {
   const stats = await getDomainStats();
 
   return (
-    <div className="max-w-5xl mx-auto px-6 py-8">
+    <div className="max-w-3xl mx-auto px-6 py-8">
       <div className="mb-6">
         <h1 className="text-2xl font-black tracking-tighter" style={{ fontFamily: "Georgia, serif" }}>
           ADMIN DASHBOARD
@@ -83,40 +118,44 @@ export default async function DashboardPage() {
         </p>
       </div>
 
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-6">
         {stats.map((s) => (
-          <div key={s.domain} className="border border-border flex flex-col">
+          <div key={s.domain} className="border border-border">
+            {/* Domain header */}
             <div
-              className="px-3 py-1.5 border-b border-border"
+              className="px-3 py-2 border-b border-border flex items-center justify-between"
               style={{ borderLeftColor: s.accent, borderLeftWidth: 3 }}
             >
               <span className="text-[10px] font-mono tracking-widest uppercase font-bold">
                 {s.domain}
               </span>
-            </div>
-            <div className="px-3 py-3 flex-1 flex flex-col gap-1">
-              <span className="text-2xl font-black tabular-nums">
-                {s.count?.toLocaleString() ?? "—"}
-              </span>
               <span className="text-[10px] font-mono text-muted-foreground tracking-wider">
-                RECORDS
-              </span>
-              <span className="mt-auto text-[10px] font-mono text-muted-foreground tracking-wider">
                 {syncAge(s.lastFetch)}
               </span>
             </div>
-            <div className="px-3 py-2 border-t border-border">
-              <EtlTriggerButton domain={s.domain.toLowerCase() as any} />
+
+            {/* Table rows */}
+            <div className="px-3 py-3 flex flex-col gap-2">
+              {s.rows.map((r) => (
+                <div key={r.label} className="flex items-baseline justify-between gap-4">
+                  <span className="text-[10px] font-mono text-muted-foreground tracking-wider uppercase truncate">
+                    {r.label}
+                  </span>
+                  <span className="text-sm font-black tabular-nums shrink-0">
+                    {r.count?.toLocaleString() ?? "—"}
+                  </span>
+                </div>
+              ))}
             </div>
           </div>
         ))}
       </div>
 
       <div className="flex items-center gap-3">
-        <span className="text-[10px] font-mono tracking-widest text-muted-foreground uppercase">
-          Run all domains:
-        </span>
         <EtlTriggerButton />
+        <span className="text-[10px] font-mono text-muted-foreground tracking-wider">
+          Sports · News · Market quotes — skips sentiment, media, and economic indicators
+        </span>
       </div>
     </div>
   );

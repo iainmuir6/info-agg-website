@@ -2,13 +2,7 @@
 
 import { useState } from "react";
 
-type Domain = "sports" | "markets" | "news" | "media";
-
-interface EtlTriggerButtonProps {
-  domain?: Domain;
-}
-
-export function EtlTriggerButton({ domain }: EtlTriggerButtonProps) {
+export function EtlTriggerButton() {
   const [status, setStatus] = useState<"idle" | "loading" | "ok" | "error">("idle");
 
   async function handleClick() {
@@ -17,7 +11,7 @@ export function EtlTriggerButton({ domain }: EtlTriggerButtonProps) {
       const res = await fetch("/api/etl", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(domain ? { domain } : {}),
+        body: JSON.stringify({ mode: "quick" }),
       });
       setStatus(res.ok ? "ok" : "error");
     } catch {
@@ -28,22 +22,17 @@ export function EtlTriggerButton({ domain }: EtlTriggerButtonProps) {
   }
 
   const label =
-    status === "loading"
-      ? "RUNNING…"
-      : status === "ok"
-        ? "DONE ✓"
-        : status === "error"
-          ? "FAILED ✗"
-          : domain
-            ? `RUN ${domain.toUpperCase()}`
-            : "RUN ETL";
+    status === "loading" ? "RUNNING…"
+    : status === "ok"    ? "DONE ✓"
+    : status === "error" ? "FAILED ✗"
+    : "QUICK REFRESH";
 
   return (
     <button
       onClick={handleClick}
       disabled={status === "loading"}
-      className="text-[10px] font-mono tracking-widest uppercase border border-border px-3 py-1.5 transition-colors disabled:opacity-50
-        hover:border-foreground hover:text-foreground text-muted-foreground"
+      className="text-[10px] font-mono tracking-widest uppercase border border-border px-3 py-1.5
+        transition-colors disabled:opacity-50 hover:border-foreground hover:text-foreground text-muted-foreground"
     >
       {label}
     </button>
