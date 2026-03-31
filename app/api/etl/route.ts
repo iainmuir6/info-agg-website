@@ -4,10 +4,15 @@ import { isSuperAdmin } from "@/lib/rbac";
 import { execFile } from "child_process";
 import path from "path";
 import { getEtlPythonExecutable } from "@/lib/etl-python";
+import { isAllowedSameOriginMutation } from "@/lib/security";
 
 // Only allow triggering from super_admin users
 export async function POST(request: NextRequest) {
   try {
+    if (!isAllowedSameOriginMutation(request)) {
+      return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+    }
+
     const supabase = await createClient();
     const { data, error } = await supabase.auth.getClaims();
 
@@ -45,7 +50,7 @@ export async function POST(request: NextRequest) {
               console.error("Quick refresh ETL error:", stderr);
               resolve(
                 NextResponse.json(
-                  { success: false, error: "Quick refresh ETL failed", details: stderr?.slice(0, 500) },
+                  { success: false, error: "Quick refresh ETL failed" },
                   { status: 500 }
                 )
               );
@@ -85,7 +90,6 @@ export async function POST(request: NextRequest) {
                 {
                   success: false,
                   error: "ETL run failed",
-                  details: stderr?.slice(0, 500),
                 },
                 { status: 500 }
               )

@@ -3,6 +3,7 @@ import { createClient } from "@/lib/supabase/server";
 import { createServiceRoleClient } from "@/lib/supabase/service-role";
 import { isSuperAdmin } from "@/lib/rbac";
 import { getSiteUrl } from "@/lib/site-url";
+import { isAllowedSameOriginMutation } from "@/lib/security";
 
 function isValidEmail(email: string): boolean {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
@@ -10,6 +11,10 @@ function isValidEmail(email: string): boolean {
 
 export async function POST(request: Request) {
   try {
+    if (!isAllowedSameOriginMutation(request)) {
+      return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+    }
+
     const supabase = await createClient();
     const { data, error } = await supabase.auth.getClaims();
 
@@ -42,7 +47,7 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: inviteError.message }, { status: 400 });
     }
 
-    return NextResponse.json({ success: true, user: inviteData.user });
+    return NextResponse.json({ success: true });
   } catch (err) {
     console.error("Invite route error:", err);
     return NextResponse.json({ error: "Internal server error" }, { status: 500 });

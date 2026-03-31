@@ -34,7 +34,7 @@ export async function GET(request: NextRequest) {
           console.error("Cron ETL error:", stderr);
           resolve(
             NextResponse.json(
-              { success: false, details: stderr?.slice(0, 500) },
+              { success: false, error: "ETL failed" },
               { status: 500 }
             )
           );
