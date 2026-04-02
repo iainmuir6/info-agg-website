@@ -1,4 +1,5 @@
 import { createClient } from "@/lib/supabase/server";
+import Link from "next/link";
 
 type League = { id: number; sport: string; league: string; display_name: string };
 type Score = {
@@ -185,9 +186,12 @@ export default async function SportsPage() {
                               <div className="flex items-center justify-between text-xs font-mono">
                                 {/* Away */}
                                 <div className="flex items-center gap-2 w-5/12">
-                                  <span className="text-muted-foreground truncate">
+                                  <Link
+                                    href={`/sports/${league.league}/${encodeURIComponent(game.away_team)}`}
+                                    className="text-muted-foreground truncate hover:text-foreground hover:underline"
+                                  >
                                     {game.away_team}
-                                  </span>
+                                  </Link>
                                 </div>
                                 {/* Scores */}
                                 <div className="flex items-center gap-2 justify-center">
@@ -201,9 +205,12 @@ export default async function SportsPage() {
                                 </div>
                                 {/* Home */}
                                 <div className="flex items-center gap-2 w-5/12 justify-end">
-                                  <span className="text-muted-foreground truncate">
+                                  <Link
+                                    href={`/sports/${league.league}/${encodeURIComponent(game.home_team)}`}
+                                    className="text-muted-foreground truncate hover:text-foreground hover:underline"
+                                  >
                                     {game.home_team}
-                                  </span>
+                                  </Link>
                                 </div>
                               </div>
                               <div className="flex items-center justify-between mt-1">

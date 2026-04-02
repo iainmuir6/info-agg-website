@@ -79,7 +79,8 @@ function assetTypeLabel(t: string): string {
 
 function latestQuoteRow(s: any): QuoteRow {
   const quotes = (s.stock_quotes ?? []).sort(
-    (a: any, b: any) => new Date(b.fetched_at).getTime() - new Date(a.fetched_at).getTime()
+    (a: any, b: any) =>
+      new Date(b.fetched_at).getTime() - new Date(a.fetched_at).getTime()
   );
   return {
     ticker: s.ticker,
@@ -94,15 +95,17 @@ function abbrevTeam(name: string): string {
   if (!name) return "—";
   const words = name.trim().split(/\s+/).filter((w) => w.length > 0);
   if (words.length === 1) return words[0].slice(0, 3).toUpperCase();
-  // Initials from each word, up to 3
   const initials = words.map((w) => w[0].toUpperCase()).join("");
   if (initials.length >= 3) return initials.slice(0, 3);
-  // Pad with chars from the last (longest) word
   const last = words[words.length - 1].toUpperCase();
   return (initials + last.slice(1)).slice(0, 3);
 }
 
-async function getCoreStocksBundle(supabase: Awaited<ReturnType<typeof createClient>>): Promise<{
+// ─── Data fetchers ────────────────────────────────────────────────────────────
+
+async function getCoreStocksBundle(
+  supabase: Awaited<ReturnType<typeof createClient>>
+): Promise<{
   watchlistNonCrypto: QuoteRow[];
   cryptoQuotes: QuoteRow[];
   coreTickers: string[];
@@ -110,7 +113,9 @@ async function getCoreStocksBundle(supabase: Awaited<ReturnType<typeof createCli
   try {
     const { data } = await supabase
       .from("stocks")
-      .select("ticker, name, asset_type, stock_quotes(current_price, percent_change, fetched_at)")
+      .select(
+        "ticker, name, asset_type, stock_quotes(current_price, percent_change, fetched_at)"
+      )
       .eq("is_core", true)
       .eq("is_active", true);
 
@@ -140,7 +145,9 @@ function groupQuotesByAssetType(rows: QuoteRow[]): Map<string, QuoteRow[]> {
   return map;
 }
 
-async function getCryptoMarketHeadlines(supabase: Awaited<ReturnType<typeof createClient>>) {
+async function getCryptoMarketHeadlines(
+  supabase: Awaited<ReturnType<typeof createClient>>
+) {
   try {
     const { data } = await supabase
       .from("market_news")
@@ -172,11 +179,15 @@ async function getCompanyNews(
   }
 }
 
-async function getMarketNews(supabase: Awaited<ReturnType<typeof createClient>>) {
+async function getMarketNews(
+  supabase: Awaited<ReturnType<typeof createClient>>
+) {
   try {
     const { data } = await supabase
       .from("market_news")
-      .select("id, headline, url, source, published_at, related_tickers, category")
+      .select(
+        "id, headline, url, source, published_at, related_tickers, category"
+      )
       .order("published_at", { ascending: false })
       .limit(18);
     return data ?? [];
@@ -185,7 +196,6 @@ async function getMarketNews(supabase: Awaited<ReturnType<typeof createClient>>)
   }
 }
 
-/** Single query; split client-side. Uses existing `section` for grouping (no schema changes). */
 async function getNytRecentForHome(
   supabase: Awaited<ReturnType<typeof createClient>>,
   total: number
@@ -203,10 +213,12 @@ async function getNytRecentForHome(
   }
 }
 
-function groupNytBySection(articles: NyTimesArticle[]): { section: string; items: NyTimesArticle[] }[] {
+function groupNytBySection(
+  articles: NyTimesArticle[]
+): { section: string; items: NyTimesArticle[] }[] {
   const map = new Map<string, NyTimesArticle[]>();
   for (const a of articles) {
-    const key = (a.section?.trim() || "General") || "General";
+    const key = a.section?.trim() || "General";
     if (!map.has(key)) map.set(key, []);
     map.get(key)!.push(a);
   }
@@ -214,26 +226,30 @@ function groupNytBySection(articles: NyTimesArticle[]): { section: string; items
   return keys.map((section) => ({ section, items: map.get(section)! }));
 }
 
-async function getSpotifyReleases(supabase: Awaited<ReturnType<typeof createClient>>) {
+async function getSpotifyReleases(
+  supabase: Awaited<ReturnType<typeof createClient>>
+) {
   try {
     const { data } = await supabase
       .from("spotify_releases")
       .select("id, name, artists, album_type, release_date, image_url, external_url")
       .order("release_date", { ascending: false })
-      .limit(5);
+      .limit(6);
     return data ?? [];
   } catch {
     return [];
   }
 }
 
-async function getRedditTopPosts(supabase: Awaited<ReturnType<typeof createClient>>) {
+async function getRedditTopPosts(
+  supabase: Awaited<ReturnType<typeof createClient>>
+) {
   try {
     const { data } = await supabase
       .from("reddit_posts")
       .select("id, subreddit, title, score, url, created_at")
       .order("score", { ascending: false })
-      .limit(6);
+      .limit(8);
     return data ?? [];
   } catch {
     return [];
@@ -244,8 +260,8 @@ async function getLeagueSnapshot(
   supabase: Awaited<ReturnType<typeof createClient>>,
   sport: string,
   league: string,
-  scoreLimit = 6,
-  newsLimit = 4
+  scoreLimit = 8,
+  newsLimit = 6
 ): Promise<LeagueSnapshot> {
   try {
     const { data: leagueRow } = await supabase
@@ -282,7 +298,12 @@ async function getLeagueSnapshot(
     const isRecent = (g: ScoreRowType) => {
       const status = (g.status ?? "").toLowerCase();
       if (status.includes("final") || status.includes("post")) return true;
-      if (status.includes("in") || status.includes("live") || status.includes("progress")) return true;
+      if (
+        status.includes("in") ||
+        status.includes("live") ||
+        status.includes("progress")
+      )
+        return true;
       const dt = g.game_date ? new Date(g.game_date) : null;
       return !!dt && dt < now;
     };
@@ -291,7 +312,8 @@ async function getLeagueSnapshot(
       .filter(isRecent)
       .sort(
         (a, b) =>
-          new Date(b.game_date ?? "").getTime() - new Date(a.game_date ?? "").getTime()
+          new Date(b.game_date ?? "").getTime() -
+          new Date(a.game_date ?? "").getTime()
       )
       .slice(0, scoreLimit);
 
@@ -299,27 +321,18 @@ async function getLeagueSnapshot(
       .filter((g) => !isRecent(g))
       .sort(
         (a, b) =>
-          new Date(a.game_date ?? "").getTime() - new Date(b.game_date ?? "").getTime()
+          new Date(a.game_date ?? "").getTime() -
+          new Date(b.game_date ?? "").getTime()
       )
       .slice(0, scoreLimit);
 
     const news = (newsRes.data ?? []) as SportsNewsItem[];
 
     if (!leagueRow.is_active) {
-      return {
-        league: leagueRow as LeagueRow,
-        recentGames: [],
-        upcomingGames: [],
-        news,
-      };
+      return { league: leagueRow as LeagueRow, recentGames: [], upcomingGames: [], news };
     }
 
-    return {
-      league: leagueRow as LeagueRow,
-      recentGames,
-      upcomingGames,
-      news,
-    };
+    return { league: leagueRow as LeagueRow, recentGames, upcomingGames, news };
   } catch {
     return { league: null, recentGames: [], upcomingGames: [], news: [] };
   }
@@ -348,10 +361,19 @@ function EmptyState({ msg }: { msg: string }) {
   );
 }
 
-/** Compact single-line score row with abbreviated team names */
-function ScoreRow({ game }: { game: ScoreRowType }) {
+/** Score row with clickable team names linking to team detail page */
+function ScoreRow({
+  game,
+  leagueSlug,
+}: {
+  game: ScoreRowType;
+  leagueSlug: string;
+}) {
   const status = (game.status ?? "").toLowerCase();
-  const isLive = status.includes("in") || status.includes("progress") || status.includes("live");
+  const isLive =
+    status.includes("in") ||
+    status.includes("progress") ||
+    status.includes("live");
   const isFinal = status.includes("final");
 
   const awayAbbr = abbrevTeam(game.away_team);
@@ -359,18 +381,37 @@ function ScoreRow({ game }: { game: ScoreRowType }) {
 
   return (
     <div className="flex items-center gap-1 px-2 py-0.5 border-b border-border last:border-0 hover:bg-secondary/50 transition-colors text-[10px] font-mono leading-tight">
-      <span className="font-black w-7 shrink-0 tabular-nums">{awayAbbr}</span>
-      <span className="font-bold tabular-nums w-4 text-right shrink-0">{game.away_score ?? "—"}</span>
+      <Link
+        href={`/sports/${leagueSlug}/${encodeURIComponent(game.away_team)}`}
+        title={game.away_team}
+        className="font-black w-7 shrink-0 tabular-nums hover:underline"
+      >
+        {awayAbbr}
+      </Link>
+      <span className="font-bold tabular-nums w-4 text-right shrink-0">
+        {game.away_score ?? "—"}
+      </span>
       <span className="text-muted-foreground text-[9px] shrink-0">–</span>
-      <span className="font-bold tabular-nums w-4 shrink-0">{game.home_score ?? "—"}</span>
-      <span className="font-black w-7 shrink-0">{homeAbbr}</span>
+      <span className="font-bold tabular-nums w-4 shrink-0">
+        {game.home_score ?? "—"}
+      </span>
+      <Link
+        href={`/sports/${leagueSlug}/${encodeURIComponent(game.home_team)}`}
+        title={game.home_team}
+        className="font-black w-7 shrink-0 hover:underline"
+      >
+        {homeAbbr}
+      </Link>
       {isLive && (
         <>
           <div
             className="w-1 h-1 rounded-full animate-pulse-dot shrink-0"
             style={{ backgroundColor: "hsl(0 72% 50%)" }}
           />
-          <span className="text-[8px] leading-none shrink-0 truncate" style={{ color: "hsl(0 72% 50%)" }}>
+          <span
+            className="text-[8px] leading-none shrink-0 truncate"
+            style={{ color: "hsl(0 72% 50%)" }}
+          >
             {game.status_detail ?? "LIVE"}
           </span>
         </>
@@ -382,8 +423,7 @@ function ScoreRow({ game }: { game: ScoreRowType }) {
   );
 }
 
-const NYT_FIRST = 28;
-const NYT_TOTAL = 44;
+const NYT_TOTAL = 48;
 
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
@@ -421,19 +461,16 @@ export default async function CommandCenter() {
     getLeagueSnapshot(supabase, "basketball", "wnba"),
   ]);
 
-  const nytFirstSlice = nytAll.slice(0, NYT_FIRST);
-  const nytSecondSlice = nytAll.slice(NYT_FIRST, NYT_TOTAL);
-  const nytGrouped = groupNytBySection(nytFirstSlice);
+  const nytGrouped = groupNytBySection(nytAll);
 
   const watchlistByType = groupQuotesByAssetType(coreBundle.watchlistNonCrypto);
-  const watchlistOrdered: { type: string; rows: QuoteRow[] }[] = ASSET_TYPE_ORDER.filter(
-    (t) => (watchlistByType.get(t)?.length ?? 0) > 0
-  ).map((t) => ({ type: t, rows: watchlistByType.get(t)! }));
+  const watchlistOrdered: { type: string; rows: QuoteRow[] }[] =
+    ASSET_TYPE_ORDER.filter(
+      (t) => (watchlistByType.get(t)?.length ?? 0) > 0
+    ).map((t) => ({ type: t, rows: watchlistByType.get(t)! }));
   const orderedSet = new Set<string>(ASSET_TYPE_ORDER);
   for (const [t, rows] of watchlistByType) {
-    if (!orderedSet.has(t)) {
-      watchlistOrdered.push({ type: t, rows });
-    }
+    if (!orderedSet.has(t)) watchlistOrdered.push({ type: t, rows });
   }
 
   const hasWatchlist = coreBundle.watchlistNonCrypto.length > 0;
@@ -442,26 +479,39 @@ export default async function CommandCenter() {
   const hasCryptoCard = hasCryptoQuotes || hasCryptoHeadlines;
   const hasCompanyNews = companyNews.length > 0;
   const hasMarketNews = marketNews.length > 0;
-  const hasNytTop = nytFirstSlice.length > 0;
-  const hasNytMore = nytSecondSlice.length > 0;
+  const hasNyt = nytAll.length > 0;
   const hasSpotify = spotifyReleases.length > 0;
   const hasReddit = redditPosts.length > 0;
 
-  const sportsSnapshots = { nba, mlb, nfl, nhl, ncaab, ncaaf, wnba };
+  // Label map for sports
+  const labelMap: Record<string, string> = {
+    nba: "NBA", mlb: "MLB", nfl: "NFL", nhl: "NHL",
+    ncaab: "NCAAB", ncaaf: "NCAAF", wnba: "WNBA",
+  };
 
-  // ── Watchlist summary ──────────────────────────────────────────────────────
+  const sportsSnapshots: Record<string, LeagueSnapshot> = {
+    nba, mlb, nfl, nhl, ncaab, ncaaf, wnba,
+  };
+
+  // Watchlist summary
   const watchlistSummary = watchlistOrdered
     .map(({ type, rows }) => `${rows.length} ${assetTypeLabel(type).toLowerCase()}`)
     .join(" · ");
 
-  // ── NYT section count ──────────────────────────────────────────────────────
-  const nytSectionCount = nytGrouped.length;
-
   return (
     <div className="px-3 md:px-4 py-3 md:py-4">
-      <div className="grid grid-cols-1 md:grid-cols-3 xl:grid-cols-4 gap-3 md:gap-4 auto-rows-min">
+      {/*
+        5-column grid on XL:
+        Row 1: Watchlist(2) | Crypto(1) | Stock News(1) | Market News(1)
+        Row 2: NYT — full width (5)
+        Row 3: 5 sports leagues
+        Row 4: 2 remaining sports | Spotify(1) | Reddit(2)
+      */}
+      <div className="grid grid-cols-1 md:grid-cols-3 xl:grid-cols-5 gap-3 md:gap-3 auto-rows-min">
 
-        {/* Core watchlist — 3-column ticker grid, no name */}
+        {/* ── Row 1: Markets ──────────────────────────────────────────── */}
+
+        {/* Core Watchlist — 3-col ticker grid inside, spans 2 cols */}
         <CollapsibleCard
           label="Core Watchlist"
           accent="hsl(142 65% 42%)"
@@ -473,7 +523,7 @@ export default async function CommandCenter() {
           {!hasWatchlist ? (
             <EmptyState msg="No core quotes — run ETL or check is_core stocks" />
           ) : (
-            <div className="max-h-[min(70vh,520px)] overflow-y-auto">
+            <div className="h-full overflow-y-auto">
               {watchlistOrdered.map(({ type, rows }) => (
                 <div key={type}>
                   <p className="px-2 py-1 text-[8px] font-mono uppercase tracking-widest text-muted-foreground bg-secondary/40 border-b border-border sticky top-0">
@@ -484,18 +534,21 @@ export default async function CommandCenter() {
                       const pct = parseFloat(String(s.quote?.percent_change ?? 0));
                       const price = parseFloat(String(s.quote?.current_price ?? 0));
                       return (
-                        <div
+                        <Link
                           key={s.ticker}
-                          className="flex items-center justify-between gap-1 px-2 py-1 border-b border-r border-border hover:bg-secondary/50 transition-colors"
+                          href={`/markets/${s.ticker}`}
+                          className="flex items-center justify-between gap-1 px-2 py-1 border-b border-r border-border hover:bg-secondary/50 transition-colors group"
                         >
-                          <span className="text-[10px] font-mono font-black shrink-0">{s.ticker}</span>
+                          <span className="text-[10px] font-mono font-black shrink-0 group-hover:underline">
+                            {s.ticker}
+                          </span>
                           <div className="flex flex-col items-end shrink-0 min-w-0">
                             <span className="text-[9px] font-mono tabular-nums font-bold leading-none">
                               ${price.toFixed(2)}
                             </span>
                             <ChangeTag pct={pct} />
                           </div>
-                        </div>
+                        </Link>
                       );
                     })}
                   </div>
@@ -505,7 +558,7 @@ export default async function CommandCenter() {
           )}
         </CollapsibleCard>
 
-        {/* Crypto: quotes first, then headlines */}
+        {/* Crypto */}
         <CollapsibleCard
           label="Crypto"
           accent="hsl(45 93% 47%)"
@@ -516,25 +569,28 @@ export default async function CommandCenter() {
           {!hasCryptoCard ? (
             <EmptyState msg="No core crypto quotes or headlines" />
           ) : (
-            <div>
+            <div className="h-full overflow-y-auto">
               {hasCryptoQuotes && (
                 <div className="border-b border-border">
                   {coreBundle.cryptoQuotes.map((s) => {
                     const pct = parseFloat(String(s.quote?.percent_change ?? 0));
                     const price = parseFloat(String(s.quote?.current_price ?? 0));
                     return (
-                      <div
+                      <Link
                         key={s.ticker}
-                        className="flex items-center justify-between px-2 py-1 border-b border-border last:border-b-0 hover:bg-secondary/50 transition-colors"
+                        href={`/markets/${s.ticker}`}
+                        className="flex items-center justify-between px-2 py-1 border-b border-border last:border-b-0 hover:bg-secondary/50 transition-colors group"
                       >
-                        <span className="text-[10px] font-mono font-black">{s.ticker}</span>
+                        <span className="text-[10px] font-mono font-black group-hover:underline">
+                          {s.ticker}
+                        </span>
                         <div className="flex items-center gap-1.5">
                           <span className="text-[10px] font-mono tabular-nums font-bold">
                             ${price.toFixed(2)}
                           </span>
                           <ChangeTag pct={pct} />
                         </div>
-                      </div>
+                      </Link>
                     );
                   })}
                 </div>
@@ -553,7 +609,9 @@ export default async function CommandCenter() {
                         {item.headline}
                       </p>
                       {item.source && (
-                        <span className="text-[8px] font-mono text-muted-foreground">{item.source}</span>
+                        <span className="text-[8px] font-mono text-muted-foreground">
+                          {item.source}
+                        </span>
                       )}
                     </a>
                   ))}
@@ -563,7 +621,7 @@ export default async function CommandCenter() {
           )}
         </CollapsibleCard>
 
-        {/* Company news */}
+        {/* Stock News */}
         <CollapsibleCard
           label="Stock News"
           accent="hsl(142 65% 42%)"
@@ -574,7 +632,7 @@ export default async function CommandCenter() {
           {!hasCompanyNews ? (
             <EmptyState msg="No company news for core tickers" />
           ) : (
-            <div>
+            <div className="h-full overflow-y-auto">
               {companyNews.map((item) => (
                 <a
                   key={item.id}
@@ -588,12 +646,18 @@ export default async function CommandCenter() {
                   </p>
                   <div className="flex items-center gap-1 flex-wrap mt-0.5">
                     {item.source && (
-                      <span className="text-[8px] font-mono text-muted-foreground">{item.source}</span>
-                    )}
-                    {(item.related_tickers ?? []).slice(0, 4).map((t) => (
-                      <span key={t} className="text-[8px] font-mono px-0.5 bg-secondary leading-none">
-                        {t}
+                      <span className="text-[8px] font-mono text-muted-foreground">
+                        {item.source}
                       </span>
+                    )}
+                    {(item.related_tickers ?? []).slice(0, 3).map((t) => (
+                      <Link
+                        key={t}
+                        href={`/markets/${t}`}
+                        className="text-[8px] font-mono px-0.5 bg-secondary leading-none hover:bg-border"
+                      >
+                        {t}
+                      </Link>
                     ))}
                   </div>
                 </a>
@@ -602,7 +666,7 @@ export default async function CommandCenter() {
           )}
         </CollapsibleCard>
 
-        {/* Market news */}
+        {/* Market News */}
         <CollapsibleCard
           label="Market News"
           accent="hsl(142 65% 42%)"
@@ -613,7 +677,7 @@ export default async function CommandCenter() {
           {!hasMarketNews ? (
             <EmptyState msg="No market news" />
           ) : (
-            <div>
+            <div className="h-full overflow-y-auto">
               {marketNews.map((item: any) => (
                 <a
                   key={item.id}
@@ -632,7 +696,9 @@ export default async function CommandCenter() {
                       </span>
                     )}
                     {item.source && (
-                      <span className="text-[8px] font-mono text-muted-foreground">· {item.source}</span>
+                      <span className="text-[8px] font-mono text-muted-foreground">
+                        · {item.source}
+                      </span>
                     )}
                   </div>
                   <p className="text-[10px] font-medium leading-tight line-clamp-1 group-hover:underline">
@@ -644,99 +710,65 @@ export default async function CommandCenter() {
           )}
         </CollapsibleCard>
 
-        {/* NYT — grouped by section */}
-        <CollapsibleCard
-          label="NYT — By Section"
-          accent="hsl(220 90% 52%)"
-          href="/news"
-          count={nytFirstSlice.length}
-          summary={`${nytFirstSlice.length} articles · ${nytSectionCount} sections`}
-          className="md:col-span-2"
-        >
-          {!hasNytTop ? (
-            <EmptyState msg="No NYT articles (source=nyt)" />
-          ) : (
-            <div className="max-h-[min(60vh,440px)] overflow-y-auto">
-              {nytGrouped.map(({ section, items }) => (
-                <div key={section}>
-                  <p className="px-2 py-0.5 text-[8px] font-mono uppercase tracking-widest text-muted-foreground bg-secondary/40 border-b border-border sticky top-0">
-                    {section}
-                  </p>
-                  {items.map((a) => (
-                    <a
-                      key={a.id}
-                      href={a.url}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="block px-2 py-1 border-b border-border hover:bg-secondary/50 transition-colors group"
-                    >
-                      <p className="text-[10px] font-semibold leading-tight line-clamp-1 group-hover:underline">
-                        {a.title}
-                      </p>
-                    </a>
-                  ))}
-                </div>
-              ))}
-            </div>
-          )}
-        </CollapsibleCard>
+        {/* ── Row 2: NYT — full width ──────────────────────────────────── */}
 
-        {/* NYT — more recent */}
         <CollapsibleCard
-          label="NYT — More"
+          label="NYT — Top Stories"
           accent="hsl(220 90% 52%)"
           href="/news"
-          count={nytSecondSlice.length}
-          summary={`${nytSecondSlice.length} articles`}
+          count={nytAll.length}
+          summary={`${nytAll.length} articles · ${nytGrouped.length} sections`}
+          className="md:col-span-3 xl:col-span-5"
         >
-          {!hasNytMore ? (
-            <EmptyState msg="No additional NYT rows" />
+          {!hasNyt ? (
+            <EmptyState msg="No NYT articles — run ETL to sync news" />
           ) : (
-            <div>
-              {nytSecondSlice.map((a) => (
-                <a
-                  key={a.id}
-                  href={a.url}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="block px-2 py-1 border-b border-border last:border-0 hover:bg-secondary/50 transition-colors group"
-                >
-                  <div className="flex items-center gap-1">
-                    {a.section && (
-                      <span className="text-[8px] font-mono text-muted-foreground shrink-0">{a.section}</span>
-                    )}
+            /*
+              Full-width card: lay out sections in a multi-column horizontal
+              flow so users can scan across rather than scroll a tall list.
+            */
+            <div className="h-full overflow-y-auto">
+              <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-4 divide-x divide-y divide-border">
+                {nytGrouped.map(({ section, items }) => (
+                  <div key={section} className="min-w-0">
+                    <p className="px-2 py-0.5 text-[8px] font-mono uppercase tracking-widest text-muted-foreground bg-secondary/40 border-b border-border sticky top-0">
+                      {section}
+                    </p>
+                    {items.map((a) => (
+                      <a
+                        key={a.id}
+                        href={a.url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="block px-2 py-1 border-b border-border hover:bg-secondary/50 transition-colors group"
+                      >
+                        <p className="text-[10px] font-semibold leading-tight line-clamp-2 group-hover:underline">
+                          {a.title}
+                        </p>
+                      </a>
+                    ))}
                   </div>
-                  <p className="text-[10px] leading-tight line-clamp-1 group-hover:underline">{a.title}</p>
-                </a>
-              ))}
+                ))}
+              </div>
             </div>
           )}
         </CollapsibleCard>
 
-        {/* Sports */}
+        {/* ── Rows 3-4: Sports ─────────────────────────────────────────── */}
+
         {Object.entries(sportsSnapshots).map(([key, snapshot]) => {
           const snap = snapshot as LeagueSnapshot;
           if (!snap.league) return null;
           const hasScores = snap.recentGames.length > 0 || snap.upcomingGames.length > 0;
           const offSeason = !snap.league.is_active;
-
-          const labelMap: Record<string, string> = {
-            nba: "NBA",
-            mlb: "MLB",
-            nfl: "NFL",
-            nhl: "NHL",
-            ncaab: "NCAAB",
-            ncaaf: "NCAAF",
-            wnba: "WNBA",
-          };
-
           const totalGames = snap.recentGames.length + snap.upcomingGames.length;
-          const sportsSummary = [
-            totalGames > 0 && `${totalGames} games`,
-            snap.news.length > 0 && `${snap.news.length} news`,
-          ]
-            .filter(Boolean)
-            .join(" · ") || (offSeason ? "off season" : "no data");
+          const sportsSummary =
+            [
+              totalGames > 0 && `${totalGames} games`,
+              snap.news.length > 0 && `${snap.news.length} news`,
+            ]
+              .filter(Boolean)
+              .join(" · ") || (offSeason ? "off season" : "no data");
 
           return (
             <CollapsibleCard
@@ -748,62 +780,68 @@ export default async function CommandCenter() {
               summary={sportsSummary}
             >
               {!hasScores && snap.news.length === 0 ? (
-                <EmptyState msg={offSeason ? "Off season — no data" : "No games yet"} />
+                <EmptyState
+                  msg={offSeason ? "Off season — no data" : "No games yet"}
+                />
               ) : (
-                <div>
-                  {offSeason && (
-                    <p className="px-2 py-1 text-[8px] font-mono text-muted-foreground uppercase tracking-widest border-b border-border">
-                      Off season — news only
-                    </p>
-                  )}
-
-                  {snap.recentGames.length > 0 && (
-                    <div>
-                      <p className="px-2 py-0.5 text-[8px] font-mono text-muted-foreground uppercase tracking-widest bg-secondary/40 border-b border-border">
-                        Recent
+                /* Sub-columns: scores left, news right */
+                <div className="h-full grid grid-cols-2 divide-x divide-border">
+                  {/* Scores column */}
+                  <div className="overflow-y-auto">
+                    {offSeason && (
+                      <p className="px-2 py-1 text-[8px] font-mono text-muted-foreground uppercase tracking-widest border-b border-border">
+                        Off season
                       </p>
-                      {snap.recentGames.map((g, i) => (
-                        <ScoreRow key={`recent-${i}`} game={g} />
-                      ))}
-                    </div>
-                  )}
-
-                  {snap.upcomingGames.length > 0 && (
-                    <div>
-                      <p className="px-2 py-0.5 text-[8px] font-mono text-muted-foreground uppercase tracking-widest bg-secondary/40 border-b border-border">
-                        Upcoming
-                      </p>
-                      {snap.upcomingGames.map((g, i) => (
-                        <ScoreRow key={`upcoming-${i}`} game={g} />
-                      ))}
-                    </div>
-                  )}
-
-                  {snap.news.length > 0 && (
-                    <div>
-                      <p className="px-2 py-0.5 text-[8px] font-mono text-muted-foreground uppercase tracking-widest bg-secondary/40 border-b border-border">
-                        News
-                      </p>
+                    )}
+                    {snap.recentGames.length > 0 && (
                       <div>
-                        {snap.news.map((n) => (
-                          <a
-                            key={n.id}
-                            href={n.url}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="block px-2 py-1 border-b border-border last:border-0 text-[10px] leading-tight line-clamp-1 hover:underline hover:bg-secondary/50 transition-colors"
-                          >
-                            {n.title}
-                          </a>
+                        <p className="px-2 py-0.5 text-[8px] font-mono text-muted-foreground uppercase tracking-widest bg-secondary/40 border-b border-border sticky top-0">
+                          Recent
+                        </p>
+                        {snap.recentGames.map((g, i) => (
+                          <ScoreRow key={`r-${i}`} game={g} leagueSlug={snap.league!.league} />
                         ))}
                       </div>
-                    </div>
-                  )}
+                    )}
+                    {snap.upcomingGames.length > 0 && (
+                      <div>
+                        <p className="px-2 py-0.5 text-[8px] font-mono text-muted-foreground uppercase tracking-widest bg-secondary/40 border-b border-border sticky top-0">
+                          Next
+                        </p>
+                        {snap.upcomingGames.map((g, i) => (
+                          <ScoreRow key={`u-${i}`} game={g} leagueSlug={snap.league!.league} />
+                        ))}
+                      </div>
+                    )}
+                    {!hasScores && (
+                      <EmptyState msg="No games" />
+                    )}
+                  </div>
+                  {/* News column */}
+                  <div className="overflow-y-auto">
+                    {snap.news.length === 0 ? (
+                      <EmptyState msg="No news" />
+                    ) : (
+                      snap.news.map((n) => (
+                        <a
+                          key={n.id}
+                          href={n.url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="block px-2 py-1 border-b border-border last:border-0 text-[10px] leading-tight line-clamp-2 hover:underline hover:bg-secondary/50 transition-colors"
+                        >
+                          {n.title}
+                        </a>
+                      ))
+                    )}
+                  </div>
                 </div>
               )}
             </CollapsibleCard>
           );
         })}
+
+        {/* ── Media ───────────────────────────────────────────────────── */}
 
         {/* Spotify */}
         <CollapsibleCard
@@ -816,7 +854,7 @@ export default async function CommandCenter() {
           {!hasSpotify ? (
             <EmptyState msg="No Spotify data" />
           ) : (
-            <div>
+            <div className="h-full overflow-y-auto">
               {spotifyReleases.map((r: any) => (
                 <a
                   key={r.id}
@@ -829,7 +867,9 @@ export default async function CommandCenter() {
                     <span style={{ color: "hsl(340 78% 50%)" }}>♫</span>
                   </div>
                   <div className="min-w-0">
-                    <p className="text-[10px] font-bold line-clamp-1 group-hover:underline">{r.name}</p>
+                    <p className="text-[10px] font-bold line-clamp-1 group-hover:underline">
+                      {r.name}
+                    </p>
                     <p className="text-[8px] text-muted-foreground line-clamp-1">
                       {(r.artists ?? []).join(", ")}
                     </p>
@@ -840,18 +880,19 @@ export default async function CommandCenter() {
           )}
         </CollapsibleCard>
 
-        {/* Reddit */}
+        {/* Reddit — spans 2 to balance the last row */}
         <CollapsibleCard
           label="Reddit"
           accent="hsl(220 15% 60%)"
           href="/media"
           count={redditPosts.length}
           summary={`${redditPosts.length} posts`}
+          className="xl:col-span-2"
         >
           {!hasReddit ? (
             <EmptyState msg="No Reddit data" />
           ) : (
-            <div>
+            <div className="h-full overflow-y-auto">
               {redditPosts.map((p: any) => (
                 <a
                   key={p.id}
@@ -861,10 +902,16 @@ export default async function CommandCenter() {
                   className="block px-2 py-1 border-b border-border last:border-0 hover:bg-secondary/50 transition-colors group"
                 >
                   <div className="flex items-center justify-between gap-1">
-                    <span className="text-[8px] font-mono text-muted-foreground truncate">r/{p.subreddit}</span>
-                    <span className="text-[8px] font-mono text-muted-foreground shrink-0">▲ {p.score}</span>
+                    <span className="text-[8px] font-mono text-muted-foreground truncate">
+                      r/{p.subreddit}
+                    </span>
+                    <span className="text-[8px] font-mono text-muted-foreground shrink-0">
+                      ▲ {p.score}
+                    </span>
                   </div>
-                  <p className="text-[10px] leading-tight line-clamp-1 group-hover:underline">{p.title}</p>
+                  <p className="text-[10px] leading-tight line-clamp-1 group-hover:underline">
+                    {p.title}
+                  </p>
                 </a>
               ))}
             </div>
