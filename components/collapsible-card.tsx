@@ -12,6 +12,11 @@ interface CollapsibleCardProps {
   children: React.ReactNode;
   className?: string;
   defaultOpen?: boolean;
+  /**
+   * "full" = h-72 (288px) — default for data-rich cards
+   * "half" = h-36 (144px) — for sparse cards that don't fill more than half
+   */
+  contentHeight?: "full" | "half";
 }
 
 export function CollapsibleCard({
@@ -23,8 +28,11 @@ export function CollapsibleCard({
   children,
   className,
   defaultOpen = true,
+  contentHeight = "full",
 }: CollapsibleCardProps) {
   const [open, setOpen] = useState(defaultOpen);
+
+  const heightClass = contentHeight === "half" ? "h-36" : "h-72";
 
   return (
     <div className={`border border-border bg-card${className ? ` ${className}` : ""}`}>
@@ -63,10 +71,9 @@ export function CollapsibleCard({
       </div>
 
       {/*
-        Animated collapse via CSS grid-template-rows trick:
-        1fr → content full height, 0fr → content zero height.
-        The inner div needs min-h-0 + overflow-hidden so it fully collapses.
-        The content wrapper is a fixed h-72 (288px) so every card is the same size.
+        CSS grid-template-rows collapse animation (250ms).
+        Inner div needs min-h-0 + overflow-hidden to fully collapse.
+        Content wrapper height is driven by contentHeight prop.
       */}
       <div
         style={{
@@ -76,7 +83,7 @@ export function CollapsibleCard({
         }}
       >
         <div className="min-h-0 overflow-hidden">
-          <div className="h-72">
+          <div className={heightClass}>
             {children}
           </div>
         </div>
