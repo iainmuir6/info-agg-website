@@ -1,4 +1,5 @@
 import { createClient } from "@/lib/supabase/server";
+import Link from "next/link";
 
 type StockWithQuote = {
   id: number;
@@ -160,15 +161,16 @@ export default async function MarketsPage() {
                 const changeColor = isPos ? "hsl(142 65% 42%)" : "hsl(0 72% 50%)";
 
                 return (
-                  <div
+                  <Link
                     key={stock.id}
-                    className="bg-background hover:bg-secondary transition-colors animate-fade-in-up"
+                    href={`/markets/${stock.ticker}`}
+                    className="block bg-background hover:bg-secondary transition-colors animate-fade-in-up"
                     style={{ animationDelay: `${i * 0.03}s` }}
                   >
                     {/* Desktop row */}
                     <div className="hidden md:grid grid-cols-[120px_1fr_100px_80px_80px_80px_80px_80px] gap-0">
                       <div className="px-4 py-3 flex items-center">
-                        <span className="text-sm font-mono font-black tracking-tight">
+                        <span className="text-sm font-mono font-black tracking-tight hover:underline">
                           {stock.ticker}
                         </span>
                       </div>
@@ -230,7 +232,7 @@ export default async function MarketsPage() {
                         </span>
                       </div>
                     </div>
-                  </div>
+                  </Link>
                 );
               })}
 
