@@ -3,6 +3,7 @@ Icon?
 _agg_venv/
 /data/
 .pnpm-store/
+public/assets/misc/
 
 # dependencies
 /node_modules
