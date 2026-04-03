@@ -1,6 +1,8 @@
 import { createClient } from "@/lib/supabase/server";
 import Link from "next/link";
+import { Flag, Globe } from "lucide-react";
 import { CollapsibleCard } from "@/components/collapsible-card";
+import { MasonryColumns } from "@/components/masonry-columns";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -69,10 +71,6 @@ type EconRow = {
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
-// NYT sections we treat as "US" vs "World"
-const NYT_US_SECTIONS = new Set(["us", "politics", "nyregion", "national"]);
-const NYT_WORLD_SECTIONS = new Set(["world"]);
-
 // Friendly labels + formatting for economic indicators
 const ECON_CONFIG: Record<string, { label: string; fmt: (v: number) => string; group: string }> = {
   treasury_1y:  { label: "1Y",            fmt: (v) => `${v.toFixed(2)}%`,  group: "Yield Curve" },
@@ -90,24 +88,172 @@ const ECON_CONFIG: Record<string, { label: string; fmt: (v: number) => string; g
   initialClaims: { label: "Init. Claims", fmt: (v) => `${(v / 1000).toFixed(0)}K`, group: "Macro" },
 };
 
+// ─── Team abbreviation lookup ─────────────────────────────────────────────────
+
+const TEAM_ABBREVS: Record<string, string> = {
+  // NFL
+  "Arizona Cardinals": "ARI",
+  "Atlanta Falcons": "ATL",
+  "Baltimore Ravens": "BAL",
+  "Buffalo Bills": "BUF",
+  "Carolina Panthers": "CAR",
+  "Chicago Bears": "CHI",
+  "Cincinnati Bengals": "CIN",
+  "Cleveland Browns": "CLE",
+  "Dallas Cowboys": "DAL",
+  "Denver Broncos": "DEN",
+  "Detroit Lions": "DET",
+  "Green Bay Packers": "GB",
+  "Houston Texans": "HOU",
+  "Indianapolis Colts": "IND",
+  "Jacksonville Jaguars": "JAX",
+  "Kansas City Chiefs": "KC",
+  "Las Vegas Raiders": "LV",
+  "Los Angeles Chargers": "LAC",
+  "Los Angeles Rams": "LAR",
+  "Miami Dolphins": "MIA",
+  "Minnesota Vikings": "MIN",
+  "New England Patriots": "NE",
+  "New Orleans Saints": "NO",
+  "New York Giants": "NYG",
+  "New York Jets": "NYJ",
+  "Philadelphia Eagles": "PHI",
+  "Pittsburgh Steelers": "PIT",
+  "San Francisco 49ers": "SF",
+  "Seattle Seahawks": "SEA",
+  "Tampa Bay Buccaneers": "TB",
+  "Tennessee Titans": "TEN",
+  "Washington Commanders": "WSH",
+  // NBA
+  "Atlanta Hawks": "ATL",
+  "Boston Celtics": "BOS",
+  "Brooklyn Nets": "BKN",
+  "Charlotte Hornets": "CHA",
+  "Chicago Bulls": "CHI",
+  "Cleveland Cavaliers": "CLE",
+  "Dallas Mavericks": "DAL",
+  "Denver Nuggets": "DEN",
+  "Detroit Pistons": "DET",
+  "Golden State Warriors": "GS",
+  "Houston Rockets": "HOU",
+  "Indiana Pacers": "IND",
+  "Los Angeles Clippers": "LAC",
+  "Los Angeles Lakers": "LAL",
+  "Memphis Grizzlies": "MEM",
+  "Miami Heat": "MIA",
+  "Milwaukee Bucks": "MIL",
+  "Minnesota Timberwolves": "MIN",
+  "New Orleans Pelicans": "NO",
+  "New York Knicks": "NY",
+  "Oklahoma City Thunder": "OKC",
+  "Orlando Magic": "ORL",
+  "Philadelphia 76ers": "PHI",
+  "Phoenix Suns": "PHX",
+  "Portland Trail Blazers": "POR",
+  "Sacramento Kings": "SAC",
+  "San Antonio Spurs": "SA",
+  "Toronto Raptors": "TOR",
+  "Utah Jazz": "UTA",
+  "Washington Wizards": "WSH",
+  // NHL
+  "Anaheim Ducks": "ANA",
+  "Boston Bruins": "BOS",
+  "Buffalo Sabres": "BUF",
+  "Calgary Flames": "CGY",
+  "Carolina Hurricanes": "CAR",
+  "Chicago Blackhawks": "CHI",
+  "Colorado Avalanche": "COL",
+  "Columbus Blue Jackets": "CBJ",
+  "Dallas Stars": "DAL",
+  "Detroit Red Wings": "DET",
+  "Edmonton Oilers": "EDM",
+  "Florida Panthers": "FLA",
+  "Los Angeles Kings": "LA",
+  "Minnesota Wild": "MIN",
+  "Montreal Canadiens": "MTL",
+  "Nashville Predators": "NSH",
+  "New Jersey Devils": "NJ",
+  "New York Islanders": "NYI",
+  "New York Rangers": "NYR",
+  "Ottawa Senators": "OTT",
+  "Philadelphia Flyers": "PHI",
+  "Pittsburgh Penguins": "PIT",
+  "San Jose Sharks": "SJ",
+  "Seattle Kraken": "SEA",
+  "St. Louis Blues": "STL",
+  "Tampa Bay Lightning": "TB",
+  "Toronto Maple Leafs": "TOR",
+  "Utah Hockey Club": "UTA",
+  "Vancouver Canucks": "VAN",
+  "Vegas Golden Knights": "VGK",
+  "Washington Capitals": "WSH",
+  "Winnipeg Jets": "WPG",
+  // MLB
+  "Arizona Diamondbacks": "ARI",
+  "Atlanta Braves": "ATL",
+  "Baltimore Orioles": "BAL",
+  "Boston Red Sox": "BOS",
+  "Chicago Cubs": "CHC",
+  "Chicago White Sox": "CWS",
+  "Cincinnati Reds": "CIN",
+  "Cleveland Guardians": "CLE",
+  "Colorado Rockies": "COL",
+  "Detroit Tigers": "DET",
+  "Houston Astros": "HOU",
+  "Kansas City Royals": "KC",
+  "Los Angeles Angels": "LAA",
+  "Los Angeles Dodgers": "LAD",
+  "Miami Marlins": "MIA",
+  "Milwaukee Brewers": "MIL",
+  "Minnesota Twins": "MIN",
+  "New York Mets": "NYM",
+  "New York Yankees": "NYY",
+  "Oakland Athletics": "OAK",
+  "Philadelphia Phillies": "PHI",
+  "Pittsburgh Pirates": "PIT",
+  "San Diego Padres": "SD",
+  "San Francisco Giants": "SF",
+  "Seattle Mariners": "SEA",
+  "St. Louis Cardinals": "STL",
+  "Tampa Bay Rays": "TB",
+  "Texas Rangers": "TEX",
+  "Toronto Blue Jays": "TOR",
+  "Washington Nationals": "WSH",
+  // EPL
+  "Arsenal": "ARS",
+  "Aston Villa": "AVL",
+  "Bournemouth": "BOU",
+  "Brentford": "BRE",
+  "Brighton and Hove Albion": "BHA",
+  "Brighton & Hove Albion": "BHA",
+  "Chelsea": "CHE",
+  "Crystal Palace": "CRY",
+  "Everton": "EVE",
+  "Fulham": "FUL",
+  "Ipswich Town": "IPS",
+  "Leicester City": "LEI",
+  "Liverpool": "LIV",
+  "Manchester City": "MCI",
+  "Manchester United": "MUN",
+  "Newcastle United": "NEW",
+  "Nottingham Forest": "NFO",
+  "Southampton": "SOU",
+  "Tottenham Hotspur": "TOT",
+  "West Ham United": "WHU",
+  "Wolverhampton Wanderers": "WOL",
+};
+
 // ─── Height helpers ───────────────────────────────────────────────────────────
 
-/**
- * Returns "half" (h-36, 144px) if the estimated content height is under half
- * of the full card (288px), otherwise "full" (h-72).
- */
 function tickerCardHeight(count: number): "half" | "full" {
-  // 3-col grid: ceil(count/3) rows × 28px each
   return Math.ceil(count / 3) * 28 < 144 ? "half" : "full";
 }
 
 function newsCardHeight(count: number): "half" | "full" {
-  // ~32px per news item
   return count * 32 < 144 ? "half" : "full";
 }
 
 function indicatorCardHeight(count: number): "half" | "full" {
-  // ~28px per row; add group headers (~20px each, assume 2)
   return count * 28 + 40 < 144 ? "half" : "full";
 }
 
@@ -161,7 +307,6 @@ async function getCompanyNews(
   coreTickers: string[]
 ): Promise<CompanyNewsItem[]> {
   try {
-    // Try filtered by core tickers first
     if (coreTickers.length > 0) {
       const { data } = await supabase
         .from("company_news")
@@ -171,7 +316,6 @@ async function getCompanyNews(
         .limit(16);
       if (data && data.length > 0) return data as CompanyNewsItem[];
     }
-    // Fallback: most recent company news regardless of ticker
     const { data } = await supabase
       .from("company_news")
       .select("id, headline, url, source, published_at, related_tickers")
@@ -202,7 +346,7 @@ async function getMarketNews(supabase: Awaited<ReturnType<typeof createClient>>)
     const { data } = await supabase
       .from("market_news")
       .select("id, headline, url, source, published_at, category")
-      .not("category", "eq", "crypto") // crypto has its own card
+      .not("category", "eq", "crypto")
       .order("published_at", { ascending: false })
       .limit(20);
     return data ?? [];
@@ -249,7 +393,6 @@ async function getEconomicIndicators(
       .select("indicator_name, date, value")
       .order("date", { ascending: false });
     if (!data) return [];
-    // Deduplicate: keep latest value per indicator
     const seen = new Set<string>();
     const result: EconRow[] = [];
     for (const row of data) {
@@ -302,7 +445,7 @@ async function getLeagueSnapshot(
     const isRecent = (g: ScoreRowType) => {
       const s = (g.status ?? "").toLowerCase();
       if (s.includes("final") || s.includes("post")) return true;
-      if (s.includes("in") || s.includes("live") || s.includes("progress")) return true;
+      if (s.includes("progress") || s.includes("live")) return true;
       const dt = g.game_date ? new Date(g.game_date) : null;
       return !!dt && dt < now;
     };
@@ -345,6 +488,148 @@ function ChangeTag({ pct }: { pct: number }) {
   );
 }
 
+// ─── Hub cap colors ───────────────────────────────────────────────────────────
+// Maps lowercase source/section name → [background, text] CSS color strings.
+const HUB_CAP_COLORS: Record<string, [string, string]> = {
+  // ── News sources ──────────────────────────────────────────────────────────
+  // Yahoo — purple
+  "yahoo":                   ["rgba(123,0,153,0.13)", "#7B0099"],
+  "yahoo finance":           ["rgba(123,0,153,0.13)", "#7B0099"],
+  // CNBC — red
+  "cnbc":                    ["rgba(198,42,42,0.13)",  "#C62A2A"],
+  // Reuters — orange
+  "reuters":                 ["rgba(255,140,0,0.13)",  "#D97600"],
+  // Bloomberg — dark blue
+  "bloomberg":               ["rgba(20,50,180,0.13)",  "#1432B4"],
+  // AP / Associated Press — red
+  "ap":                      ["rgba(198,42,42,0.13)",  "#C62A2A"],
+  "associated press":        ["rgba(198,42,42,0.13)",  "#C62A2A"],
+  // ESPN — red
+  "espn":                    ["rgba(198,42,42,0.13)",  "#C62A2A"],
+  // MarketWatch — green
+  "marketwatch":             ["rgba(0,130,70,0.13)",   "#008246"],
+  // Benzinga — blue
+  "benzinga":                ["rgba(20,100,200,0.13)", "#1464C8"],
+  // Seeking Alpha — teal-green
+  "seeking alpha":           ["rgba(0,100,90,0.13)",   "#00645A"],
+  // The Guardian — dark teal
+  "guardian":                ["rgba(0,100,90,0.13)",   "#005E54"],
+  "the guardian":            ["rgba(0,100,90,0.13)",   "#005E54"],
+  // Washington Post — dark navy
+  "washington post":         ["rgba(40,40,60,0.13)",   "#28283C"],
+  // BBC — dark red
+  "bbc":                     ["rgba(187,0,0,0.13)",    "#BB0000"],
+  "bbc news":                ["rgba(187,0,0,0.13)",    "#BB0000"],
+  // Forbes — dark
+  "forbes":                  ["rgba(40,40,40,0.13)",   "#282828"],
+  // Business Insider — dark
+  "business insider":        ["rgba(40,40,40,0.13)",   "#282828"],
+  // Motley Fool — dark purple
+  "motley fool":             ["rgba(80,0,100,0.13)",   "#500064"],
+  "the motley fool":         ["rgba(80,0,100,0.13)",   "#500064"],
+  // Investopedia — blue
+  "investopedia":            ["rgba(0,80,180,0.13)",   "#0050B4"],
+  // WSJ
+  "wsj":                     ["rgba(40,40,40,0.13)",   "#282828"],
+  "wall street journal":     ["rgba(40,40,40,0.13)",   "#282828"],
+  // Financial Times — salmon
+  "ft":                      ["rgba(230,100,50,0.13)", "#E66432"],
+  "financial times":         ["rgba(230,100,50,0.13)", "#E66432"],
+  // Barron's
+  "barron's":                ["rgba(40,40,40,0.13)",   "#282828"],
+  "barrons":                 ["rgba(40,40,40,0.13)",   "#282828"],
+  // Finnhub categories (market news)
+  "general":                 ["rgba(80,100,140,0.13)", "#506496"],
+  "forex":                   ["rgba(0,130,70,0.13)",   "#008246"],
+  "crypto":                  ["rgba(245,160,0,0.13)",  "#B87800"],
+  "merger":                  ["rgba(120,40,160,0.13)", "#7828A0"],
+  // ── NYT sections ─────────────────────────────────────────────────────────
+  "us":                      ["rgba(30,80,200,0.13)",  "#1E50C8"],
+  "politics":                ["rgba(180,30,30,0.13)",  "#B41E1E"],
+  "national":                ["rgba(30,80,200,0.13)",  "#1E50C8"],
+  "nyregion":                ["rgba(30,80,200,0.13)",  "#1E50C8"],
+  "world":                   ["rgba(0,110,80,0.13)",   "#006E50"],
+  "business":                ["rgba(0,130,70,0.13)",   "#008246"],
+  "technology":              ["rgba(0,100,210,0.13)",  "#0064D2"],
+  "science":                 ["rgba(0,140,160,0.13)",  "#008CA0"],
+  "health":                  ["rgba(220,60,60,0.13)",  "#DC3C3C"],
+  "sports":                  ["rgba(220,100,0,0.13)",  "#DC6400"],
+  "arts":                    ["rgba(160,0,100,0.13)",  "#A00064"],
+  "theater":                 ["rgba(160,0,100,0.13)",  "#A00064"],
+  "movies":                  ["rgba(160,0,100,0.13)",  "#A00064"],
+  "books":                   ["rgba(100,60,20,0.13)",  "#643C14"],
+  "food":                    ["rgba(220,120,0,0.13)",  "#DC7800"],
+  "travel":                  ["rgba(0,120,180,0.13)",  "#0078B4"],
+  "fashion":                 ["rgba(180,0,80,0.13)",   "#B40050"],
+  "style":                   ["rgba(180,0,80,0.13)",   "#B40050"],
+  "opinion":                 ["rgba(100,60,140,0.13)", "#643C8C"],
+  "briefing":                ["rgba(60,80,120,0.13)",  "#3C5078"],
+  "climate":                 ["rgba(0,120,60,0.13)",   "#007840"],
+  "education":               ["rgba(0,80,160,0.13)",   "#0050A0"],
+  "realestate":              ["rgba(80,60,40,0.13)",   "#503C28"],
+  "automobiles":             ["rgba(60,60,60,0.13)",   "#3C3C3C"],
+  "obituaries":              ["rgba(60,60,80,0.13)",   "#3C3C50"],
+};
+
+const DEFAULT_HUB_CAP: [string, string] = ["rgba(120,120,140,0.13)", "#78788C"];
+
+function hubCapStyle(raw: string): { bg: string; fg: string } {
+  const [bg, fg] = HUB_CAP_COLORS[raw.toLowerCase()] ?? DEFAULT_HUB_CAP;
+  return { bg, fg };
+}
+
+// Short-form display labels — ONLY for raw labels longer than 8 characters.
+// Labels ≤ 8 chars are shown as-is (the code never looks these up for short labels).
+const LABEL_ABBREVS: Record<string, string> = {
+  // ── News sources (all raw keys are > 8 chars) ─────────────────────────────
+  "yahoo finance":        "YAHOO",
+  "associated press":     "AP",
+  "bloomberg":            "BBERG",    // 9 chars → abbreviate
+  "marketwatch":          "MKTW",     // 11 chars
+  "seeking alpha":        "SEEK A",   // 13 chars
+  "the guardian":         "GUARDIAN", // 12 chars → fits in 8
+  "washington post":      "WAPOST",   // 15 chars
+  "business insider":     "BSINS",    // 16 chars
+  "financial times":      "FT",       // 15 chars
+  "the motley fool":      "MOTLEY",   // 15 chars
+  "motley fool":          "MOTLEY",   // 11 chars
+  "wall street journal":  "WSJ",      // 19 chars
+  "investopedia":         "INVST",    // 12 chars
+  // ── NYT sections (all raw keys are > 8 chars) ─────────────────────────────
+  "technology":           "TECH",     // 10 chars
+  "education":            "EDU",      // 9 chars
+  "realestate":           "RE",       // 10 chars
+  "automobiles":          "AUTO",     // 11 chars
+  "obituaries":           "OBIT",     // 10 chars
+};
+
+/**
+ * Hub cap text: abbreviate only when raw label exceeds 8 characters, then slice to HUB_LEN.
+ * Visual centering is done in CSS (fixed width + flex) so glyphs stay centered in the pill.
+ */
+const HUB_LEN = 8;
+
+function hubCapText(raw: string): string {
+  const upper = raw.toUpperCase();
+  const abbrev = upper.length > 8 ? LABEL_ABBREVS[raw.toLowerCase()] : undefined;
+  return (abbrev ?? upper).slice(0, HUB_LEN);
+}
+
+/** Small source/section pill badge — fixed width, label centered inside. */
+function HubCap({ label }: { label: string }) {
+  if (!label) return null;
+  const { bg, fg } = hubCapStyle(label);
+  return (
+    <span
+      className="inline-flex shrink-0 items-center justify-center min-w-[8ch] w-[8ch] px-0.5 py-0.5 rounded text-[7px] font-mono leading-none whitespace-nowrap text-center"
+      style={{ backgroundColor: bg, color: fg }}
+      title={label}
+    >
+      {hubCapText(label)}
+    </span>
+  );
+}
+
 /** Ticker 3-column grid — used for stocks, etfs, forex, commodities, crypto quotes */
 function TickerGrid({ rows, href }: { rows: QuoteRow[]; href: string }) {
   return (
@@ -374,9 +659,11 @@ function TickerGrid({ rows, href }: { rows: QuoteRow[]; href: string }) {
   );
 }
 
-/** Compact 3-char team abbreviation */
+/** Look up official team abbreviation; fall back to computed initials */
 function abbrevTeam(name: string): string {
   if (!name) return "—";
+  if (TEAM_ABBREVS[name]) return TEAM_ABBREVS[name];
+  // Fallback: initials from words
   const words = name.trim().split(/\s+/).filter((w) => w.length > 0);
   if (words.length === 1) return words[0].slice(0, 3).toUpperCase();
   const initials = words.map((w) => w[0].toUpperCase()).join("");
@@ -385,60 +672,120 @@ function abbrevTeam(name: string): string {
   return (initials + last.slice(1)).slice(0, 3);
 }
 
-function ScoreRow({ game, leagueSlug }: { game: ScoreRowType; leagueSlug: string }) {
-  const status = (game.status ?? "").toLowerCase();
-  const isLive = status.includes("in") || status.includes("progress") || status.includes("live");
-  const isFinal = status.includes("final");
+/** Exactly 3 monospace cells for team abbrev — away toward center, home toward center. */
+function fixedAwayAbbrCell(raw: string): string {
+  const s = raw.slice(0, 3).toUpperCase();
+  return s.length >= 3 ? s : s.padStart(3, "\u00A0");
+}
+
+function fixedHomeAbbrCell(raw: string): string {
+  const s = raw.slice(0, 3).toUpperCase();
+  return s.length >= 3 ? s : s.padEnd(3, "\u00A0");
+}
+
+/** Exactly 3 monospace cells: away score hugs the center dash; home score hugs the center dash. */
+function fixedAwayScoreCell(
+  score: string | number | null | undefined,
+  scheduled: boolean
+): string {
+  if (scheduled) return "\u00A0\u00A0–";
+  if (score == null || score === "") return "\u00A0\u00A0–";
+  const t = String(score).trim().slice(0, 3);
+  return t.length >= 3 ? t : t.padStart(3, "\u00A0");
+}
+
+function fixedHomeScoreCell(
+  score: string | number | null | undefined,
+  scheduled: boolean
+): string {
+  if (scheduled) return "\u00A0\u00A0–";
+  if (score == null || score === "") return "\u00A0\u00A0–";
+  const t = String(score).trim().slice(0, 3);
+  return t.length >= 3 ? t : t.padEnd(3, "\u00A0");
+}
+
+/** Compact score cell — fixed grid for teams/scores; status on the right */
+function ScoreCell({ game, leagueSlug }: { game: ScoreRowType; leagueSlug: string }) {
+  const statusLow = (game.status ?? "").toLowerCase();
+  const isFinal = statusLow.includes("final");
+  const isLive = !isFinal && (statusLow.includes("progress") || statusLow.includes("live"));
+  const isScheduled = !isFinal && !isLive;
+
+  const awayAbbr = fixedAwayAbbrCell(abbrevTeam(game.away_team));
+  const homeAbbr = fixedHomeAbbrCell(abbrevTeam(game.home_team));
+  const awayScr = fixedAwayScoreCell(game.away_score, isScheduled);
+  const homeScr = fixedHomeScoreCell(game.home_score, isScheduled);
 
   return (
-    <div className="flex items-center gap-1 px-2 py-0.5 border-b border-border last:border-0 hover:bg-secondary/50 transition-colors text-[10px] font-mono leading-tight">
-      <Link
-        href={`/sports/${leagueSlug}/${encodeURIComponent(game.away_team)}`}
-        title={game.away_team}
-        className="font-black w-7 shrink-0 tabular-nums hover:underline"
-      >
-        {abbrevTeam(game.away_team)}
-      </Link>
-      <span className="font-bold tabular-nums w-4 text-right shrink-0">{game.away_score ?? "—"}</span>
-      <span className="text-muted-foreground text-[9px] shrink-0">–</span>
-      <span className="font-bold tabular-nums w-4 shrink-0">{game.home_score ?? "—"}</span>
-      <Link
-        href={`/sports/${leagueSlug}/${encodeURIComponent(game.home_team)}`}
-        title={game.home_team}
-        className="font-black w-7 shrink-0 hover:underline"
-      >
-        {abbrevTeam(game.home_team)}
-      </Link>
-      {isLive && (
-        <>
-          <div className="w-1 h-1 rounded-full animate-pulse-dot shrink-0" style={{ backgroundColor: "hsl(0 72% 50%)" }} />
-          <span className="text-[8px] leading-none shrink-0 truncate" style={{ color: "hsl(0 72% 50%)" }}>
-            {game.status_detail ?? "LIVE"}
+    <div className="flex items-center gap-2 px-2 py-1 border-b border-border last:border-0 hover:bg-secondary/50 transition-colors text-[10px] font-mono leading-tight tabular-nums">
+      {/* Fixed 5-column scoreboard: away | away# | – | home# | home — always 3ch per team/score */}
+      <div className="grid shrink-0 items-center gap-x-1 [grid-template-columns:3ch_3ch_1ch_3ch_3ch]">
+        <Link
+          href={`/sports/${leagueSlug}/${encodeURIComponent(game.away_team)}`}
+          title={game.away_team}
+          className="font-black text-right hover:underline whitespace-pre"
+        >
+          {awayAbbr}
+        </Link>
+        <span className="font-bold text-right whitespace-pre">{awayScr}</span>
+        <span className="text-muted-foreground text-center text-[9px]">–</span>
+        <span className="font-bold text-left whitespace-pre">{homeScr}</span>
+        <Link
+          href={`/sports/${leagueSlug}/${encodeURIComponent(game.home_team)}`}
+          title={game.home_team}
+          className="font-black text-left hover:underline whitespace-pre"
+        >
+          {homeAbbr}
+        </Link>
+      </div>
+      {/* Spacer pushes status to the right */}
+      <div className="flex-1 min-w-0" />
+      {/* Status — dot always visible, label hidden on mobile */}
+      {isFinal && (
+        <div className="flex items-center gap-0.5 shrink-0">
+          <div className="w-1.5 h-1.5 rounded-full animate-pulse-dot shrink-0" style={{ backgroundColor: "hsl(0 72% 50%)" }} />
+          <span className="text-[8px] leading-none hidden sm:inline" style={{ color: "hsl(0 72% 50%)" }}>
+            Final
           </span>
-        </>
+        </div>
       )}
-      {isFinal && <span className="text-[8px] text-muted-foreground shrink-0">FINAL</span>}
+      {isLive && (
+        <div className="flex items-center gap-0.5 shrink-0">
+          <div className="w-1.5 h-1.5 rounded-full animate-pulse-dot shrink-0" style={{ backgroundColor: "hsl(142 65% 42%)" }} />
+          <span className="text-[8px] leading-none hidden sm:inline" style={{ color: "hsl(142 65% 42%)" }}>
+            {game.status_detail ?? "Live"}
+          </span>
+        </div>
+      )}
+      {isScheduled && (
+        <div className="flex items-center gap-0.5 shrink-0">
+          <div className="w-1.5 h-1.5 rounded-full animate-pulse-dot shrink-0" style={{ backgroundColor: "hsl(220 10% 55%)" }} />
+          <span className="text-[8px] leading-none text-muted-foreground hidden sm:inline">
+            Sched
+          </span>
+        </div>
+      )}
     </div>
   );
 }
 
-/** Flat list of NYT article links */
-function NytList({ articles }: { articles: NyTimesArticle[] }) {
+/**
+ * Flat list of NYT article links.
+ * showSection=true (NYT Today): show the section as a hub cap.
+ * showSection=false (US / World): no hub cap — the card header already tells you the context.
+ */
+function NytList({ articles, showSection }: { articles: NyTimesArticle[]; showSection: boolean }) {
   return (
-    <div className="h-full overflow-y-auto">
+    <div>
       {articles.map((a) => (
         <a
           key={a.id}
           href={a.url}
           target="_blank"
           rel="noopener noreferrer"
-          className="block px-2 py-1 border-b border-border last:border-0 hover:bg-secondary/50 transition-colors group"
+          className="flex items-center gap-1.5 px-2 py-1 border-b border-border last:border-0 hover:bg-secondary/50 transition-colors group"
         >
-          {a.section && (
-            <span className="text-[8px] font-mono text-muted-foreground uppercase tracking-wider">
-              {a.section}
-            </span>
-          )}
+          {showSection && a.section && <HubCap label={a.section} />}
           <p className="text-[10px] font-semibold leading-tight line-clamp-2 group-hover:underline">
             {a.title}
           </p>
@@ -474,19 +821,39 @@ export default async function CommandCenter() {
     getLeagueSnapshot(supabase, "baseball", "mlb"),
     getLeagueSnapshot(supabase, "football", "nfl"),
     getLeagueSnapshot(supabase, "hockey", "nhl"),
-    getLeagueSnapshot(supabase, "basketball", "ncaab"),
-    getLeagueSnapshot(supabase, "football", "ncaaf"),
+    getLeagueSnapshot(supabase, "basketball", "mens-college-basketball"),
+    getLeagueSnapshot(supabase, "football", "college-football"),
     getLeagueSnapshot(supabase, "basketball", "wnba"),
   ]);
 
   // ── NYT splits ────────────────────────────────────────────────────────────
-  const usStories = nytAll.filter((a) => NYT_US_SECTIONS.has((a.section ?? "").toLowerCase()));
+  const NYT_US_SECTIONS  = new Set(["us", "politics", "nyregion", "national"]);
+  const NYT_WORLD_SECTIONS = new Set(["world"]);
+
+  const usStories    = nytAll.filter((a) => NYT_US_SECTIONS.has((a.section ?? "").toLowerCase()));
   const worldStories = nytAll.filter((a) => NYT_WORLD_SECTIONS.has((a.section ?? "").toLowerCase()));
   const otherStories = nytAll.filter(
     (a) =>
       !NYT_US_SECTIONS.has((a.section ?? "").toLowerCase()) &&
       !NYT_WORLD_SECTIONS.has((a.section ?? "").toLowerCase())
   );
+
+  // ── NYT digest: one top story per section ────────────────────────────────
+  const NYT_SECTION_ORDER: Record<string, number> = {
+    us: 1, national: 2, politics: 3, nyregion: 4,
+    world: 5, business: 6, technology: 7, science: 8,
+    health: 9, arts: 10, opinion: 11, sports: 12,
+    books: 13, food: 14, travel: 15, fashion: 16,
+    style: 17, movies: 18, theater: 19, climate: 20,
+    education: 21, briefing: 22, realestate: 23, automobiles: 24, obituaries: 25,
+  };
+  const nytBySectionMap = new Map<string, NyTimesArticle>();
+  for (const a of nytAll) {
+    const key = (a.section ?? "other").toLowerCase();
+    if (!nytBySectionMap.has(key)) nytBySectionMap.set(key, a); // first = newest
+  }
+  const nytDigest = Array.from(nytBySectionMap.entries())
+    .sort(([a], [b]) => (NYT_SECTION_ORDER[a] ?? 99) - (NYT_SECTION_ORDER[b] ?? 99));
 
   // ── Economic indicators grouped ───────────────────────────────────────────
   const econByGroup = econIndicators.reduce<Record<string, EconRow[]>>((acc, row) => {
@@ -496,7 +863,6 @@ export default async function CommandCenter() {
     acc[group].push(row);
     return acc;
   }, {});
-  // Canonical order for treasury
   const TREASURY_ORDER = ["treasury_1y","treasury_2y","treasury_3y","treasury_5y","treasury_10y","treasury_30y"];
   if (econByGroup["Yield Curve"]) {
     econByGroup["Yield Curve"].sort(
@@ -520,15 +886,7 @@ export default async function CommandCenter() {
 
   return (
     <div className="px-3 md:px-4 py-3 md:py-4">
-      {/*
-        5-column grid on XL:
-        Row 1: Stocks | ETFs | FX | Commodities | Econ Indicators
-        Row 2: Crypto | Stock News(2) | Market News(2)
-        Row 3: NYT US(2) | NYT World(2) | NYT Other(1)
-        Rows 4-5: 7 sports leagues (1 each)
-        Row 5 tail: Spotify(3)
-      */}
-      <div className="grid grid-cols-1 md:grid-cols-3 xl:grid-cols-5 gap-3 auto-rows-min">
+      <MasonryColumns>
 
         {/* ── Row 1: Asset type watchlist cards ─────────────────────────── */}
 
@@ -541,9 +899,7 @@ export default async function CommandCenter() {
             summary={`${assets.stocks.length} stocks`}
             contentHeight={tickerCardHeight(assets.stocks.length)}
           >
-            <div className="h-full overflow-y-auto">
-              <TickerGrid rows={assets.stocks} href="/markets" />
-            </div>
+            <TickerGrid rows={assets.stocks} href="/markets" />
           </CollapsibleCard>
         )}
 
@@ -556,9 +912,7 @@ export default async function CommandCenter() {
             summary={`${assets.etfs.length} ETFs`}
             contentHeight={tickerCardHeight(assets.etfs.length)}
           >
-            <div className="h-full overflow-y-auto">
-              <TickerGrid rows={assets.etfs} href="/markets" />
-            </div>
+            <TickerGrid rows={assets.etfs} href="/markets" />
           </CollapsibleCard>
         )}
 
@@ -571,9 +925,7 @@ export default async function CommandCenter() {
             summary={`${assets.forex.length} pairs`}
             contentHeight={tickerCardHeight(assets.forex.length)}
           >
-            <div className="h-full overflow-y-auto">
-              <TickerGrid rows={assets.forex} href="/markets" />
-            </div>
+            <TickerGrid rows={assets.forex} href="/markets" />
           </CollapsibleCard>
         )}
 
@@ -586,9 +938,7 @@ export default async function CommandCenter() {
             summary={`${assets.commodities.length} commodities`}
             contentHeight={tickerCardHeight(assets.commodities.length)}
           >
-            <div className="h-full overflow-y-auto">
-              <TickerGrid rows={assets.commodities} href="/markets" />
-            </div>
+            <TickerGrid rows={assets.commodities} href="/markets" />
           </CollapsibleCard>
         )}
 
@@ -601,7 +951,7 @@ export default async function CommandCenter() {
             summary={`${econIndicators.length} indicators`}
             contentHeight={indicatorCardHeight(econIndicators.length)}
           >
-            <div className="h-full overflow-y-auto">
+            <div>
               {Object.entries(econByGroup).map(([group, rows]) => (
                 <div key={group}>
                   <p className="px-2 py-0.5 text-[8px] font-mono uppercase tracking-widest text-muted-foreground bg-secondary/40 border-b border-border sticky top-0">
@@ -645,7 +995,7 @@ export default async function CommandCenter() {
             summary={`${assets.crypto.length} coins · ${cryptoHeadlines.length} headlines`}
             contentHeight={cryptoItemCount * 30 < 144 ? "half" : "full"}
           >
-            <div className="h-full overflow-y-auto">
+            <div>
               {hasCryptoQuotes && (
                 <div className="border-b border-border">
                   <TickerGrid rows={assets.crypto} href="/markets" />
@@ -659,14 +1009,12 @@ export default async function CommandCenter() {
                       href={item.url}
                       target="_blank"
                       rel="noopener noreferrer"
-                      className="block px-2 py-1 border-b border-border last:border-0 hover:bg-secondary/50 transition-colors group"
+                      className="flex items-center gap-1.5 px-2 py-1 border-b border-border last:border-0 hover:bg-secondary/50 transition-colors group"
                     >
+                      {item.source && <HubCap label={item.source} />}
                       <p className="text-[10px] font-medium leading-tight line-clamp-1 group-hover:underline">
                         {item.headline}
                       </p>
-                      {item.source && (
-                        <span className="text-[8px] font-mono text-muted-foreground">{item.source}</span>
-                      )}
                     </a>
                   ))}
                 </div>
@@ -683,33 +1031,34 @@ export default async function CommandCenter() {
             count={companyNews.length}
             summary={`${companyNews.length} articles`}
             contentHeight={newsCardHeight(companyNews.length)}
-            className="xl:col-span-2"
           >
-            <div className="h-full overflow-y-auto">
+            <div>
               {companyNews.map((item) => (
                 <a
                   key={item.id}
                   href={item.url}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="block px-2 py-1 border-b border-border last:border-0 hover:bg-secondary/50 transition-colors group"
+                  className="flex items-center gap-1.5 px-2 py-1 border-b border-border last:border-0 hover:bg-secondary/50 transition-colors group"
                 >
-                  <p className="text-[10px] font-medium leading-tight line-clamp-1 group-hover:underline">
-                    {item.headline}
-                  </p>
-                  <div className="flex items-center gap-1 flex-wrap mt-0.5">
-                    {item.source && (
-                      <span className="text-[8px] font-mono text-muted-foreground">{item.source}</span>
+                  {item.source && <HubCap label={item.source} />}
+                  <div className="min-w-0">
+                    <p className="text-[10px] font-medium leading-tight line-clamp-1 group-hover:underline">
+                      {item.headline}
+                    </p>
+                    {(item.related_tickers ?? []).length > 0 && (
+                      <div className="flex items-center gap-1 flex-wrap mt-0.5">
+                        {(item.related_tickers ?? []).slice(0, 3).map((t) => (
+                          <Link
+                            key={t}
+                            href={`/markets/${t}`}
+                            className="text-[8px] font-mono px-0.5 bg-secondary leading-none hover:bg-border"
+                          >
+                            {t}
+                          </Link>
+                        ))}
+                      </div>
                     )}
-                    {(item.related_tickers ?? []).slice(0, 3).map((t) => (
-                      <Link
-                        key={t}
-                        href={`/markets/${t}`}
-                        className="text-[8px] font-mono px-0.5 bg-secondary leading-none hover:bg-border"
-                      >
-                        {t}
-                      </Link>
-                    ))}
                   </div>
                 </a>
               ))}
@@ -725,29 +1074,20 @@ export default async function CommandCenter() {
             count={marketNews.length}
             summary={`${marketNews.length} articles`}
             contentHeight={newsCardHeight(marketNews.length)}
-            className="xl:col-span-2"
           >
-            <div className="h-full overflow-y-auto">
+            <div>
               {marketNews.map((item: any) => (
                 <a
                   key={item.id}
                   href={item.url}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="block px-2 py-1 border-b border-border last:border-0 hover:bg-secondary/50 transition-colors group"
+                  className="flex items-center gap-1.5 px-2 py-1 border-b border-border last:border-0 hover:bg-secondary/50 transition-colors group"
                 >
-                  <div className="flex items-center gap-1 flex-wrap">
-                    {item.category && (
-                      <span
-                        className="text-[8px] font-mono uppercase tracking-wider"
-                        style={{ color: "hsl(142 65% 42%)" }}
-                      >
-                        {item.category}
-                      </span>
-                    )}
-                    {item.source && (
-                      <span className="text-[8px] font-mono text-muted-foreground">· {item.source}</span>
-                    )}
+                  {/* Two stacked hub caps: category on top, source below */}
+                  <div className="flex flex-col gap-0.5 shrink-0 items-center">
+                    {item.category && <HubCap label={item.category} />}
+                    {item.source && <HubCap label={item.source} />}
                   </div>
                   <p className="text-[10px] font-medium leading-tight line-clamp-1 group-hover:underline">
                     {item.headline}
@@ -758,7 +1098,37 @@ export default async function CommandCenter() {
           </CollapsibleCard>
         )}
 
-        {/* ── Row 3: NYT ─────────────────────────────────────────────────── */}
+        {/* ── NYT: digest card (top story per section) ──────────────────── */}
+
+        {nytDigest.length > 0 && (
+          <CollapsibleCard
+            label="NYT — Top Stories"
+            accent="hsl(220 90% 52%)"
+            href="/news"
+            count={nytDigest.length}
+            summary={`${nytDigest.length} sections`}
+            contentHeight={newsCardHeight(nytDigest.length)}
+          >
+            <div>
+              {nytDigest.map(([sectionKey, article]) => (
+                <a
+                  key={article.id}
+                  href={article.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="flex items-center gap-1.5 px-2 py-1 border-b border-border last:border-0 hover:bg-secondary/50 transition-colors group"
+                >
+                  <HubCap label={sectionKey} />
+                  <p className="text-[10px] font-semibold leading-tight line-clamp-1 group-hover:underline">
+                    {article.title}
+                  </p>
+                </a>
+              ))}
+            </div>
+          </CollapsibleCard>
+        )}
+
+        {/* ── NYT: grouped section cards ─────────────────────────────────── */}
 
         {usStories.length > 0 && (
           <CollapsibleCard
@@ -768,9 +1138,9 @@ export default async function CommandCenter() {
             count={usStories.length}
             summary={`${usStories.length} articles`}
             contentHeight={newsCardHeight(usStories.length)}
-            className="xl:col-span-2"
+            icon={<Flag size={9} />}
           >
-            <NytList articles={usStories} />
+            <NytList articles={usStories} showSection={false} />
           </CollapsibleCard>
         )}
 
@@ -782,9 +1152,9 @@ export default async function CommandCenter() {
             count={worldStories.length}
             summary={`${worldStories.length} articles`}
             contentHeight={newsCardHeight(worldStories.length)}
-            className="xl:col-span-2"
+            icon={<Globe size={9} />}
           >
-            <NytList articles={worldStories} />
+            <NytList articles={worldStories} showSection={false} />
           </CollapsibleCard>
         )}
 
@@ -797,7 +1167,7 @@ export default async function CommandCenter() {
             summary={`${otherStories.length} articles`}
             contentHeight={newsCardHeight(otherStories.length)}
           >
-            <NytList articles={otherStories} />
+            <NytList articles={otherStories} showSection={true} />
           </CollapsibleCard>
         )}
 
@@ -809,7 +1179,7 @@ export default async function CommandCenter() {
 
           const hasScores = snap.recentGames.length > 0 || snap.upcomingGames.length > 0;
           const hasNews = snap.news.length > 0;
-          if (!hasScores && !hasNews) return null; // hide empty sports cards
+          if (!hasScores && !hasNews) return null;
 
           const offSeason = !snap.league.is_active;
           const totalGames = snap.recentGames.length + snap.upcomingGames.length;
@@ -821,8 +1191,9 @@ export default async function CommandCenter() {
               .filter(Boolean)
               .join(" · ") || (offSeason ? "off season" : "no data");
 
-          // Compact sports cards when very little data
-          const totalItems = totalGames + snap.news.length;
+          // All games combined for the 2-col grid (recent first, then upcoming)
+          const allGames = [...snap.recentGames, ...snap.upcomingGames];
+          const totalItems = allGames.length + snap.news.length;
           const sportsHeight = totalItems * 26 < 144 ? "half" : "full";
 
           return (
@@ -835,55 +1206,46 @@ export default async function CommandCenter() {
               summary={sportsSummary}
               contentHeight={sportsHeight}
             >
-              {/* Sub-columns: scores left, news right */}
-              <div className="h-full grid grid-cols-2 divide-x divide-border">
-                <div className="overflow-y-auto">
-                  {offSeason && (
-                    <p className="px-2 py-1 text-[8px] font-mono text-muted-foreground uppercase tracking-widest border-b border-border">
-                      Off season
-                    </p>
-                  )}
-                  {snap.recentGames.length > 0 && (
-                    <div>
-                      <p className="px-2 py-0.5 text-[8px] font-mono text-muted-foreground uppercase tracking-widest bg-secondary/40 border-b border-border sticky top-0">
-                        Recent
+              <div>
+                {/* Scores section — 2-column game grid */}
+                {(hasScores || offSeason) && (
+                  <div>
+                    {offSeason && (
+                      <p className="px-2 py-1 text-[8px] font-mono text-muted-foreground uppercase tracking-widest border-b border-border">
+                        Off season
                       </p>
-                      {snap.recentGames.map((g, i) => (
-                        <ScoreRow key={`r-${i}`} game={g} leagueSlug={snap.league!.league} />
-                      ))}
-                    </div>
-                  )}
-                  {snap.upcomingGames.length > 0 && (
-                    <div>
-                      <p className="px-2 py-0.5 text-[8px] font-mono text-muted-foreground uppercase tracking-widest bg-secondary/40 border-b border-border sticky top-0">
-                        Next
-                      </p>
-                      {snap.upcomingGames.map((g, i) => (
-                        <ScoreRow key={`u-${i}`} game={g} leagueSlug={snap.league!.league} />
-                      ))}
-                    </div>
-                  )}
-                  {!hasScores && (
-                    <p className="px-2 py-2 text-[9px] font-mono text-muted-foreground">No games</p>
-                  )}
-                </div>
-                <div className="overflow-y-auto">
-                  {!hasNews ? (
-                    <p className="px-2 py-2 text-[9px] font-mono text-muted-foreground">No news</p>
-                  ) : (
-                    snap.news.map((n) => (
+                    )}
+                    {hasScores && (
+                      <div className="grid grid-cols-2 divide-x divide-border border-b border-border">
+                        {allGames.map((g, i) => (
+                          <ScoreCell key={i} game={g} leagueSlug={snap.league!.league} />
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* News section */}
+                {hasNews && (
+                  <div>
+                    {snap.news.map((n) => (
                       <a
                         key={n.id}
                         href={n.url}
                         target="_blank"
                         rel="noopener noreferrer"
-                        className="block px-2 py-1 border-b border-border last:border-0 text-[10px] leading-tight line-clamp-2 hover:underline hover:bg-secondary/50 transition-colors"
+                        className="flex items-center gap-1.5 px-2 py-1 border-b border-border last:border-0 text-[10px] leading-tight hover:underline hover:bg-secondary/50 transition-colors"
                       >
-                        {n.title}
+                        <HubCap label={n.source ?? "ESPN"} />
+                        <span className="line-clamp-2">{n.title}</span>
                       </a>
-                    ))
-                  )}
-                </div>
+                    ))}
+                  </div>
+                )}
+
+                {!hasScores && !hasNews && (
+                  <p className="px-2 py-2 text-[9px] font-mono text-muted-foreground">No data</p>
+                )}
               </div>
             </CollapsibleCard>
           );
@@ -899,9 +1261,8 @@ export default async function CommandCenter() {
             count={spotifyReleases.length}
             summary={`${spotifyReleases.length} releases`}
             contentHeight={newsCardHeight(spotifyReleases.length)}
-            className="xl:col-span-3"
           >
-            <div className="h-full overflow-y-auto">
+            <div>
               {spotifyReleases.map((r: any) => (
                 <a
                   key={r.id}
@@ -930,7 +1291,7 @@ export default async function CommandCenter() {
           </CollapsibleCard>
         )}
 
-      </div>
+      </MasonryColumns>
     </div>
   );
 }

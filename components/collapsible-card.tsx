@@ -12,9 +12,12 @@ interface CollapsibleCardProps {
   children: React.ReactNode;
   className?: string;
   defaultOpen?: boolean;
+  /** Optional icon rendered between the accent bar and the label text */
+  icon?: React.ReactNode;
   /**
-   * "full" = h-72 (288px) — default for data-rich cards
-   * "half" = h-36 (144px) — for sparse cards that don't fill more than half
+   * "full" = max-h-72 (288px) — default for data-rich cards
+   * "half" = max-h-36 (144px) — for sparse cards that don't fill more than half
+   * Card height shrinks to content; these are maximums only.
    */
   contentHeight?: "full" | "half";
 }
@@ -28,11 +31,12 @@ export function CollapsibleCard({
   children,
   className,
   defaultOpen = true,
+  icon,
   contentHeight = "full",
 }: CollapsibleCardProps) {
   const [open, setOpen] = useState(defaultOpen);
 
-  const heightClass = contentHeight === "half" ? "h-36" : "h-72";
+  const heightClass = contentHeight === "half" ? "max-h-36 overflow-y-auto" : "max-h-72 overflow-y-auto";
 
   return (
     <div className={`border border-border bg-card${className ? ` ${className}` : ""}`}>
@@ -44,6 +48,11 @@ export function CollapsibleCard({
           aria-label={open ? "Collapse" : "Expand"}
         >
           <div className="w-1 h-3 shrink-0" style={{ backgroundColor: accent }} />
+          {icon && (
+            <span className="shrink-0" style={{ color: accent }}>
+              {icon}
+            </span>
+          )}
           <span
             className="text-[9px] font-mono tracking-wider uppercase font-bold truncate"
             style={{ color: accent }}

@@ -35,6 +35,48 @@ const SPORT_COLORS: Record<string, string> = {
   soccer: "hsl(142 65% 42%)",
 };
 
+/** Match URL segment to ESPN display names in DB (spacing, unicode, case). */
+function normalizeTeamName(s: string | null | undefined): string {
+  if (!s) return "";
+  return s
+    .normalize("NFKC")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
+}
+
+function teamNamesMatch(a: string | null | undefined, b: string | null | undefined): boolean {
+  return normalizeTeamName(a) === normalizeTeamName(b);
+}
+
+/** Prefer the exact string stored on a score row for display / linking. */
+function canonicalTeamNameFromGames(games: Score[], teamKey: string): string | null {
+  for (const g of games) {
+    if (normalizeTeamName(g.home_team) === teamKey) return g.home_team;
+    if (normalizeTeamName(g.away_team) === teamKey) return g.away_team;
+  }
+  return null;
+}
+
+/**
+ * Dynamic route segments are usually decoded by Next.js, but links built with
+ * encodeURIComponent can still arrive encoded in some cases — decode so matching
+ * and display see real spaces (e.g. "San Antonio Spurs", not "San%20Antonio%20Spurs").
+ */
+function decodeUrlSegment(segment: string): string {
+  let s = segment;
+  for (let i = 0; i < 4; i++) {
+    try {
+      const next = decodeURIComponent(s.replace(/\+/g, " "));
+      if (next === s) break;
+      s = next;
+    } catch {
+      break;
+    }
+  }
+  return s;
+}
+
 function getStatusBadge(status: string | null) {
   if (!status) return null;
   const s = status.toLowerCase();
@@ -73,9 +115,8 @@ export default async function TeamDetailPage({
   params: Promise<{ league: string; team: string }>;
 }) {
   const { league: leagueParam, team: teamParam } = await params;
-  // Next.js automatically URL-decodes dynamic params
-  const teamName = teamParam;
-
+  const teamDecoded = decodeUrlSegment(teamParam);
+  const teamKey = normalizeTeamName(teamDecoded);
   const supabase = await createClient();
 
   // Fetch the league row
@@ -105,14 +146,12 @@ export default async function TeamDetailPage({
       .limit(20),
   ]);
 
-  // Filter games for this team (case-insensitive)
   const allGames = (allGamesRes.data ?? []) as Score[];
-  const teamNameLower = teamName.toLowerCase();
   const teamGames = allGames.filter(
-    (g) =>
-      g.home_team.toLowerCase() === teamNameLower ||
-      g.away_team.toLowerCase() === teamNameLower
+    (g) => teamNamesMatch(g.home_team, teamKey) || teamNamesMatch(g.away_team, teamKey)
   );
+
+  const displayTeamName = canonicalTeamNameFromGames(teamGames, teamKey) ?? teamDecoded;
 
   const now = new Date();
 
@@ -139,22 +178,17 @@ export default async function TeamDetailPage({
 
   // Filter news that mentions the team (last word of team name, e.g. "Lakers")
   const allNews = (newsRes.data ?? []) as NewsItem[];
-  const teamWord = teamName.split(" ").pop()?.toLowerCase() ?? "";
+  const teamWord = displayTeamName.split(/\s+/).pop()?.toLowerCase() ?? "";
   const teamNews = teamWord.length > 3
     ? allNews.filter((n) => n.title.toLowerCase().includes(teamWord))
     : allNews;
 
   const color = SPORT_COLORS[leagueRow.sport] ?? "hsl(25 95% 50%)";
 
-  if (teamGames.length === 0 && teamNews.length === 0) {
-    // Team name not found in data — show 404
-    notFound();
-  }
-
   // Win/loss record from past games
   const record = pastGames.reduce(
     (acc, g) => {
-      const isHome = g.home_team.toLowerCase() === teamNameLower;
+      const isHome = teamNamesMatch(g.home_team, teamKey);
       const teamScore = isHome ? g.home_score : g.away_score;
       const oppScore = isHome ? g.away_score : g.home_score;
       const status = (g.status ?? "").toLowerCase();
@@ -185,7 +219,7 @@ export default async function TeamDetailPage({
           {leagueRow.display_name}
         </Link>
         <span className="text-muted-foreground text-[10px] font-mono">/</span>
-        <span className="text-[10px] font-mono tracking-wider uppercase">{teamName}</span>
+        <span className="text-[10px] font-mono tracking-wider uppercase">{displayTeamName}</span>
       </div>
 
       {/* ── Header ───────────────────────────────────────────────────── */}
@@ -197,7 +231,7 @@ export default async function TeamDetailPage({
               className="text-3xl font-black tracking-tight leading-none"
               style={{ fontFamily: "Georgia, serif" }}
             >
-              <span style={{ color }}>◉</span> {teamName}
+              <span style={{ color }}>◉</span> {displayTeamName}
             </h1>
             <div className="flex items-center gap-3 mt-2 flex-wrap">
               <span
@@ -242,6 +276,14 @@ export default async function TeamDetailPage({
         ))}
       </div>
 
+      {teamGames.length === 0 && teamNews.length === 0 && (
+        <div className="rounded border border-border bg-secondary/30 px-4 py-5 text-center">
+          <p className="text-sm font-mono text-muted-foreground">
+            No matching games or articles for this team in the current league snapshot.
+          </p>
+        </div>
+      )}
+
       {/* ── Upcoming Games ───────────────────────────────────────────── */}
       {upcomingGames.length > 0 && (
         <div>
@@ -254,7 +296,7 @@ export default async function TeamDetailPage({
           <div className="space-y-px bg-border">
             {upcomingGames.map((game) => {
               const badge = getStatusBadge(game.status);
-              const isHome = game.home_team.toLowerCase() === teamNameLower;
+              const isHome = teamNamesMatch(game.home_team, teamKey);
               const opponent = isHome ? game.away_team : game.home_team;
               const opponentLeague = leagueParam;
               return (
@@ -268,7 +310,7 @@ export default async function TeamDetailPage({
                         {isHome ? "vs" : "@"}
                       </span>
                       <Link
-                        href={`/sports/${opponentLeague}/${encodeURIComponent(opponent)}`}
+                        href={`/sports/${opponentLeague}/${encodeURIComponent(opponent ?? "")}`}
                         className="text-sm font-mono font-bold hover:underline truncate"
                       >
                         {opponent}
@@ -317,7 +359,7 @@ export default async function TeamDetailPage({
           <div className="space-y-px bg-border">
             {pastGames.map((game) => {
               const badge = getStatusBadge(game.status);
-              const isHome = game.home_team.toLowerCase() === teamNameLower;
+              const isHome = teamNamesMatch(game.home_team, teamKey);
               const opponent = isHome ? game.away_team : game.home_team;
               const teamScore = isHome ? game.home_score : game.away_score;
               const oppScore = isHome ? game.away_score : game.home_score;
@@ -353,7 +395,7 @@ export default async function TeamDetailPage({
                         {isHome ? "vs" : "@"}
                       </span>
                       <Link
-                        href={`/sports/${opponentLeague}/${encodeURIComponent(opponent)}`}
+                        href={`/sports/${opponentLeague}/${encodeURIComponent(opponent ?? "")}`}
                         className="text-sm font-mono font-bold hover:underline truncate"
                       >
                         {opponent}
