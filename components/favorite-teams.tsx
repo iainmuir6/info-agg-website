@@ -38,7 +38,7 @@ export function FavoriteTeams({ initialTeams }: { initialTeams: FavoriteTeam[] }
             {t.league_label}
           </span>
           <Link
-            href={`/sports/${t.league}/${encodeURIComponent(t.team_name)}`}
+            href={`/${t.league}/${encodeURIComponent(t.team_name)}`}
             className="text-xs font-mono flex-1 hover:underline"
           >
             {t.team_name}

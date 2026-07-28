@@ -1,5 +1,6 @@
 import { createClient } from "@/lib/supabase/server";
 import Link from "next/link";
+import { TickerHoverChart } from "@/components/ticker-hover-chart";
 
 type StockWithQuote = {
   id: number;
@@ -322,12 +323,14 @@ export default async function MarketsPage() {
                       {article.related_tickers && article.related_tickers.length > 0 && (
                         <div className="flex gap-1 mt-1.5 flex-wrap">
                           {article.related_tickers.slice(0, 5).map((t) => (
-                            <span
+                            <TickerHoverChart
                               key={t}
-                              className="text-[10px] font-mono px-1 bg-secondary"
+                              ticker={t}
+                              href={`/markets/${t}`}
+                              className="text-[10px] font-mono px-1 bg-secondary hover:bg-border"
                             >
                               {t}
-                            </span>
+                            </TickerHoverChart>
                           ))}
                         </div>
                       )}

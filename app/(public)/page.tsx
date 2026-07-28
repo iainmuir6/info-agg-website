@@ -2,6 +2,7 @@ import { Fragment } from "react";
 import { createClient } from "@/lib/supabase/server";
 import Link from "next/link";
 import { DEFAULT_HOME_ORDER, type HomeSectionKey } from "@/lib/home-sections";
+import { TickerHoverChart } from "@/components/ticker-hover-chart";
 import { CollapsibleCard } from "@/components/collapsible-card";
 import { MasonryColumns } from "@/components/masonry-columns";
 
@@ -729,7 +730,7 @@ function ScoreCell({ game, leagueSlug }: { game: ScoreRowType; leagueSlug: strin
       )}
       <div className="grid shrink-0 items-center gap-x-1.5 [grid-template-columns:4ch_2.5ch_1ch_2.5ch_4ch]">
         <Link
-          href={`/sports/${leagueSlug}/${encodeURIComponent(game.away_team)}`}
+          href={`/${leagueSlug}/${awayAbbr}`}
           title={game.away_team}
           className={`relative z-10 ${teamCls(awayWon)} text-left`}
         >
@@ -743,7 +744,7 @@ function ScoreCell({ game, leagueSlug }: { game: ScoreRowType; leagueSlug: strin
           {isScheduled ? "" : homeN ?? ""}
         </span>
         <Link
-          href={`/sports/${leagueSlug}/${encodeURIComponent(game.home_team)}`}
+          href={`/${leagueSlug}/${homeAbbr}`}
           title={game.home_team}
           className={`relative z-10 ${teamCls(homeWon)} text-left`}
         >
@@ -970,7 +971,7 @@ export default async function CommandCenter() {
     cards.push({ section: "sports", node: (
       <CollapsibleCard key={key}
         label={SPORTS_LABEL[key] ?? snap.league.display_name}
-        accent="hsl(25 95% 50%)" href="/sports"
+        accent="hsl(25 95% 50%)" href={`/${snap.league.league}`}
         count={games.length || undefined} summary={sportsSummary}
       >
         <div>
@@ -1120,10 +1121,10 @@ export default async function CommandCenter() {
                 {(item.related_tickers ?? []).length > 0 && (
                   <div className="flex items-center gap-1 flex-wrap mt-0.5">
                     {(item.related_tickers ?? []).slice(0, 3).map((t) => (
-                      <Link key={t} href={`/markets/${t}`}
+                      <TickerHoverChart key={t} ticker={t} href={`/markets/${t}`}
                         className="text-[8px] font-mono px-0.5 bg-secondary leading-none hover:bg-border">
                         {t}
-                      </Link>
+                      </TickerHoverChart>
                     ))}
                   </div>
                 )}

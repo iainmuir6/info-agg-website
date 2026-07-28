@@ -17,11 +17,11 @@ type Article = {
 
 const PAGE_SIZE = 20;
 
-const SECTIONS = ["All", "home", "technology", "business", "sports", "science", "health", "arts", "world", "politics", "us"];
-
-const SOURCES = ["All", "nyt", "newsapi"];
-
 export default function NewsInfiniteScroll() {
+  // Filter options are discovered from the data — a section or source with no
+  // stories (or one the ETL no longer fetches) never appears as a chip.
+  const [sections, setSections] = useState<string[]>(["All"]);
+  const [sources, setSources] = useState<string[]>(["All"]);
   const [articles, setArticles] = useState<Article[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
@@ -32,6 +32,28 @@ export default function NewsInfiniteScroll() {
 
   const observerRef = useRef<IntersectionObserver | null>(null);
   const sentinelRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const supabase = createClient();
+        const { data } = await supabase
+          .from("news_articles")
+          .select("section, source")
+          .limit(1000);
+        const secs = new Set<string>();
+        const srcs = new Set<string>();
+        for (const row of data ?? []) {
+          if (row.section) secs.add(String(row.section).toLowerCase());
+          if (row.source) srcs.add(String(row.source).toLowerCase());
+        }
+        setSections(["All", ...[...secs].sort()]);
+        setSources(["All", ...[...srcs].sort()]);
+      } catch {
+        // leave the defaults ("All" only) in place
+      }
+    })();
+  }, []);
 
   const fetchArticles = useCallback(
     async (reset: boolean = false) => {
@@ -119,7 +141,7 @@ export default function NewsInfiniteScroll() {
           <span className="text-[10px] font-mono tracking-widest text-muted-foreground uppercase mr-1">
             Section
           </span>
-          {SECTIONS.map((s) => (
+          {sections.map((s) => (
             <button
               key={s}
               onClick={() => setSection(s)}
@@ -138,11 +160,11 @@ export default function NewsInfiniteScroll() {
             </button>
           ))}
         </div>
-        <div className="flex items-center gap-1">
+        <div className={`items-center gap-1 ${sources.length > 2 ? "flex" : "hidden"}`}>
           <span className="text-[10px] font-mono tracking-widest text-muted-foreground uppercase mr-1">
             Source
           </span>
-          {SOURCES.map((s) => (
+          {sources.map((s) => (
             <button
               key={s}
               onClick={() => setSource(s)}
