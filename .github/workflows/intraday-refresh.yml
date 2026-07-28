@@ -3,17 +3,21 @@ name: Intraday Refresh
 # Tiered refresh cadence (docs/IMPROVEMENT_PLAN.md §1.1). Times in UTC;
 # ET is UTC-4 (EDT) / UTC-5 (EST).
 #
-#   Tier A — every 15 min, 12:00–03:45 UTC (8am–11:45pm EDT): Finnhub
-#     quotes (stocks/ETFs/crypto), ESPN scoreboards, Finnhub market news.
-#     Consumes no daily API budget.
-#   Tier B — hourly at :30, 10:30–23:30 UTC (6:30am–7:30pm EDT): adds NYT
+# Minutes are deliberately OFF the quarter-hour marks — GitHub's scheduler
+# is most congested at :00/:15/:30/:45 and fires late there (this repo saw
+# multi-hour delays); odd minutes keep the delay small.
+#
+#   Tier A — every 15 min at :07/:22/:37/:52, 12:00–03:59 UTC
+#     (8am–11:59pm EDT): Finnhub quotes (stocks/ETFs/crypto), ESPN
+#     scoreboards, Finnhub market news. Consumes no daily API budget.
+#   Tier B — hourly at :41, 10:41–23:41 UTC (6:41am–7:41pm EDT): adds NYT
 #     top stories, ESPN news, and FMP forex/commodity quotes. 14 runs/day
 #     × 13 FMP calls = 182, + the daily run's 21 ≈ 203 of the 250/day cap.
 on:
   schedule:
-    - cron: '*/15 12-23 * * *'   # Tier A — daytime/evening
-    - cron: '*/15 0-3 * * *'     # Tier A — late evening ET
-    - cron: '30 10-23 * * *'     # Tier B — hourly
+    - cron: '7,22,37,52 12-23 * * *'   # Tier A — daytime/evening
+    - cron: '7,22,37,52 0-3 * * *'     # Tier A — late evening ET
+    - cron: '41 10-23 * * *'           # Tier B — hourly
   workflow_dispatch:
     inputs:
       tier:
@@ -71,7 +75,7 @@ jobs:
           if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
             tier="${INPUT_TIER:-a}"
             trigger="dispatch"
-          elif [ "$SCHEDULE" = "30 10-23 * * *" ]; then
+          elif [ "$SCHEDULE" = "41 10-23 * * *" ]; then
             tier="b"
             trigger="cron"
           else
