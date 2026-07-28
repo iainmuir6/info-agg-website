@@ -148,6 +148,16 @@ export default async function SportsPage() {
             const leagueNews = newsByLeague[league.id] ?? [];
             if (leagueScores.length === 0 && leagueNews.length === 0) return null;
 
+            // In-season gate: hide leagues whose games all fall outside the
+            // last/next 10 days (same rule as the Command Center cards).
+            const IN_SEASON_WINDOW_MS = 10 * 24 * 3600 * 1000;
+            const nowMs = Date.now();
+            const inSeason = leagueScores.some((s) => {
+              const t = s.game_date ? new Date(s.game_date).getTime() : NaN;
+              return Number.isFinite(t) && Math.abs(nowMs - t) <= IN_SEASON_WINDOW_MS;
+            });
+            if (!inSeason) return null;
+
             const color = SPORT_COLORS[league.sport] ?? "hsl(25 95% 50%)";
 
             return (

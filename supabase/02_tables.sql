@@ -58,6 +58,8 @@ CREATE TABLE IF NOT EXISTS info_agg.sports_scores (
     event_id      TEXT    NOT NULL,
     home_team     TEXT    NOT NULL,
     away_team     TEXT    NOT NULL,
+    home_abbrev   TEXT,   -- official ESPN team abbreviation (e.g. 'DAL')
+    away_abbrev   TEXT,
     home_score    INTEGER,
     away_score    INTEGER,
     home_record   TEXT,
@@ -71,6 +73,11 @@ CREATE TABLE IF NOT EXISTS info_agg.sports_scores (
     season        INTEGER,
     UNIQUE (league_id, event_id)
 );
+
+-- Columns added after initial deployment — keeps this file the single
+-- source of truth while staying safe to re-run against an existing DB.
+ALTER TABLE info_agg.sports_scores ADD COLUMN IF NOT EXISTS home_abbrev TEXT;
+ALTER TABLE info_agg.sports_scores ADD COLUMN IF NOT EXISTS away_abbrev TEXT;
 
 
 -- ============================================================

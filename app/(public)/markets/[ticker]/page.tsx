@@ -239,9 +239,9 @@ export default async function StockDetailPage({
                 </div>
               ))}
             </div>
-            <div className="max-h-72 overflow-y-auto">
+            <div>
               <div className="space-y-px bg-border">
-                {[...quotes].reverse().map((q, i) => {
+                {[...quotes].reverse().slice(0, 15).map((q, i) => {
                   const p = parseFloat(String(q.percent_change));
                   const isP = p >= 0;
                   return (
