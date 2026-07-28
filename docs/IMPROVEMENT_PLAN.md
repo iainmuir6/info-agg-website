@@ -230,6 +230,65 @@ cached data instantly and update within seconds of an ETL finishing.
 
 ---
 
+### 1.7 Daily database cleanup (retention job)
+Nothing prunes data today — `supabase/05_prune.sql` drops unused *indexes*, not rows. Two
+growth problems: news-type tables accumulate forever, and once Tier A ships, `stock_quotes`
+goes from 1 row/ticker/day to ~40 (each 15-min fetch gets a new `quote_timestamp`, so the
+`(stock_id, quote_timestamp)` upsert inserts rather than replaces).
+
+**Action:** one migration (`07_retention.sql`) defining `info_agg.cleanup_daily()` that
+applies the retention policy and returns a jsonb report of rows deleted per table:
+
+| Table | Timestamp used | Policy |
+|---|---|---|
+| `stock_quotes` | `quote_timestamp` | **Collapse intraday → EOD:** for days before today (ET), keep only the latest quote per `(stock_id, day)`, delete the rest. Optionally cap history at ~400 days. |
+| `news_articles` | `coalesce(published_at, fetched_at)` | delete > 7 days |
+| `company_news` | same | delete > 7 days (fetcher only looks back 7 days, so nothing older is ever re-fetched) |
+| `market_news` | same | delete > 7 days |
+| `news_sentiment` | same | delete > 7 days (sentiment is news-tied) |
+| `sports_news` | same | delete > 7 days |
+| `reddit_posts` | `coalesce(posted_at, fetched_at)` | delete > 3 days (hot posts stale within hours) |
+| `sports_scores` | `game_date` | keep 30 days (small rows; powers team pages) |
+| `spotify_releases` | `release_date` | keep 30 days |
+| `economic_indicators` | — | keep forever (tiny, historical value) |
+| `etl_runs` (0.2) | `started_at` | keep 90 days |
+
+Intraday-collapse core (the only non-trivial delete):
+
+```sql
+DELETE FROM info_agg.stock_quotes q
+USING (
+  SELECT stock_id,
+         (quote_timestamp AT TIME ZONE 'America/New_York')::date AS day,
+         MAX(quote_timestamp) AS keep_ts
+  FROM info_agg.stock_quotes
+  WHERE quote_timestamp < date_trunc('day', now() AT TIME ZONE 'America/New_York')
+  GROUP BY 1, 2
+) keep
+WHERE q.stock_id = keep.stock_id
+  AND (q.quote_timestamp AT TIME ZONE 'America/New_York')::date = keep.day
+  AND q.quote_timestamp <> keep.keep_ts;
+```
+
+**Scheduling — build it into the existing daily job (recommended):** add a final step to
+`daily-etl.yml` that calls `supabase.rpc('cleanup_daily')` and logs the returned report (and,
+once 0.2 exists, records it in `etl_runs`). The daily cron fires at 12:05 UTC = 7–8am ET,
+before market open, so "days before today" is always a complete trading day — no separate
+scheduler, and cleanup failures surface in the same Actions run as everything else.
+*Alternative:* schedule the same function inside Supabase with `pg_cron`
+(`cron.schedule('cleanup', '0 6 * * *', $$SELECT info_agg.cleanup_daily()$$)`) — survives
+Actions outages but is invisible to the ETL's logs; fine to add later as a belt-and-braces
+backstop since both paths call the same function.
+
+Guardrails: the function takes the retention windows as arguments with the defaults above
+(one place to tune); the workflow step fails loudly if the RPC errors; and the report lets
+the honest-exit-code logic (0.3) flag anomalies like a table losing 100% of its rows. Note
+`05_prune.sql` dropped `idx_stock_quotes_quote_timestamp` — at current volumes (~50 tickers)
+nightly full scans are fine, but re-add a `(quote_timestamp)` index if the intraday cadence
+ever expands the table past a few hundred thousand rows.
+
+---
+
 ## Phase 2 — Design, density, and correctness of states
 
 ### 2.1 Error/empty/loading states
@@ -294,7 +353,7 @@ cached data instantly and update within seconds of an ETL finishing.
 |---|---|---|
 | 1 (ETL trust) | 0.1–0.4, 0.6 | One scheduler, runs recorded, failures visible and honest |
 | 2 (ETL hardening) | 0.5, 0.7–0.9 | Transient errors survive, fast slim CI installs |
-| 3 (Freshness) | 1.1–1.6 | Intraday data, live ticker, revalidate-on-ETL, honest labels |
+| 3 (Freshness) | 1.1–1.7 | Intraday data, live ticker, revalidate-on-ETL, honest labels, daily retention cleanup |
 | 4 (States + layout) | 2.1, 2.2 | Error/empty/loading correctness, no layout shift, fewer queries |
 | 5 (Polish) | 2.3–2.5 | Consistent design system, mobile, a11y, dead-code removal |
 
