@@ -14,10 +14,12 @@ interface CollapsibleCardProps {
   defaultOpen?: boolean;
   /** Optional icon rendered between the accent bar and the label text */
   icon?: React.ReactNode;
+  /** Optional element rendered in the header row, before the "All →" link
+   *  (e.g. a single source pill covering every item in the card). */
+  headerExtra?: React.ReactNode;
   /**
-   * "full" = max-h-72 (288px) — default for data-rich cards
-   * "half" = max-h-36 (144px) — for sparse cards that don't fill more than half
-   * Card height shrinks to content; these are maximums only.
+   * Retained for call-site compatibility; cards no longer scroll internally —
+   * content determines height, so callers cap their item counts instead.
    */
   contentHeight?: "full" | "half";
 }
@@ -32,11 +34,9 @@ export function CollapsibleCard({
   className,
   defaultOpen = true,
   icon,
-  contentHeight = "full",
+  headerExtra,
 }: CollapsibleCardProps) {
   const [open, setOpen] = useState(defaultOpen);
-
-  const heightClass = contentHeight === "half" ? "max-h-36 overflow-y-auto" : "max-h-72 overflow-y-auto";
 
   return (
     <div className={`border border-border bg-card${className ? ` ${className}` : ""}`}>
@@ -71,6 +71,7 @@ export function CollapsibleCard({
             </span>
           )}
         </button>
+        {headerExtra && <span className="shrink-0 ml-2">{headerExtra}</span>}
         <Link
           href={href}
           className="text-[9px] font-mono tracking-wider uppercase text-muted-foreground hover:text-foreground transition-colors shrink-0 ml-2"
@@ -92,9 +93,7 @@ export function CollapsibleCard({
         }}
       >
         <div className="min-h-0 overflow-hidden">
-          <div className={heightClass}>
-            {children}
-          </div>
+          {children}
         </div>
       </div>
     </div>

@@ -124,6 +124,8 @@ def _sports_score_records(league_id: str, games: List[Dict[str, Any]]) -> List[D
             'event_id': str(event_id),
             'home_team': game.get('home_team'),
             'away_team': game.get('away_team'),
+            'home_abbrev': game.get('home_abbrev'),
+            'away_abbrev': game.get('away_abbrev'),
             'home_score': game.get('home_score'),
             'away_score': game.get('away_score'),
             'home_record': game.get('home_record'),

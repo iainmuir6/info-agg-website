@@ -41,6 +41,8 @@ type LeagueRow = {
 type ScoreRowType = {
   home_team: string;
   away_team: string;
+  home_abbrev: string | null;
+  away_abbrev: string | null;
   home_score: number | null;
   away_score: number | null;
   status: string | null;
@@ -91,6 +93,20 @@ const ECON_CONFIG: Record<string, { label: string; fmt: (v: number) => string; g
 // ─── Team abbreviation lookup ─────────────────────────────────────────────────
 
 const TEAM_ABBREVS: Record<string, string> = {
+  // WNBA (official ESPN abbreviations)
+  "Atlanta Dream": "ATL",
+  "Chicago Sky": "CHI",
+  "Connecticut Sun": "CONN",
+  "Dallas Wings": "DAL",
+  "Golden State Valkyries": "GS",
+  "Indiana Fever": "IND",
+  "Las Vegas Aces": "LV",
+  "Los Angeles Sparks": "LA",
+  "Minnesota Lynx": "MIN",
+  "New York Liberty": "NY",
+  "Phoenix Mercury": "PHX",
+  "Seattle Storm": "SEA",
+  "Washington Mystics": "WSH",
   // NFL
   "Arizona Cardinals": "ARI",
   "Atlanta Falcons": "ATL",
@@ -313,14 +329,14 @@ async function getCompanyNews(
         .select("id, headline, url, source, published_at, related_tickers")
         .overlaps("related_tickers", coreTickers)
         .order("published_at", { ascending: false })
-        .limit(16);
+        .limit(10);
       if (data && data.length > 0) return data as CompanyNewsItem[];
     }
     const { data } = await supabase
       .from("company_news")
       .select("id, headline, url, source, published_at, related_tickers")
       .order("published_at", { ascending: false })
-      .limit(16);
+      .limit(10);
     return (data ?? []) as CompanyNewsItem[];
   } catch {
     return [];
@@ -348,7 +364,7 @@ async function getMarketNews(supabase: Awaited<ReturnType<typeof createClient>>)
       .select("id, headline, url, source, published_at, category")
       .not("category", "eq", "crypto")
       .order("published_at", { ascending: false })
-      .limit(20);
+      .limit(10);
     return data ?? [];
   } catch {
     return [];
@@ -411,8 +427,8 @@ async function getLeagueSnapshot(
   supabase: Awaited<ReturnType<typeof createClient>>,
   sport: string,
   league: string,
-  scoreLimit = 8,
-  newsLimit = 6
+  scoreLimit = 6,
+  newsLimit = 4
 ): Promise<LeagueSnapshot> {
   try {
     const { data: leagueRow } = await supabase
@@ -427,7 +443,7 @@ async function getLeagueSnapshot(
     const [scoresRes, newsRes] = await Promise.all([
       supabase
         .from("sports_scores")
-        .select("home_team, away_team, home_score, away_score, status, status_detail, game_date")
+        .select("home_team, away_team, home_abbrev, away_abbrev, home_score, away_score, status, status_detail, game_date")
         .eq("league_id", leagueRow.id)
         .order("game_date", { ascending: false })
         .limit(scoreLimit * 2),
@@ -672,98 +688,73 @@ function abbrevTeam(name: string): string {
   return (initials + last.slice(1)).slice(0, 3);
 }
 
-/** Exactly 3 monospace cells for team abbrev — away toward center, home toward center. */
-function fixedAwayAbbrCell(raw: string): string {
-  const s = raw.slice(0, 3).toUpperCase();
-  return s.length >= 3 ? s : s.padStart(3, "\u00A0");
-}
-
-function fixedHomeAbbrCell(raw: string): string {
-  const s = raw.slice(0, 3).toUpperCase();
-  return s.length >= 3 ? s : s.padEnd(3, "\u00A0");
-}
-
-/** Exactly 3 monospace cells: away score hugs the center dash; home score hugs the center dash. */
-function fixedAwayScoreCell(
-  score: string | number | null | undefined,
-  scheduled: boolean
-): string {
-  if (scheduled) return "\u00A0\u00A0–";
-  if (score == null || score === "") return "\u00A0\u00A0–";
-  const t = String(score).trim().slice(0, 3);
-  return t.length >= 3 ? t : t.padStart(3, "\u00A0");
-}
-
-function fixedHomeScoreCell(
-  score: string | number | null | undefined,
-  scheduled: boolean
-): string {
-  if (scheduled) return "\u00A0\u00A0–";
-  if (score == null || score === "") return "\u00A0\u00A0–";
-  const t = String(score).trim().slice(0, 3);
-  return t.length >= 3 ? t : t.padEnd(3, "\u00A0");
-}
-
-/** Compact score cell — fixed grid for teams/scores; status on the right */
+/** One full-width score row: `AWY 3 – 7 HOM · status`. Winners bold, losers
+ *  muted; scheduled games show tip-off time instead of dashes. */
 function ScoreCell({ game, leagueSlug }: { game: ScoreRowType; leagueSlug: string }) {
   const statusLow = (game.status ?? "").toLowerCase();
   const isFinal = statusLow.includes("final");
   const isLive = !isFinal && (statusLow.includes("progress") || statusLow.includes("live"));
   const isScheduled = !isFinal && !isLive;
 
-  const awayAbbr = fixedAwayAbbrCell(abbrevTeam(game.away_team));
-  const homeAbbr = fixedHomeAbbrCell(abbrevTeam(game.home_team));
-  const awayScr = fixedAwayScoreCell(game.away_score, isScheduled);
-  const homeScr = fixedHomeScoreCell(game.home_score, isScheduled);
+  // Prefer the official ESPN abbreviation stored with the score row
+  const awayAbbr = (game.away_abbrev ?? abbrevTeam(game.away_team)).toUpperCase();
+  const homeAbbr = (game.home_abbrev ?? abbrevTeam(game.home_team)).toUpperCase();
+
+  const awayN = game.away_score != null ? Number(game.away_score) : null;
+  const homeN = game.home_score != null ? Number(game.home_score) : null;
+  const awayWon = isFinal && awayN != null && homeN != null && awayN > homeN;
+  const homeWon = isFinal && awayN != null && homeN != null && homeN > awayN;
+  const teamCls = (won: boolean) =>
+    `font-black hover:underline ${isFinal && !won ? "text-muted-foreground" : ""}`;
+  const scoreCls = (won: boolean) =>
+    `font-bold tabular-nums ${isFinal && !won ? "text-muted-foreground" : ""}`;
+
+  const tipOff =
+    isScheduled && game.game_date
+      ? new Date(game.game_date).toLocaleTimeString("en-US", {
+          hour: "numeric",
+          minute: "2-digit",
+          timeZone: "America/New_York",
+        })
+      : null;
 
   return (
-    <div className="flex items-center gap-2 px-2 py-1 border-b border-border last:border-0 hover:bg-secondary/50 transition-colors text-[10px] font-mono leading-tight tabular-nums">
-      {/* Fixed 5-column scoreboard: away | away# | – | home# | home — always 3ch per team/score */}
-      <div className="grid shrink-0 items-center gap-x-1 [grid-template-columns:3ch_3ch_1ch_3ch_3ch]">
+    <div className="flex items-center gap-2 px-2 py-1 border-b border-border last:border-0 hover:bg-secondary/50 transition-colors text-[10px] font-mono leading-tight">
+      <div className="grid shrink-0 items-center gap-x-1.5 [grid-template-columns:4ch_2.5ch_1ch_2.5ch_4ch]">
         <Link
           href={`/sports/${leagueSlug}/${encodeURIComponent(game.away_team)}`}
           title={game.away_team}
-          className="font-black text-right hover:underline whitespace-pre"
+          className={`${teamCls(awayWon)} text-left`}
         >
           {awayAbbr}
         </Link>
-        <span className="font-bold text-right whitespace-pre">{awayScr}</span>
-        <span className="text-muted-foreground text-center text-[9px]">–</span>
-        <span className="font-bold text-left whitespace-pre">{homeScr}</span>
+        <span className={`${scoreCls(awayWon)} text-right`}>
+          {isScheduled ? "" : awayN ?? ""}
+        </span>
+        <span className="text-muted-foreground/60 text-center">{isScheduled ? "@" : "–"}</span>
+        <span className={`${scoreCls(homeWon)} text-right`}>
+          {isScheduled ? "" : homeN ?? ""}
+        </span>
         <Link
           href={`/sports/${leagueSlug}/${encodeURIComponent(game.home_team)}`}
           title={game.home_team}
-          className="font-black text-left hover:underline whitespace-pre"
+          className={`${teamCls(homeWon)} text-left`}
         >
           {homeAbbr}
         </Link>
       </div>
-      {/* Spacer pushes status to the right */}
       <div className="flex-1 min-w-0" />
-      {/* Status — dot always visible, label hidden on mobile */}
-      {isFinal && (
-        <div className="flex items-center gap-0.5 shrink-0">
-          <div className="w-1.5 h-1.5 rounded-full animate-pulse-dot shrink-0" style={{ backgroundColor: "hsl(0 72% 50%)" }} />
-          <span className="text-[8px] leading-none hidden sm:inline" style={{ color: "hsl(0 72% 50%)" }}>
-            Final
-          </span>
-        </div>
-      )}
-      {isLive && (
-        <div className="flex items-center gap-0.5 shrink-0">
+      {isLive ? (
+        <div className="flex items-center gap-1 shrink-0">
           <div className="w-1.5 h-1.5 rounded-full animate-pulse-dot shrink-0" style={{ backgroundColor: "hsl(142 65% 42%)" }} />
-          <span className="text-[8px] leading-none hidden sm:inline" style={{ color: "hsl(142 65% 42%)" }}>
-            {game.status_detail ?? "Live"}
+          <span className="text-[8px] leading-none" style={{ color: "hsl(142 65% 42%)" }}>
+            {game.status_detail ?? "LIVE"}
           </span>
         </div>
-      )}
-      {isScheduled && (
-        <div className="flex items-center gap-0.5 shrink-0">
-          <div className="w-1.5 h-1.5 rounded-full animate-pulse-dot shrink-0" style={{ backgroundColor: "hsl(220 10% 55%)" }} />
-          <span className="text-[8px] leading-none text-muted-foreground hidden sm:inline">
-            Sched
-          </span>
-        </div>
+      ) : (
+        <span className="text-[8px] leading-none text-muted-foreground uppercase shrink-0">
+          {isFinal ? "Final" : tipOff ?? "Sched"}
+        </span>
       )}
     </div>
   );
@@ -830,13 +821,17 @@ export default async function CommandCenter() {
   const NYT_US_SECTIONS  = new Set(["us", "politics", "nyregion", "national"]);
   const NYT_WORLD_SECTIONS = new Set(["world"]);
 
-  const usStories    = nytAll.filter((a) => NYT_US_SECTIONS.has((a.section ?? "").toLowerCase()));
-  const worldStories = nytAll.filter((a) => NYT_WORLD_SECTIONS.has((a.section ?? "").toLowerCase()));
-  const otherStories = nytAll.filter(
-    (a) =>
-      !NYT_US_SECTIONS.has((a.section ?? "").toLowerCase()) &&
-      !NYT_WORLD_SECTIONS.has((a.section ?? "").toLowerCase())
-  );
+  // Caps keep every card short enough to render in full — cards no longer
+  // scroll internally; the "All →" link is the path to the complete list.
+  const usStories    = nytAll.filter((a) => NYT_US_SECTIONS.has((a.section ?? "").toLowerCase())).slice(0, 8);
+  const worldStories = nytAll.filter((a) => NYT_WORLD_SECTIONS.has((a.section ?? "").toLowerCase())).slice(0, 8);
+  const otherStories = nytAll
+    .filter(
+      (a) =>
+        !NYT_US_SECTIONS.has((a.section ?? "").toLowerCase()) &&
+        !NYT_WORLD_SECTIONS.has((a.section ?? "").toLowerCase())
+    )
+    .slice(0, 8);
 
   // ── NYT digest: one top story per section ────────────────────────────────
   const NYT_SECTION_ORDER: Record<string, number> = {
@@ -853,7 +848,8 @@ export default async function CommandCenter() {
     if (!nytBySectionMap.has(key)) nytBySectionMap.set(key, a); // first = newest
   }
   const nytDigest = Array.from(nytBySectionMap.entries())
-    .sort(([a], [b]) => (NYT_SECTION_ORDER[a] ?? 99) - (NYT_SECTION_ORDER[b] ?? 99));
+    .sort(([a], [b]) => (NYT_SECTION_ORDER[a] ?? 99) - (NYT_SECTION_ORDER[b] ?? 99))
+    .slice(0, 10);
 
   // ── Economic indicators grouped ───────────────────────────────────────────
   const econByGroup = econIndicators.reduce<Record<string, EconRow[]>>((acc, row) => {
@@ -1177,24 +1173,26 @@ export default async function CommandCenter() {
           const snap = snapshot as LeagueSnapshot;
           if (!snap.league) return null;
 
-          const hasScores = snap.recentGames.length > 0 || snap.upcomingGames.length > 0;
-          const hasNews = snap.news.length > 0;
-          if (!hasScores && !hasNews) return null;
+          // In-season gate: only show a league whose games fall within the
+          // last/next 10 days. Off-season leagues (with only stale scores
+          // and evergreen news) are hidden entirely.
+          const IN_SEASON_WINDOW_MS = 10 * 24 * 3600 * 1000;
+          const nowMs = Date.now();
+          const inSeason = [...snap.recentGames, ...snap.upcomingGames].some((g) => {
+            const t = g.game_date ? new Date(g.game_date).getTime() : NaN;
+            return Number.isFinite(t) && Math.abs(nowMs - t) <= IN_SEASON_WINDOW_MS;
+          });
+          if (!inSeason) return null;
 
-          const offSeason = !snap.league.is_active;
-          const totalGames = snap.recentGames.length + snap.upcomingGames.length;
-          const sportsSummary =
-            [
-              totalGames > 0 && `${totalGames} games`,
-              hasNews && `${snap.news.length} news`,
-            ]
-              .filter(Boolean)
-              .join(" · ") || (offSeason ? "off season" : "no data");
-
-          // All games combined for the 2-col grid (recent first, then upcoming)
-          const allGames = [...snap.recentGames, ...snap.upcomingGames];
-          const totalItems = allGames.length + snap.news.length;
-          const sportsHeight = totalItems * 26 < 144 ? "half" : "full";
+          // Cap rows so the card never needs to scroll
+          const games = [...snap.recentGames.slice(0, 4), ...snap.upcomingGames.slice(0, 2)];
+          const news = snap.news.slice(0, 3);
+          const sportsSummary = [
+            games.length > 0 && `${games.length} games`,
+            news.length > 0 && `${news.length} news`,
+          ]
+            .filter(Boolean)
+            .join(" · ");
 
           return (
             <CollapsibleCard
@@ -1202,49 +1200,34 @@ export default async function CommandCenter() {
               label={SPORTS_LABEL[key] ?? snap.league.display_name}
               accent="hsl(25 95% 50%)"
               href="/sports"
-              count={totalGames || undefined}
+              count={games.length || undefined}
               summary={sportsSummary}
-              contentHeight={sportsHeight}
+              headerExtra={<HubCap label="ESPN" />}
             >
               <div>
-                {/* Scores section — 2-column game grid */}
-                {(hasScores || offSeason) && (
-                  <div>
-                    {offSeason && (
-                      <p className="px-2 py-1 text-[8px] font-mono text-muted-foreground uppercase tracking-widest border-b border-border">
-                        Off season
-                      </p>
-                    )}
-                    {hasScores && (
-                      <div className="grid grid-cols-2 divide-x divide-border border-b border-border">
-                        {allGames.map((g, i) => (
-                          <ScoreCell key={i} game={g} leagueSlug={snap.league!.league} />
-                        ))}
-                      </div>
-                    )}
+                {games.length > 0 && (
+                  <div className="border-b border-border">
+                    {games.map((g, i) => (
+                      <ScoreCell key={i} game={g} leagueSlug={snap.league!.league} />
+                    ))}
                   </div>
                 )}
 
-                {/* News section */}
-                {hasNews && (
+                {/* News — source pill lives in the card header, not per item */}
+                {news.length > 0 && (
                   <div>
-                    {snap.news.map((n) => (
+                    {news.map((n) => (
                       <a
                         key={n.id}
                         href={n.url}
                         target="_blank"
                         rel="noopener noreferrer"
-                        className="flex items-center gap-1.5 px-2 py-1 border-b border-border last:border-0 text-[10px] leading-tight hover:underline hover:bg-secondary/50 transition-colors"
+                        className="block px-2 py-1 border-b border-border last:border-0 text-[10px] leading-tight hover:underline hover:bg-secondary/50 transition-colors"
                       >
-                        <HubCap label={n.source ?? "ESPN"} />
                         <span className="line-clamp-2">{n.title}</span>
                       </a>
                     ))}
                   </div>
-                )}
-
-                {!hasScores && !hasNews && (
-                  <p className="px-2 py-2 text-[9px] font-mono text-muted-foreground">No data</p>
                 )}
               </div>
             </CollapsibleCard>

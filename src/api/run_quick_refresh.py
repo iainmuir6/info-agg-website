@@ -44,7 +44,11 @@ from run_etl import (
     DOMAIN_TIMEOUT_S,
 )
 from sports.sports_db_helper import sync_all_sports_data
-from markets.markets_db_helper import sync_stock_data, sync_market_news
+from markets.markets_db_helper import (
+    sync_stock_data,
+    sync_market_news,
+    upsert_daily_stock_quotes_batch,
+)
 
 load_dotenv()
 
@@ -74,19 +78,28 @@ def run_quick_markets_etl(supabase, include_fmp_quotes: bool) -> Dict[str, Any]:
         'errors': [],
     }
 
+    # Pre-load stock IDs in ONE query so worker threads make zero DB calls
+    # (same pattern as run_etl — concurrent per-thread lookups through the
+    # shared client intermittently failed, e.g. TLT/XRP/EURUSD).
+    stock_rows = supabase.table('stocks').select('id,ticker').in_('ticker', tickers).execute()
+    stock_id_map: Dict[str, str] = {r['ticker']: r['id'] for r in (stock_rows.data or [])}
+
     def _fetch_ticker(ticker: str) -> tuple:
         at = asset_type_map.get(ticker, 'stock')
         result = sync_stock_data(
-            supabase,
+            None,
             ticker,
             fetch_quotes=True,
             fetch_news=False,
             fetch_profile=False,
             asset_type=at,
             write_news=False,
+            write_quotes=False,  # batch-upserted after the pool drains
+            stock_id=stock_id_map.get(ticker),
         )
         return ticker, result
 
+    pending_quotes: list = []
     with ThreadPoolExecutor(max_workers=2) as executor:
         futures = {executor.submit(_fetch_ticker, t): t for t in tickers}
         for future in as_completed(futures):
@@ -97,8 +110,16 @@ def run_quick_markets_etl(supabase, include_fmp_quotes: bool) -> Dict[str, Any]:
                 total_stats['errors'].append(f"{t}: fetch failed: {e}")
                 continue
             total_stats['stocks_processed'] += 1
-            total_stats['quotes_inserted'] += stats.get('quotes_inserted', 0)
             total_stats['errors'].extend(stats.get('errors', []))
+            pending_quotes.extend(stats.get('pending_quotes', []))
+
+    if pending_quotes:
+        inserted = upsert_daily_stock_quotes_batch(supabase, pending_quotes)
+        total_stats['quotes_inserted'] = inserted
+        if inserted < len(pending_quotes):
+            total_stats['errors'].append(
+                f"Quote upsert wrote {inserted}/{len(pending_quotes)} rows"
+            )
 
     try:
         news_stats = sync_market_news(supabase, categories=MARKET_NEWS_CATEGORIES)

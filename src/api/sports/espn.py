@@ -291,6 +291,10 @@ def fetch_espn_scores(sport: str, league: str, dates: Optional[str] = None) -> L
                     'league': league,
                     'home_team': home_competitor.get('team', {}).get('displayName'),
                     'away_team': away_competitor.get('team', {}).get('displayName'),
+                    # Official ESPN abbreviations (e.g. WNBA Dallas Wings → DAL) —
+                    # the frontend prefers these over its lookup-table fallback.
+                    'home_abbrev': home_competitor.get('team', {}).get('abbreviation'),
+                    'away_abbrev': away_competitor.get('team', {}).get('abbreviation'),
                     'home_score': home_competitor.get('score'),
                     'away_score': away_competitor.get('score'),
                     'home_record': home_competitor.get('records', [{}])[0].get('summary') if home_competitor.get('records') else None,
