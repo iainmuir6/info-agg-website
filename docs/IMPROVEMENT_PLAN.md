@@ -236,8 +236,10 @@ growth problems: news-type tables accumulate forever, and once Tier A ships, `st
 goes from 1 row/ticker/day to ~40 (each 15-min fetch gets a new `quote_timestamp`, so the
 `(stock_id, quote_timestamp)` upsert inserts rather than replaces).
 
-**Action:** one migration (`07_retention.sql`) defining `info_agg.cleanup_daily()` that
-applies the retention policy and returns a jsonb report of rows deleted per table:
+**Status: built** — `supabase/07_retention.sql` defines `info_agg.cleanup_daily()`, which
+applies the retention policy and returns a jsonb report of rows deleted per table. What
+remains is wiring the invocation (workflow step / RPC call) per the scheduling note below.
+The policy:
 
 | Table | Timestamp used | Policy |
 |---|---|---|
@@ -282,10 +284,10 @@ backstop since both paths call the same function.
 
 Guardrails: the function takes the retention windows as arguments with the defaults above
 (one place to tune); the workflow step fails loudly if the RPC errors; and the report lets
-the honest-exit-code logic (0.3) flag anomalies like a table losing 100% of its rows. Note
-`05_prune.sql` dropped `idx_stock_quotes_quote_timestamp` — at current volumes (~50 tickers)
-nightly full scans are fine, but re-add a `(quote_timestamp)` index if the intraday cadence
-ever expands the table past a few hundred thousand rows.
+the honest-exit-code logic (0.3) flag anomalies like a table losing 100% of its rows. The
+`(quote_timestamp)` index that `05_prune.sql` dropped is re-added by `07_retention.sql` —
+index maintenance at this insert volume is negligible, so the collapse and history-cap
+deletes stay index-backed as the table grows under the intraday cadence.
 
 ---
 
