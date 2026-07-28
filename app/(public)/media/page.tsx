@@ -96,11 +96,11 @@ export default async function MediaPage() {
       {!hasData ? (
         <div className="border border-border p-12 text-center">
           <p className="text-xs font-mono text-muted-foreground tracking-wider">
-            NO DATA — Run the ETL to sync media data.
+            NO MEDIA DATA YET
           </p>
-          <code className="text-xs font-mono text-muted-foreground block mt-3">
-            python src/api/run_etl.py --media-only
-          </code>
+          <p className="text-xs font-mono text-muted-foreground/70 mt-3">
+            The next scheduled sync should populate this page — check back shortly.
+          </p>
         </div>
       ) : (
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-px bg-border">

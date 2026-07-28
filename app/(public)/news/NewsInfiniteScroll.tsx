@@ -172,11 +172,11 @@ export default function NewsInfiniteScroll() {
       ) : articles.length === 0 ? (
         <div className="border border-border p-12 text-center">
           <p className="text-xs font-mono text-muted-foreground tracking-wider">
-            NO ARTICLES — Run the ETL to sync news data.
+            NO ARTICLES YET
           </p>
-          <code className="text-xs font-mono text-muted-foreground block mt-3">
-            python src/api/run_etl.py --news-only
-          </code>
+          <p className="text-xs font-mono text-muted-foreground/70 mt-3">
+            The next scheduled sync should populate this page — check back shortly.
+          </p>
         </div>
       ) : (
         <div className="space-y-px bg-border">

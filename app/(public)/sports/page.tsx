@@ -135,11 +135,11 @@ export default async function SportsPage() {
       {!hasData ? (
         <div className="border border-border p-12 text-center">
           <p className="text-xs font-mono text-muted-foreground tracking-wider">
-            NO DATA — Run the ETL to sync sports data.
+            NO SPORTS DATA YET
           </p>
-          <code className="text-xs font-mono text-muted-foreground block mt-3">
-            python src/api/run_etl.py --sports-only
-          </code>
+          <p className="text-xs font-mono text-muted-foreground/70 mt-3">
+            The next scheduled sync should populate this page — check back shortly.
+          </p>
         </div>
       ) : (
         <div className="space-y-px bg-border">

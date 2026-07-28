@@ -84,6 +84,11 @@ export default async function MarketsPage() {
   const { stocks, news } = await getMarketsData(supabase);
 
   const stocksWithQuotes = stocks.filter((s: any) => s.quote);
+  const latestFetchedAt = stocksWithQuotes.reduce(
+    (max: string | null, s: any) =>
+      !max || (s.quote.fetched_at && s.quote.fetched_at > max) ? s.quote.fetched_at : max,
+    null as string | null,
+  );
   const stocksNoQuote = stocks.filter((s: any) => !s.quote);
   const hasData = stocks.length > 0;
 
@@ -104,25 +109,36 @@ export default async function MarketsPage() {
           </span>
         </div>
         <p className="text-xs font-mono text-muted-foreground mt-1 tracking-wider">
-          FINNHUB · ALPHA VANTAGE · REAL-TIME QUOTES
+          FINNHUB · FMP · ALPHA VANTAGE · INTRADAY SNAPSHOTS
         </p>
       </div>
 
       {!hasData ? (
         <div className="border border-border p-12 text-center">
           <p className="text-xs font-mono text-muted-foreground tracking-wider">
-            NO DATA — Run the ETL to sync market data.
+            NO MARKET DATA YET
           </p>
-          <code className="text-xs font-mono text-muted-foreground block mt-3">
-            python src/api/run_etl.py --markets-only
-          </code>
+          <p className="text-xs font-mono text-muted-foreground/70 mt-3">
+            The next scheduled sync should populate this page — check back shortly.
+          </p>
         </div>
       ) : (
         <>
           {/* Stock quotes table */}
           <div>
             <p className="text-[10px] font-mono tracking-widest text-muted-foreground uppercase mb-3">
-              Watchlist — {stocksWithQuotes.length} with live quotes
+              Watchlist — {stocksWithQuotes.length} quoted
+              {latestFetchedAt && (
+                <span className="normal-case tracking-normal text-muted-foreground/70">
+                  {" "}· as of{" "}
+                  {new Date(latestFetchedAt).toLocaleTimeString("en-US", {
+                    hour: "numeric",
+                    minute: "2-digit",
+                    timeZone: "America/New_York",
+                    timeZoneName: "short",
+                  })}
+                </span>
+              )}
             </p>
 
             {/* Desktop table header */}

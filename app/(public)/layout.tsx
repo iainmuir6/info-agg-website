@@ -1,62 +1,82 @@
 import Link from "next/link";
+import { unstable_cache } from "next/cache";
 import { ThemeSwitcher } from "@/components/theme-switcher";
-import { createClient } from "@/lib/supabase/server";
-import { NewsTickerClient } from "@/components/news-ticker-client";
+import { createClient, createStaticClient } from "@/lib/supabase/server";
+import {
+  NewsTickerClient,
+  normalizeTickerRows,
+  TICKER_MAG7,
+  TICKER_ETFS,
+  type TickerItem,
+} from "@/components/news-ticker-client";
 import { isSuperAdmin } from "@/lib/rbac";
 import { EtlTriggerButton } from "@/components/etl-trigger";
 
-type TickerItem = {
+// Initial ticker snapshot — cached and revalidated by the ETL webhook
+// (POST /api/revalidate); the client component then polls on its own.
+const getTickerItems = unstable_cache(
+  async (): Promise<TickerItem[]> => {
+    const supabase = createStaticClient();
+    try {
+      const [equitiesRes, etfsRes] = await Promise.all([
+        supabase
+          .from("stocks")
+          .select(`ticker, stock_quotes(current_price, percent_change, fetched_at)`)
+          .in("ticker", TICKER_MAG7)
+          .eq("is_active", true),
+        supabase
+          .from("stocks")
+          .select(`ticker, stock_quotes(current_price, percent_change, fetched_at)`)
+          .in("ticker", TICKER_ETFS)
+          .eq("is_active", true),
+      ]);
+      return [
+        ...normalizeTickerRows(equitiesRes.data ?? [], TICKER_MAG7),
+        ...normalizeTickerRows(etfsRes.data ?? [], TICKER_ETFS),
+      ];
+    } catch {
+      return [];
+    }
+  },
+  ["ticker-items"],
+  { tags: ["etl-data"], revalidate: 300 },
+);
+
+type EtlHealth = {
+  color: string;
   label: string;
-  value: string;
-  change: number;
 };
 
-async function getTickerItems(): Promise<TickerItem[]> {
-  const supabase = await createClient();
-
-  const MAG7 = ["AAPL", "GOOGL", "MSFT", "AMZN", "NVDA", "META", "TSLA"];
-  const ETFS = ["SPY", "QQQ", "DIA", "IWM", "VTI"];
-
-  try {
-    const [equitiesRes, etfsRes] = await Promise.all([
-      supabase
-        .from("stocks")
-        .select(`ticker, stock_quotes(current_price, percent_change, fetched_at)`)
-        .in("ticker", MAG7)
-        .eq("is_active", true),
-      supabase
-        .from("stocks")
-        .select(`ticker, stock_quotes(current_price, percent_change, fetched_at)`)
-        .in("ticker", ETFS)
-        .eq("is_active", true),
-    ]);
-
-    const normalize = (rows: any[], order: string[]): TickerItem[] => {
-      return (rows ?? [])
-        .map((s: any) => {
-          const quotes = (s.stock_quotes ?? []).sort(
-            (a: any, b: any) => new Date(b.fetched_at).getTime() - new Date(a.fetched_at).getTime()
-          );
-          const latest = quotes[0];
-          if (!latest) return null;
-          return {
-            label: s.ticker,
-            value: `$${parseFloat(latest.current_price ?? 0).toFixed(2)}`,
-            change: parseFloat(latest.percent_change ?? 0),
-          };
-        })
-        .filter((x): x is TickerItem => x !== null)
-        .sort((a, b) => order.indexOf(a.label) - order.indexOf(b.label));
-    };
-
-    const equities = normalize(equitiesRes.data ?? [], MAG7);
-    const etfs = normalize(etfsRes.data ?? [], ETFS);
-
-    return [...equities, ...etfs];
-  } catch {
-    return [];
-  }
-}
+// Header health dot, driven by the latest etl_runs row instead of being
+// hardcoded green: fresh (<2h) → green, stale (<26h) → amber, else red.
+const getEtlHealth = unstable_cache(
+  async (): Promise<EtlHealth> => {
+    const fallback: EtlHealth = { color: "hsl(45 90% 45%)", label: "No sync data" };
+    try {
+      const supabase = createStaticClient();
+      const { data } = await supabase
+        .from("etl_runs")
+        .select("status, finished_at, started_at")
+        .order("started_at", { ascending: false })
+        .limit(5);
+      const lastFinished = (data ?? []).find(
+        (r) => r.finished_at && (r.status === "success" || r.status === "partial"),
+      );
+      if (!lastFinished) return fallback;
+      const ageMs = Date.now() - new Date(lastFinished.finished_at as string).getTime();
+      const ageMin = Math.round(ageMs / 60_000);
+      const ageLabel =
+        ageMin < 60 ? `${ageMin}m ago` : ageMin < 60 * 26 ? `${Math.round(ageMin / 60)}h ago` : `${Math.round(ageMin / 1440)}d ago`;
+      if (ageMs < 2 * 3600_000) return { color: "hsl(142 65% 42%)", label: `Updated ${ageLabel}` };
+      if (ageMs < 26 * 3600_000) return { color: "hsl(45 90% 45%)", label: `Updated ${ageLabel}` };
+      return { color: "hsl(0 72% 50%)", label: `Stale — ${ageLabel}` };
+    } catch {
+      return fallback;
+    }
+  },
+  ["etl-health"],
+  { tags: ["etl-data"], revalidate: 60 },
+);
 
 const NAV_LINKS = [
   { href: "/news", label: "NEWS", accent: "hsl(220 90% 52%)" },
@@ -85,6 +105,7 @@ export default async function PublicLayout({ children }: { children: React.React
   const { data: claimsData } = await supabase.auth.getClaims();
   const isAuthenticated = !!claimsData?.claims;
   const isAdmin = isAuthenticated ? await isSuperAdmin() : false;
+  const etlHealth = await getEtlHealth();
 
   return (
     <div className="min-h-screen bg-background flex flex-col">
@@ -105,10 +126,10 @@ export default async function PublicLayout({ children }: { children: React.React
           </Link>
 
           <div className="flex items-center gap-4">
-            <div className="hidden sm:flex items-center gap-1.5">
-              <div className="w-1.5 h-1.5 rounded-full animate-pulse-dot" style={{ backgroundColor: "hsl(142 65% 42%)" }} />
+            <div className="hidden sm:flex items-center gap-1.5" title={etlHealth.label}>
+              <div className="w-1.5 h-1.5 rounded-full animate-pulse-dot" style={{ backgroundColor: etlHealth.color }} />
               <span className="text-[10px] font-mono tracking-wider text-muted-foreground uppercase">
-                Live
+                {etlHealth.label}
               </span>
             </div>
             {!isAuthenticated ? (
