@@ -1,0 +1,11 @@
+# Dev / manual-tooling extras: notebook analysis (pandas/plotly), the
+# deprecated etfdb.com Selenium scraper (--scrape-etf-info), and misc
+# fetchers. Not installed by the scheduled GitHub Actions runs.
+-r requirements.txt
+pandas==2.1.4
+plotly>=5.18.0,<6
+nbformat>=4.2.0
+beautifulsoup4==4.12.2
+lxml==4.9.3
+selenium>=4.0.0
+webdriver-manager>=4.0.0

@@ -12,6 +12,7 @@ from typing import Dict, List, Optional, Any
 from datetime import datetime
 import requests
 import os
+import sys
 import time
 import threading
 
@@ -19,26 +20,24 @@ import threading
 from dotenv import load_dotenv
 load_dotenv()
 
+_PARENT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _PARENT not in sys.path:
+    sys.path.insert(0, _PARENT)
+from etl_lib import get_http_session, MinInterval
+
 
 ESPN_BASE_URL = "https://site.api.espn.com/apis/site/v2/sports"
 
 # Enforce strict >=1s minimum spacing between repeated ESPN HTTP calls from
 # this module (sports ETL is sequential, but backfills are loop-driven).
+# MinInterval reserves a slot under its lock and sleeps outside it, so
+# concurrent callers are paced without being serialized.
 _ESPN_MIN_INTERVAL_S = 1.0
-_ESPN_LOCK = threading.Lock()
-_ESPN_LAST_CALL_TS: Optional[float] = None
+_espn_pacer = MinInterval(_ESPN_MIN_INTERVAL_S)
 
 
 def _espn_min_interval() -> None:
-    global _ESPN_LAST_CALL_TS
-    with _ESPN_LOCK:
-        now = time.time()
-        if _ESPN_LAST_CALL_TS is not None:
-            elapsed = now - _ESPN_LAST_CALL_TS
-            if elapsed < _ESPN_MIN_INTERVAL_S:
-                time.sleep(_ESPN_MIN_INTERVAL_S - elapsed)
-                now = time.time()
-        _ESPN_LAST_CALL_TS = now
+    _espn_pacer.wait()
 SPORT_CONFIGS = [
     # Football
     ('football', 'nfl'),
@@ -79,22 +78,29 @@ def fetch_espn_news(sport: str, league: str, limit: int = 20) -> List[Dict[str, 
 
     try:
         _espn_min_interval()
-        response = requests.get(url, timeout=10)
+        response = get_http_session().get(url, timeout=10)
         response.raise_for_status()
         data = response.json()
 
         articles = []
+        # Parse per-article so one malformed record drops itself, not the
+        # whole league's news.
         for article in data.get('articles', [])[:limit]:
-            articles.append({
-                'title': article.get('headline'),
-                'description': article.get('description'),
-                'url': article.get('links', {}).get('web', {}).get('href'),
-                'published_at': article.get('published'),
-                'source': 'ESPN',
-                'sport': sport,
-                'league': league,
-                'image': article.get('images', [{}])[0].get('url') if article.get('images') else None
-            })
+            try:
+                images = article.get('images') or []
+                image_url = images[0].get('url') if images and isinstance(images[0], dict) else None
+                articles.append({
+                    'title': article.get('headline'),
+                    'description': article.get('description'),
+                    'url': article.get('links', {}).get('web', {}).get('href'),
+                    'published_at': article.get('published'),
+                    'source': 'ESPN',
+                    'sport': sport,
+                    'league': league,
+                    'image': image_url
+                })
+            except Exception as e:
+                print(f"Skipping malformed article for {sport}/{league}: {e}")
 
         return articles
 
@@ -124,7 +130,7 @@ def fetch_espn_teams(sport: str, league: str) -> List[Dict[str, Any]]:
 
     try:
         _espn_min_interval()
-        response = requests.get(url, timeout=10)
+        response = get_http_session().get(url, timeout=10)
         response.raise_for_status()
         data = response.json()
 
@@ -266,7 +272,7 @@ def fetch_espn_scores(sport: str, league: str, dates: Optional[str] = None) -> L
 
     try:
         _espn_min_interval()
-        response = requests.get(url, params=params, timeout=10)
+        response = get_http_session().get(url, params=params, timeout=10)
         response.raise_for_status()
         data = response.json()
 
@@ -366,7 +372,7 @@ def fetch_soccer_scores():
 
     try:
         _espn_min_interval()
-        response = requests.get(url, headers=headers, timeout=10)
+        response = get_http_session().get(url, headers=headers, timeout=10)
         response.raise_for_status()
         data = response.json()
 

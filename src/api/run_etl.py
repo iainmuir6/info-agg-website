@@ -10,7 +10,6 @@ import os
 import sys
 import json
 import argparse
-from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
@@ -23,6 +22,14 @@ _API_DIR = os.path.dirname(os.path.abspath(__file__))
 if _API_DIR not in sys.path:
     sys.path.insert(0, _API_DIR)
 
+from etl_lib import (
+    get_logger,
+    preflight_env,
+    distinct_env_values,
+    start_etl_run,
+    finish_etl_run,
+    collect_domain_errors,
+)
 from sports.sports_db_helper import sync_all_sports_data
 from markets.markets_db_helper import (
     sync_stock_data,
@@ -31,14 +38,18 @@ from markets.markets_db_helper import (
     sync_economic_indicators,
     sync_fmp_data,
     sync_etfdb_data,
-    insert_stub_stocks,
     upsert_daily_stock_quotes_batch,
-    build_stock_quote_row,
 )
 from news.news_db_helper import sync_nyt_data
 from media.media_db_helper import sync_spotify_data, sync_reddit_data
 
 load_dotenv()
+
+log = get_logger('etl')
+
+# Per-domain wall-clock ceiling. A domain that exceeds this is reported as
+# failed; the full run should finish in well under 60s (see CLAUDE.md).
+DOMAIN_TIMEOUT_S = 600
 
 BASKETS_PATH = Path(__file__).parent / 'markets' / 'baskets.json'
 
@@ -103,7 +114,14 @@ def get_supabase_client() -> Client:
 def run_sports_etl(supabase: Client) -> Dict[str, Any]:
     """Run sports ETL: ESPN news and scores (today's snapshot only)."""
     try:
-        return {'success': True, 'stats': sync_all_sports_data(supabase, news_limit_per_sport=20)}
+        stats = sync_all_sports_data(supabase, news_limit_per_sport=20)
+        # Honest success: ESPN always has news, so writing nothing at all
+        # means the fetch or the writes failed — not a quiet day.
+        ok = (stats['news_inserted'] + stats['scores_inserted']) > 0
+        result: Dict[str, Any] = {'success': ok, 'stats': stats}
+        if not ok:
+            result['error'] = 'sports wrote 0 rows (fetch or upsert failure)'
+        return result
     except Exception as e:
         return {'success': False, 'error': str(e)}
 
@@ -163,21 +181,27 @@ def run_markets_etl(
         with ThreadPoolExecutor(max_workers=2) as executor:  # 2 Finnhub keys → 2 concurrent workers
             futures = {executor.submit(_fetch_ticker, t): t for t in watchlist}
             for future in as_completed(futures):
-                ticker, st = future.result()
+                t = futures[future]
+                # One bad ticker must not discard every other ticker's
+                # already-fetched quotes and news.
+                try:
+                    ticker, st = future.result()
+                except Exception as e:
+                    total_stats['errors'].append(f"{t}: fetch failed: {e}")
+                    continue
                 total_stats['stocks_processed'] += 1
                 total_stats['errors'].extend(st.get('errors', []))
                 all_pending_news.extend(st.get('pending_news', []))
                 all_pending_quotes.extend(st.get('pending_quotes', []))
 
-        # Phase 2: single batch upsert for all quotes after all threads complete
+        # Phase 2: chunked batch upsert for all quotes after all threads complete
         if all_pending_quotes:
-            try:
-                resp = supabase.table('stock_quotes').upsert(
-                    all_pending_quotes, on_conflict='stock_id,quote_timestamp'
-                ).execute()
-                total_stats['quotes_inserted'] = len(resp.data) if resp.data else 0
-            except Exception as e:
-                total_stats['errors'].append(f"Error batch-upserting quotes: {e}")
+            inserted = upsert_daily_stock_quotes_batch(supabase, all_pending_quotes)
+            total_stats['quotes_inserted'] = inserted
+            if inserted < len(all_pending_quotes):
+                total_stats['errors'].append(
+                    f"Quote upsert wrote {inserted}/{len(all_pending_quotes)} rows"
+                )
 
         # Phase 3: single batch upsert for all company news after all threads complete
         if all_pending_news:
@@ -204,11 +228,18 @@ def run_markets_etl(
                     news_for_db.append(r)
             seen: set = set()
             deduped = [r for r in news_for_db if not (r['url'] in seen or seen.add(r['url']))]
-            try:
-                resp = supabase.table('company_news').upsert(deduped, on_conflict='url').execute()
-                total_stats['news_inserted'] = len(resp.data) if resp.data else 0
-            except Exception as e:
-                total_stats['errors'].append(f"Error batch-upserting company news: {e}")
+            # Chunked upsert so one rejected payload can't lose the whole batch
+            inserted = 0
+            for i in range(0, len(deduped), 100):
+                chunk = deduped[i:i + 100]
+                try:
+                    supabase.table('company_news').upsert(chunk, on_conflict='url').execute()
+                    inserted += len(chunk)
+                except Exception as e:
+                    total_stats['errors'].append(
+                        f"Company news chunk {i}-{i + len(chunk)} failed: {e}"
+                    )
+            total_stats['news_inserted'] = inserted
 
         # Run market-news, sentiment, and econ-indicators in parallel —
         # each hits a different API (Finnhub / AV / FMP) so there is no contention.
@@ -240,8 +271,13 @@ def run_markets_etl(
                     total_stats['economic_rows_upserted'] = s.get('rows_upserted', 0)
                     total_stats['errors'].extend(s.get('errors', []))
 
-
-        return {'success': True, 'stats': total_stats}
+        # Honest success: the daily run must always produce quotes. Zero
+        # quotes written means the fetch pool or the upsert failed wholesale.
+        ok = total_stats['quotes_inserted'] > 0
+        result: Dict[str, Any] = {'success': ok, 'stats': total_stats}
+        if not ok:
+            result['error'] = 'markets wrote 0 quote rows'
+        return result
 
     except Exception as e:
         return {'success': False, 'error': str(e)}
@@ -252,10 +288,12 @@ def run_news_etl(supabase: Client, sections: Optional[List[str]] = None) -> Dict
     if sections is None:
         sections = DEFAULT_NYT_SECTIONS
     try:
-        return {
-            'success': True, 
-            'stats': sync_nyt_data(supabase, sections=sections)
-        }
+        stats = sync_nyt_data(supabase, sections=sections)
+        ok = stats.get('articles_inserted', 0) > 0
+        result: Dict[str, Any] = {'success': ok, 'stats': stats}
+        if not ok:
+            result['error'] = 'news wrote 0 articles'
+        return result
     except Exception as e:
         return {'success': False, 'error': str(e)}
 
@@ -272,11 +310,17 @@ def run_media_etl(
         spotify_stats = sync_spotify_data(supabase)
         reddit_stats = sync_reddit_data(supabase, subreddits=subreddits)
 
-        return {'success': True, 'stats': {
+        stats = {
             'spotify_releases': spotify_stats.get('releases_inserted', 0),
             'reddit_posts': reddit_stats.get('posts_inserted', 0),
             'errors': spotify_stats.get('errors', []) + reddit_stats.get('errors', []),
-        }}
+        }
+        # Reddit is 403-prone; the domain is healthy if either source wrote.
+        ok = (stats['spotify_releases'] + stats['reddit_posts']) > 0
+        result: Dict[str, Any] = {'success': ok, 'stats': stats}
+        if not ok:
+            result['error'] = 'media wrote 0 rows from both sources'
+        return result
     except Exception as e:
         return {'success': False, 'error': str(e)}
 
@@ -354,6 +398,8 @@ def run_full_etl(
     skip_news: bool = False,
     skip_media: bool = False,
     skip_sentiment: bool = False,
+    triggered_by: str = 'manual',
+    run_cleanup: bool = False,
 ) -> Dict[str, Any]:
     """
     Run the full ETL pipeline for all data sources.
@@ -363,6 +409,14 @@ def run_full_etl(
     """
     start_time = datetime.now()
 
+    # Sentiment on <2 distinct AV keys trips the 5/min limiter into a ~60s
+    # sleep and blows the <60s run budget — skip it and say so.
+    av_keys = distinct_env_values('ALPHA_VANTAGE_API_KEY', 'ALPHA_VANTAGE_API_KEY_1',
+                                  'ALPHA_VANTAGE_API_KEY_2', 'ALPHA_VANTAGE_API_KEY_3')
+    if not skip_sentiment and not skip_markets and len(av_keys) < 2:
+        log.warning('only %d distinct Alpha Vantage key(s) — skipping sentiment', len(av_keys))
+        skip_sentiment = True
+
     results = {
         'started_at': start_time.isoformat(),
         'sports': None,
@@ -370,6 +424,14 @@ def run_full_etl(
         'news': None,
         'media': None,
     }
+
+    # Observability: record the run (best-effort — never blocks the pipeline)
+    try:
+        run_supabase = get_supabase_client()
+    except Exception as e:
+        log.warning('no Supabase client for run recording: %s', e)
+        run_supabase = None
+    run_id = start_etl_run(run_supabase, triggered_by, 'daily') if run_supabase else None
 
     domain_fns = {}
     if not skip_sports:
@@ -386,7 +448,7 @@ def run_full_etl(
         domain_fns['media'] = lambda: run_media_etl(get_supabase_client())
 
     # Run all domains in parallel. Each domain thread fetches from external APIs then
-    # writes to Supabase in a single batch upsert per table.
+    # writes to Supabase in batch upserts per table.
     domain_elapsed: Dict[str, float] = {}
 
     def _timed(domain: str, fn) -> Dict[str, Any]:
@@ -397,27 +459,68 @@ def run_full_etl(
             domain_elapsed[domain] = (datetime.now() - t0).total_seconds()
 
     if domain_fns:
-        executor = ThreadPoolExecutor(max_workers=len(domain_fns))
-        domain_futures = {
-            executor.submit(_timed, domain, fn): domain
-            for domain, fn in domain_fns.items()
-        }
-        for future in as_completed(domain_futures):
-            domain = domain_futures[future]
+        with ThreadPoolExecutor(max_workers=len(domain_fns)) as executor:
+            domain_futures = {
+                executor.submit(_timed, domain, fn): domain
+                for domain, fn in domain_fns.items()
+            }
             try:
-                results[domain] = future.result()
-                elapsed = domain_elapsed.get(domain, 0)
-                ok = results[domain].get('success', False)
-                status = 'OK  ' if ok else 'FAIL'
-                print(f"  [{status}] {domain:<8}  {elapsed:.1f}s")
-            except Exception as e:
-                results[domain] = {'success': False, 'error': str(e)}
-                print(f"  [FAIL] {domain:<8}  {str(e)[:60]}")
+                for future in as_completed(domain_futures, timeout=DOMAIN_TIMEOUT_S):
+                    domain = domain_futures[future]
+                    try:
+                        results[domain] = future.result()
+                        elapsed = domain_elapsed.get(domain, 0)
+                        ok = results[domain].get('success', False)
+                        status = 'OK  ' if ok else 'FAIL'
+                        print(f"  [{status}] {domain:<8}  {elapsed:.1f}s")
+                    except Exception as e:
+                        results[domain] = {'success': False, 'error': str(e)}
+                        print(f"  [FAIL] {domain:<8}  {str(e)[:60]}")
+            except TimeoutError:
+                for future, domain in domain_futures.items():
+                    if results.get(domain) is None:
+                        results[domain] = {
+                            'success': False,
+                            'error': f'domain exceeded {DOMAIN_TIMEOUT_S}s timeout',
+                        }
+                        print(f"  [FAIL] {domain:<8}  timed out")
 
     end_time = datetime.now()
     duration = (end_time - start_time).total_seconds()
     results['completed_at'] = end_time.isoformat()
     results['duration_seconds'] = duration
+
+    # Optional retention cleanup (daily workflow passes --cleanup)
+    cleanup_report: Optional[Dict[str, Any]] = None
+    if run_cleanup and run_supabase:
+        try:
+            resp = run_supabase.rpc('cleanup_daily').execute()
+            cleanup_report = resp.data
+            log.info('cleanup_daily: %s', json.dumps(cleanup_report))
+        except Exception as e:
+            cleanup_report = {'error': str(e)}
+            log.error('cleanup_daily failed: %s', e)
+    results['cleanup'] = cleanup_report
+
+    # Roll up run status: failed > partial > success
+    active = {d: r for d, r in results.items()
+              if d in ('sports', 'markets', 'news', 'media') and r is not None}
+    all_errors = collect_domain_errors(active)
+    if any(not r.get('success') for r in active.values()):
+        run_status = 'failed'
+    elif all_errors or (cleanup_report or {}).get('error'):
+        run_status = 'partial'
+    else:
+        run_status = 'success'
+    results['status'] = run_status
+
+    finish_etl_run(
+        run_supabase, run_id, run_status,
+        stats={d: r.get('stats') or {'error': r.get('error')} for d, r in active.items()},
+        errors=all_errors,
+        duration_seconds=duration,
+        cleanup=cleanup_report,
+    )
 
     # ── Final output table ────────────────────────────────────────────────────
     W = 60
@@ -502,8 +605,13 @@ def main():
     parser.add_argument('--test', action='store_true',
                         help='Dry-run: test every external API endpoint once and print PASS/FAIL table')
 
-    # ── Output ────────────────────────────────────────────────────────────────
+    # ── Output / observability ───────────────────────────────────────────────
     parser.add_argument('--output', metavar='FILE', help='Write results JSON to FILE')
+    parser.add_argument('--triggered-by', default='manual',
+                        choices=['manual', 'cron', 'dispatch'],
+                        help='Recorded in etl_runs (workflows pass cron/dispatch)')
+    parser.add_argument('--cleanup', action='store_true',
+                        help='Run info_agg.cleanup_daily() retention after the ETL completes')
 
     args = parser.parse_args()
 
@@ -530,6 +638,15 @@ def main():
     elif args.media_only:
         args.skip_sports = args.skip_markets = args.skip_news = True
 
+    # Preflight: fail fast on a hopeless environment, log degradations
+    fatal, env_warnings = preflight_env()
+    for w in env_warnings:
+        log.warning('preflight: %s', w)
+    if fatal:
+        for f_msg in fatal:
+            log.error('preflight: %s', f_msg)
+        sys.exit(1)
+
     results = run_full_etl(
         watchlist=args.watchlist,
         skip_sports=args.skip_sports,
@@ -537,6 +654,8 @@ def main():
         skip_news=args.skip_news,
         skip_media=args.skip_media,
         skip_sentiment=args.skip_sentiment,
+        triggered_by=args.triggered_by,
+        run_cleanup=args.cleanup,
     )
 
     if args.output:
@@ -544,12 +663,9 @@ def main():
             json.dump(results, f, indent=2, default=str)
         print(f"\nResults written to {args.output}")
 
-    any_failed = any(
-        r and not r.get('success')
-        for r in [results['sports'], results['markets'], results['news'], results['media']]
-        if r is not None
-    )
-    sys.exit(1 if any_failed else 0)
+    # Exit 1 on any hard domain failure; 'partial' (errors but data written)
+    # stays green — it is visible in etl_runs and the stdout report.
+    sys.exit(1 if results.get('status') == 'failed' else 0)
 
 
 if __name__ == "__main__":

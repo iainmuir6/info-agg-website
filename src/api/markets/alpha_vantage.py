@@ -12,10 +12,16 @@ from datetime import datetime, timedelta
 import requests
 import threading
 import os
+import sys
 import time
 
 from dotenv import load_dotenv
 load_dotenv()
+
+_PARENT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _PARENT not in sys.path:
+    sys.path.insert(0, _PARENT)
+from etl_lib import get_http_session
 
 ALPHA_VANTAGE_BASE_URL = "https://www.alphavantage.co/query"
 
@@ -27,24 +33,27 @@ _AV_RATE_LIMIT = 5     # calls per window
 _AV_WINDOW     = 60.0  # seconds
 
 def _av_rate_limit(key: str) -> None:
-    """Block only when the per-key 5 req/60 s window is full."""
+    """Block only when the per-key 5 req/60 s window is full.
+
+    Never sleeps while holding the key lock — a lock-held sleep serializes
+    every worker sharing the key (the historical ETL hang)."""
     if key not in _AV_KEY_LOCKS:
         with _AV_INIT_LOCK:
             if key not in _AV_KEY_LOCKS:
                 _AV_CALL_TIMES[key] = deque()
                 _AV_KEY_LOCKS[key] = threading.Lock()
 
-    with _AV_KEY_LOCKS[key]:
-        times = _AV_CALL_TIMES[key]
-        now = time.time()
-        while times and now - times[0] >= _AV_WINDOW:
-            times.popleft()
-        if len(times) >= _AV_RATE_LIMIT:
+    while True:
+        with _AV_KEY_LOCKS[key]:
+            times = _AV_CALL_TIMES[key]
+            now = time.time()
+            while times and now - times[0] >= _AV_WINDOW:
+                times.popleft()
+            if len(times) < _AV_RATE_LIMIT:
+                times.append(now)
+                return
             sleep_for = _AV_WINDOW - (now - times[0]) + 0.05
-            if sleep_for > 0:
-                time.sleep(sleep_for)
-
-        times.append(time.time())
+        time.sleep(max(sleep_for, 0.05))
 
 
 def get_alphavantage_api_key() -> str:
@@ -118,7 +127,7 @@ def fetch_stock_candles_av(
             'apikey': key,
         }
         try:
-            response = requests.get(ALPHA_VANTAGE_BASE_URL, params=params, timeout=15)
+            response = get_http_session().get(ALPHA_VANTAGE_BASE_URL, params=params, timeout=15)
             response.raise_for_status()
             data = response.json()
 
@@ -253,7 +262,7 @@ def fetch_crypto_candles_av(
             'apikey': key,
         }
         try:
-            response = requests.get(ALPHA_VANTAGE_BASE_URL, params=params, timeout=15)
+            response = get_http_session().get(ALPHA_VANTAGE_BASE_URL, params=params, timeout=15)
             response.raise_for_status()
             data = response.json()
 
@@ -341,7 +350,7 @@ def fetch_index_constituents(symbol: str = 'VOO', api_key: Optional[str] = None)
 
         params = {'function': 'ETF_PROFILE', 'symbol': symbol, 'apikey': key}
         try:
-            response = requests.get(ALPHA_VANTAGE_BASE_URL, params=params, timeout=10)
+            response = get_http_session().get(ALPHA_VANTAGE_BASE_URL, params=params, timeout=10)
             response.raise_for_status()
             data = response.json()
 
@@ -436,15 +445,19 @@ def fetch_news_sentiment(
         params['topics'] = topic
 
     try:
-        response = requests.get(ALPHA_VANTAGE_BASE_URL, params=params, timeout=15)
+        response = get_http_session().get(ALPHA_VANTAGE_BASE_URL, params=params, timeout=15)
         response.raise_for_status()
         data = response.json()
 
+        # Rate-limit / quota responses come back HTTP 200 with a Note or
+        # Information body. Raise so the caller records a real error —
+        # silently returning [] made "sentiment=0" look like a healthy run.
         if 'Note' in data or 'Information' in data:
-            return []
+            msg = (data.get('Note') or data.get('Information') or '')[:120]
+            raise RuntimeError(f"AV rate/quota response for topic {topic}: {msg}")
 
         if 'Error Message' in data:
-            return []
+            raise RuntimeError(f"AV error for topic {topic}: {str(data['Error Message'])[:120]}")
 
         articles = []
         for article in data.get('feed', []):
@@ -476,8 +489,10 @@ def fetch_news_sentiment(
 
         return articles
 
-    except Exception:
-        return []
+    except RuntimeError:
+        raise  # quota/API errors must reach the caller's stats
+    except Exception as e:
+        raise RuntimeError(f"AV sentiment fetch failed for topic {topic}: {e}")
 
 
 # ================================================================================================
@@ -491,7 +506,7 @@ def fetch_top_gainers_losers(api_key: Optional[str] = None) -> Optional[Dict[str
     params = {'function': 'TOP_GAINERS_LOSERS', 'apikey': api_key}
 
     try:
-        response = requests.get(ALPHA_VANTAGE_BASE_URL, params=params, timeout=10)
+        response = get_http_session().get(ALPHA_VANTAGE_BASE_URL, params=params, timeout=10)
         response.raise_for_status()
         data = response.json()
 
@@ -523,7 +538,7 @@ def fetch_earnings_calendar(horizon: str = '3month', api_key: Optional[str] = No
     params = {'function': 'EARNINGS_CALENDAR', 'horizon': horizon, 'apikey': api_key}
 
     try:
-        response = requests.get(ALPHA_VANTAGE_BASE_URL, params=params, timeout=10)
+        response = get_http_session().get(ALPHA_VANTAGE_BASE_URL, params=params, timeout=10)
         response.raise_for_status()
         data = response.json()
 
@@ -570,7 +585,7 @@ def fetch_economic_indicator(
         params['maturity'] = maturity or '10year'
 
     try:
-        response = requests.get(ALPHA_VANTAGE_BASE_URL, params=params, timeout=10)
+        response = get_http_session().get(ALPHA_VANTAGE_BASE_URL, params=params, timeout=10)
         response.raise_for_status()
         data = response.json()
 

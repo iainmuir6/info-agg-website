@@ -83,7 +83,9 @@ def _sports_news_records(league_id: str, articles: List[Dict[str, Any]]) -> List
     return records
 
 
-def _upsert_sports_news_records(supabase: Client, records: List[Dict[str, Any]]) -> int:
+def _upsert_sports_news_records(
+    supabase: Client, records: List[Dict[str, Any]], errors: Optional[List[str]] = None
+) -> int:
     if not records:
         return 0
     try:
@@ -91,6 +93,8 @@ def _upsert_sports_news_records(supabase: Client, records: List[Dict[str, Any]])
         return len(response.data) if response.data else 0
     except Exception as e:
         print(f"Error batch-upserting sports news: {e}")
+        if errors is not None:
+            errors.append(f"sports_news upsert failed ({len(records)} records): {e}")
         return 0
 
 
@@ -135,16 +139,29 @@ def _sports_score_records(league_id: str, games: List[Dict[str, Any]]) -> List[D
     return records
 
 
-def _upsert_sports_score_records(supabase: Client, records: List[Dict[str, Any]]) -> int:
+def _upsert_sports_score_records(
+    supabase: Client, records: List[Dict[str, Any]], errors: Optional[List[str]] = None
+) -> int:
     if not records:
         return 0
+    # Dedupe on the conflict key — the same event can appear twice in one
+    # command, which PostgREST rejects for the whole batch.
+    seen: set = set()
+    deduped = []
+    for r in records:
+        k = (r['league_id'], r['event_id'])
+        if k not in seen:
+            seen.add(k)
+            deduped.append(r)
     try:
         response = supabase.table('sports_scores').upsert(
-            records, on_conflict='league_id,event_id'
+            deduped, on_conflict='league_id,event_id'
         ).execute()
         return len(response.data) if response.data else 0
     except Exception as e:
         print(f"Error batch-upserting sports scores: {e}")
+        if errors is not None:
+            errors.append(f"sports_scores upsert failed ({len(deduped)} records): {e}")
         return 0
 
 
@@ -163,14 +180,20 @@ def insert_scores(supabase: Client, league_id: str, games: List[Dict[str, Any]])
     return _upsert_sports_score_records(supabase, _sports_score_records(league_id, games))
 
 
-def sync_all_sports_data(supabase: Client, news_limit_per_sport: int = 20) -> Dict[str, Any]:
+def sync_all_sports_data(
+    supabase: Client,
+    news_limit_per_sport: int = 20,
+    include_news: bool = True,
+) -> Dict[str, Any]:
     """
     Sync all sports data (news and scores) to the database
-    
+
     Args:
         supabase: Supabase client instance
         news_limit_per_sport: Maximum number of news articles per sport
-    
+        include_news: When False, fetch scoreboards only (halves the ESPN
+            call count — used by the tier-A intraday refresh)
+
     Returns:
         Dictionary with sync statistics
     """
@@ -201,8 +224,9 @@ def sync_all_sports_data(supabase: Client, news_limit_per_sport: int = 20) -> Di
 
             stats['leagues_processed'] += 1
 
-            articles = fetch_espn_news(sport, league, limit=news_limit_per_sport)
-            all_news_records.extend(_sports_news_records(league_id, articles))
+            if include_news:
+                articles = fetch_espn_news(sport, league, limit=news_limit_per_sport)
+                all_news_records.extend(_sports_news_records(league_id, articles))
 
             games = fetch_espn_scores(sport, league)
             all_score_records.extend(_sports_score_records(league_id, games))
@@ -217,10 +241,14 @@ def sync_all_sports_data(supabase: Client, news_limit_per_sport: int = 20) -> Di
             for r in all_news_records
             if r.get('url') and not (r['url'] in seen_urls or seen_urls.add(r['url']))
         ]
-        stats['news_inserted'] = _upsert_sports_news_records(supabase, deduped_news)
+        stats['news_inserted'] = _upsert_sports_news_records(
+            supabase, deduped_news, errors=stats['errors']
+        )
 
     if all_score_records:
-        stats['scores_inserted'] = _upsert_sports_score_records(supabase, all_score_records)
+        stats['scores_inserted'] = _upsert_sports_score_records(
+            supabase, all_score_records, errors=stats['errors']
+        )
 
     return stats
 

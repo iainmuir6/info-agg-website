@@ -9,14 +9,19 @@
 from typing import Dict, List, Optional, Any
 from collections import deque
 from datetime import datetime, timedelta
-import pandas as pd
 import requests
 import threading
+import sys
 import os
 import time
 
 from dotenv import load_dotenv
 load_dotenv()
+
+_PARENT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _PARENT not in sys.path:
+    sys.path.insert(0, _PARENT)
+from etl_lib import get_http_session
 
 FINNHUB_BASE_URL = "https://finnhub.io/api/v1"
 
@@ -46,24 +51,27 @@ _fh_key_rotation_lock = threading.Lock()
 
 
 def _fh_rate_limit(key: str) -> None:
-    """Sleep only if we're about to exceed 60 req/min for this Finnhub key."""
+    """Sleep only if we're about to exceed 60 req/min for this Finnhub key.
+
+    Never sleeps while holding the key lock — a lock-held sleep serializes
+    every worker sharing the key (the historical ETL hang)."""
     if key not in _FH_KEY_LOCKS:
         with _FH_INIT_LOCK:
             if key not in _FH_KEY_LOCKS:
                 _FH_CALL_TIMES[key] = deque()
                 _FH_KEY_LOCKS[key] = threading.Lock()
 
-    with _FH_KEY_LOCKS[key]:
-        times = _FH_CALL_TIMES[key]
-        now = time.time()
-        while times and now - times[0] >= _FH_WINDOW:
-            times.popleft()
-        if len(times) >= _FH_RATE_LIMIT:
+    while True:
+        with _FH_KEY_LOCKS[key]:
+            times = _FH_CALL_TIMES[key]
+            now = time.time()
+            while times and now - times[0] >= _FH_WINDOW:
+                times.popleft()
+            if len(times) < _FH_RATE_LIMIT:
+                times.append(now)
+                return
             sleep_for = _FH_WINDOW - (now - times[0]) + 0.05
-            if sleep_for > 0:
-                time.sleep(sleep_for)
-
-        times.append(time.time())
+        time.sleep(max(sleep_for, 0.05))
 
 
 def get_finnhub_api_keys() -> List[str]:
@@ -103,7 +111,7 @@ def fetch_stock_quote(ticker: str, api_key: Optional[str] = None) -> Optional[Di
 
     try:
         _fh_rate_limit(api_key)
-        response = requests.get(url, params=params, timeout=10)
+        response = get_http_session().get(url, params=params, timeout=10)
         response.raise_for_status()
         data = response.json()
 
@@ -180,7 +188,7 @@ def fetch_company_profile(ticker: str, api_key: Optional[str] = None) -> Optiona
 
     try:
         _fh_rate_limit(api_key)
-        response = requests.get(url, params=params, timeout=10)
+        response = get_http_session().get(url, params=params, timeout=10)
         response.raise_for_status()
         data = response.json()
 
@@ -224,7 +232,7 @@ def fetch_etf_profile(ticker: str, api_key: Optional[str] = None) -> Optional[Di
 
     try:
         _fh_rate_limit(api_key)
-        response = requests.get(url, params=params, timeout=10)
+        response = get_http_session().get(url, params=params, timeout=10)
         response.raise_for_status()
         data = response.json()
 
@@ -276,7 +284,7 @@ def fetch_company_news(
 
     try:
         _fh_rate_limit(api_key)
-        response = requests.get(url, params=params, timeout=10)
+        response = get_http_session().get(url, params=params, timeout=10)
         response.raise_for_status()
         data = response.json()
 
@@ -313,7 +321,7 @@ def fetch_market_news(category: str = 'general', min_id: int = 0, api_key: Optio
 
     try:
         _fh_rate_limit(api_key)
-        response = requests.get(url, params=params, timeout=10)
+        response = get_http_session().get(url, params=params, timeout=10)
         response.raise_for_status()
         data = response.json()
 
@@ -350,7 +358,7 @@ def fetch_recommendation_trends(ticker: str, api_key: Optional[str] = None) -> L
 
     try:
         _fh_rate_limit(api_key)
-        response = requests.get(url, params=params, timeout=10)
+        response = get_http_session().get(url, params=params, timeout=10)
         response.raise_for_status()
         data = response.json()
 
@@ -386,7 +394,7 @@ def fetch_country_metadata(api_key: Optional[str] = None) -> List[Dict[str, Any]
 
     try:
         _fh_rate_limit(api_key)
-        response = requests.get(url, params=params, timeout=10)
+        response = get_http_session().get(url, params=params, timeout=10)
         response.raise_for_status()
         data = response.json()
 
@@ -422,7 +430,7 @@ def fetch_usa_spending(api_key: Optional[str] = None) -> Optional[Dict[str, Any]
 
     try:
         _fh_rate_limit(api_key)
-        response = requests.get(url, params=params, timeout=10)
+        response = get_http_session().get(url, params=params, timeout=10)
         response.raise_for_status()
         return {'data': response.json(), 'fetched_at': datetime.now().isoformat()}
 
@@ -435,6 +443,7 @@ def fetch_usa_spending(api_key: Optional[str] = None) -> Optional[Dict[str, Any]
 
 
 if __name__ == "__main__":
+    import pandas as pd
     print("=" * 60)
     print("Testing Finnhub API")
     print("=" * 60)
