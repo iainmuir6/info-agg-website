@@ -106,16 +106,81 @@ adopt `pip-tools`/`uv` for a lockfile. Faster installs, fewer flaky scheduled ru
 
 ---
 
+## How long the ETL actually takes (measured)
+
+The RUNBOOK's "5–7 minutes" is stale — it predates the parallel fan-out (the RUNBOOK still
+says domains run "sequentially"). Measured from GitHub Actions logs (run 30276532671,
+2026-07-27, representative of the last ~2 weeks):
+
+| Domain | Elapsed | Long pole |
+|---|---|---|
+| markets | 30.2s | 49 tickers over 2 Finnhub workers + 13 serial FMP quotes (1s pacing) + post-phase (econ 8 FMP calls @1s, sentiment, market news) |
+| sports | 19.7s | 18 ESPN calls at a self-imposed ≥1s interval + 0.3s/league |
+| news | 11.2s | 10 NYT calls with 1.1s sleeps |
+| media | 2.9s | Spotify only (Reddit 403-disabled) |
+| **Total (parallel)** | **30.2s** | markets is the critical path |
+
+The ETL *step* has been 28–31s on every recent run; total job time (61–75s typical) is
+checkout + Python setup + `pip install` overhead, which section 0.9 (slim deps) shrinks.
+The CLAUDE.md <60s requirement is currently being met.
+
+Known conditions that would blow the budget:
+- **Fewer than 2 distinct Alpha Vantage keys.** 10 sentiment topics are split across keys;
+  the AV limiter allows 5 calls/min/key. With ≥2 keys no one sleeps; with 1 key the limiter
+  sleeps ~60s mid-run (→ ~90s total). Note: `ALPHA_VANTAGE_API_KEY` (unsuffixed) is **empty**
+  in the workflow env — only `_1`/`_2` are set. Preflight validation (0.7) should assert ≥2
+  distinct AV keys.
+- Lock-held rate-limiter sleeps (ESPN/NYT/FMP) cost nothing today because each module has a
+  single serial caller in the daily run, but any added concurrency re-introduces the
+  historical serialization hang — fix per 0.8.
+- No retries means failures are at least *fast* — but a hung endpoint burns its 10–15s
+  timeout per call with no circuit breaker.
+
+Two silent failures visible in that same "all green" run, proving the Phase 0 case:
+`sentiment=0` (all 10 AV topic calls returned nothing — swallowed `Note`/`Information`
+responses) and `reddit=0` (403 kill-switch tripped), both reported as `[ OK ]`.
+
+---
+
 ## Phase 1 — Scheduling cadence + a site that refreshes itself
 
-### 1.1 Intraday quick-refresh schedule
-Real data cadence today is ~24h. `run_quick_refresh.py` (sports + news + quotes only) already
-exists for exactly this.
+### 1.1 Tiered refresh schedule, driven by per-API budgets
+Real data cadence today is ~24h. Which sources can refresh often is dictated by daily caps
+(from `docs/RATE_LIMITS.md`, verified against the fetcher code):
 
-**Action:** second GitHub Actions job running quick refresh every 30 min during US market/sports
-hours (e.g. `*/30 13-23 * * 1-5` UTC + evenings/weekends for sports), sharing the concurrency
-group with the daily job. This is what makes "auto-refreshing tickers" worth building — the
-ticker can only be as live as the data behind it.
+| API | Limit | Verdict |
+|---|---|---|
+| ESPN (unofficial) | none known; self-throttled 1s | **unrestricted** |
+| Finnhub | 60/min/key × 2 keys, **no daily cap** | **unrestricted** (per-minute only) |
+| Spotify | effectively none | unrestricted, but content changes weekly |
+| NYT | 500/day/key × 2, 5/min/key | ~1000/day → hourly is trivial |
+| Reddit (unauth) | informal 60/min, 403-prone | hourly at best; needs OAuth to be reliable |
+| FMP | **250/day total** | scarce — ration it |
+| Alpha Vantage | **25/day/key (~50–75)** | daily only |
+
+**Tier A — every 15 min** (single new workflow, concurrency-guarded), ~48 calls/run, ~15s:
+- Finnhub quotes: 10 stocks + 23 ETFs + 3 crypto = 36 calls (no daily cap; 36 calls/run is
+  far under the 120/min two-key ceiling)
+- ESPN scoreboards: 9 calls
+- Finnhub market news: 3 calls
+
+**Tier B — hourly, ~06:00–20:00 ET (14 runs/day):**
+- NYT top stories: 10 calls → 140/day vs 1000 budget
+- ESPN news: 9 calls
+- FMP forex + commodity quotes: 13 calls → 182/day, leaving ~60/day headroom under the
+  250 cap after econ's 8. **These 13 FMP calls must stay out of Tier A** — at 15-min cadence
+  they'd need ~1,250/day. `run_quick_refresh.py` currently includes them (it quotes every
+  basket ticker); add an asset-type filter.
+- Reddit hot posts: 8 calls (after moving to OAuth; skip until then)
+
+**Tier C — daily (the existing job, unchanged cadence):**
+- AV sentiment (10 calls), FMP economic indicators (8), Spotify new releases (2),
+  full company-news sweep.
+
+Implementation: parameterize the quick-refresh entry point by tier
+(`--tier a|b`), one new workflow with two cron expressions, shared `concurrency` group with
+the daily job, and per-tier rows in `etl_runs`. Tier A keeps the site's quotes and scores at
+most 15 minutes stale — which is what makes the auto-refreshing ticker (1.3) meaningful.
 
 ### 1.2 Rework the admin ETL trigger (it can't work on Vercel either)
 `POST /api/etl` also spawns Python via `execFile` — same fundamental problem as the cron route.
