@@ -9,8 +9,6 @@ import {
   TICKER_ETFS,
   type TickerItem,
 } from "@/components/news-ticker-client";
-import { isSuperAdmin } from "@/lib/rbac";
-import { EtlTriggerButton } from "@/components/etl-trigger";
 
 // Initial ticker snapshot — cached and revalidated by the ETL webhook
 // (POST /api/revalidate); the client component then polls on its own.
@@ -85,11 +83,6 @@ const NAV_LINKS = [
   { href: "/media", label: "MEDIA", accent: "hsl(340 78% 50%)" },
 ];
 
-const AUTH_NAV_LINKS = [
-  { href: "/watchlist", label: "WATCHLIST", accent: "hsl(310 78% 50%)", adminOnly: false },
-  { href: "/dashboard", label: "DASHBOARD", accent: "hsl(45 90% 52%)", adminOnly: true },
-];
-
 export default async function PublicLayout({ children }: { children: React.ReactNode }) {
   const now = new Date();
   const dateStr = now
@@ -104,7 +97,6 @@ export default async function PublicLayout({ children }: { children: React.React
   const supabase = await createClient();
   const { data: claimsData } = await supabase.auth.getClaims();
   const isAuthenticated = !!claimsData?.claims;
-  const isAdmin = isAuthenticated ? await isSuperAdmin() : false;
   const etlHealth = await getEtlHealth();
 
   return (
@@ -141,7 +133,6 @@ export default async function PublicLayout({ children }: { children: React.React
               </Link>
             ) : (
               <>
-                {isAdmin && <EtlTriggerButton />}
                 <Link
                   href="/profile"
                   className="flex items-center justify-center w-7 h-7 rounded-full border border-border text-[10px] font-mono font-bold tracking-wider text-muted-foreground hover:text-foreground hover:border-foreground transition-colors"
@@ -165,19 +156,6 @@ export default async function PublicLayout({ children }: { children: React.React
               Overview
             </Link>
             {NAV_LINKS.map((item) => (
-              <Link
-                key={item.href}
-                href={item.href}
-                className="relative px-4 py-2.5 text-xs font-mono tracking-widest uppercase text-muted-foreground hover:text-foreground transition-colors shrink-0 group"
-              >
-                {item.label}
-                <span
-                  className="absolute bottom-0 left-0 right-0 h-0.5 scale-x-0 group-hover:scale-x-100 transition-transform origin-left"
-                  style={{ backgroundColor: item.accent }}
-                />
-              </Link>
-            ))}
-            {isAuthenticated && AUTH_NAV_LINKS.filter((l) => !l.adminOnly || isAdmin).map((item) => (
               <Link
                 key={item.href}
                 href={item.href}

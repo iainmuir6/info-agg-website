@@ -1,5 +1,6 @@
 import { createClient } from "@/lib/supabase/server";
 import { notFound } from "next/navigation";
+import { FavoriteTeamButton } from "@/components/favorite-team-button";
 import Link from "next/link";
 
 type Score = {
@@ -128,6 +129,10 @@ export default async function TeamDetailPage({
 
   if (!leagueRow) notFound();
 
+  // Signed-in state + whether this team is already favorited
+  const { data: claimsData } = await supabase.auth.getClaims();
+  const signedIn = !!claimsData?.claims;
+
   // Fetch all games for this league, filter client-side for this team
   const [allGamesRes, newsRes] = await Promise.all([
     supabase
@@ -152,6 +157,17 @@ export default async function TeamDetailPage({
   );
 
   const displayTeamName = canonicalTeamNameFromGames(teamGames, teamKey) ?? teamDecoded;
+
+  let initialFavorited = false;
+  if (signedIn) {
+    const { data: fav } = await supabase
+      .from("watchlist_teams")
+      .select("id")
+      .eq("league_id", leagueRow.id)
+      .eq("team_name", displayTeamName)
+      .maybeSingle();
+    initialFavorited = !!fav;
+  }
 
   const now = new Date();
 
@@ -243,6 +259,12 @@ export default async function TeamDetailPage({
               <span className="text-[10px] font-mono text-muted-foreground capitalize">
                 {leagueRow.sport}
               </span>
+              <FavoriteTeamButton
+                leagueId={leagueRow.id}
+                teamName={displayTeamName}
+                initialFavorited={initialFavorited}
+                signedIn={signedIn}
+              />
             </div>
           </div>
 
