@@ -1,6 +1,7 @@
+import { Fragment } from "react";
 import { createClient } from "@/lib/supabase/server";
 import Link from "next/link";
-import { Flag, Globe } from "lucide-react";
+import { DEFAULT_HOME_ORDER, type HomeSectionKey } from "@/lib/home-sections";
 import { CollapsibleCard } from "@/components/collapsible-card";
 import { MasonryColumns } from "@/components/masonry-columns";
 
@@ -39,6 +40,7 @@ type LeagueRow = {
 };
 
 type ScoreRowType = {
+  event_id: string | null;
   home_team: string;
   away_team: string;
   home_abbrev: string | null;
@@ -261,18 +263,6 @@ const TEAM_ABBREVS: Record<string, string> = {
 
 // ─── Height helpers ───────────────────────────────────────────────────────────
 
-function tickerCardHeight(count: number): "half" | "full" {
-  return Math.ceil(count / 3) * 28 < 144 ? "half" : "full";
-}
-
-function newsCardHeight(count: number): "half" | "full" {
-  return count * 32 < 144 ? "half" : "full";
-}
-
-function indicatorCardHeight(count: number): "half" | "full" {
-  return count * 28 + 40 < 144 ? "half" : "full";
-}
-
 // ─── Data fetchers ────────────────────────────────────────────────────────────
 
 async function getCoreAssetsByType(supabase: Awaited<ReturnType<typeof createClient>>) {
@@ -443,7 +433,7 @@ async function getLeagueSnapshot(
     const [scoresRes, newsRes] = await Promise.all([
       supabase
         .from("sports_scores")
-        .select("home_team, away_team, home_abbrev, away_abbrev, home_score, away_score, status, status_detail, game_date")
+        .select("event_id, home_team, away_team, home_abbrev, away_abbrev, home_score, away_score, status, status_detail, game_date")
         .eq("league_id", leagueRow.id)
         .order("game_date", { ascending: false })
         .limit(scoreLimit * 2),
@@ -718,13 +708,30 @@ function ScoreCell({ game, leagueSlug }: { game: ScoreRowType; leagueSlug: strin
         })
       : null;
 
+  // ESPN gamecast URL — soccer leagues (dotted slugs like eng.1) use /soccer/match/
+  const espnUrl = game.event_id
+    ? leagueSlug.includes(".")
+      ? `https://www.espn.com/soccer/match/_/gameId/${game.event_id}`
+      : `https://www.espn.com/${leagueSlug}/game/_/gameId/${game.event_id}`
+    : null;
+
   return (
-    <div className="flex items-center gap-2 px-2 py-1 border-b border-border last:border-0 hover:bg-secondary/50 transition-colors text-[10px] font-mono leading-tight">
-      <div className="grid shrink-0 items-center gap-x-1.5 [grid-template-columns:4ch_2.5ch_1ch_2.5ch_4ch]">
+    <div className="relative flex items-center gap-1.5 px-1.5 py-1 border-b border-border hover:bg-secondary/50 transition-colors text-[9px] font-mono leading-tight">
+      {/* Stretched link: the row body opens the ESPN game page; team links sit above it */}
+      {espnUrl && (
+        <a
+          href={espnUrl}
+          target="_blank"
+          rel="noopener noreferrer"
+          aria-label="Open game on ESPN"
+          className="absolute inset-0"
+        />
+      )}
+      <div className="grid shrink-0 items-center gap-x-1 [grid-template-columns:4ch_2.5ch_1ch_2.5ch_4ch]">
         <Link
           href={`/sports/${leagueSlug}/${encodeURIComponent(game.away_team)}`}
           title={game.away_team}
-          className={`${teamCls(awayWon)} text-left`}
+          className={`relative z-10 ${teamCls(awayWon)} text-left`}
         >
           {awayAbbr}
         </Link>
@@ -738,7 +745,7 @@ function ScoreCell({ game, leagueSlug }: { game: ScoreRowType; leagueSlug: strin
         <Link
           href={`/sports/${leagueSlug}/${encodeURIComponent(game.home_team)}`}
           title={game.home_team}
-          className={`${teamCls(homeWon)} text-left`}
+          className={`relative z-10 ${teamCls(homeWon)} text-left`}
         >
           {homeAbbr}
         </Link>
@@ -747,12 +754,12 @@ function ScoreCell({ game, leagueSlug }: { game: ScoreRowType; leagueSlug: strin
       {isLive ? (
         <div className="flex items-center gap-1 shrink-0">
           <div className="w-1.5 h-1.5 rounded-full animate-pulse-dot shrink-0" style={{ backgroundColor: "hsl(142 65% 42%)" }} />
-          <span className="text-[8px] leading-none" style={{ color: "hsl(142 65% 42%)" }}>
+          <span className="text-[7px] leading-none" style={{ color: "hsl(142 65% 42%)" }}>
             {game.status_detail ?? "LIVE"}
           </span>
         </div>
       ) : (
-        <span className="text-[8px] leading-none text-muted-foreground uppercase shrink-0">
+        <span className="text-[7px] leading-none text-muted-foreground uppercase shrink-0">
           {isFinal ? "Final" : tipOff ?? "Sched"}
         </span>
       )}
@@ -817,23 +824,8 @@ export default async function CommandCenter() {
     getLeagueSnapshot(supabase, "basketball", "wnba"),
   ]);
 
-  // ── NYT splits ────────────────────────────────────────────────────────────
-  const NYT_US_SECTIONS  = new Set(["us", "politics", "nyregion", "national"]);
-  const NYT_WORLD_SECTIONS = new Set(["world"]);
-
-  // Caps keep every card short enough to render in full — cards no longer
-  // scroll internally; the "All →" link is the path to the complete list.
-  const usStories    = nytAll.filter((a) => NYT_US_SECTIONS.has((a.section ?? "").toLowerCase())).slice(0, 8);
-  const worldStories = nytAll.filter((a) => NYT_WORLD_SECTIONS.has((a.section ?? "").toLowerCase())).slice(0, 8);
-  const otherStories = nytAll
-    .filter(
-      (a) =>
-        !NYT_US_SECTIONS.has((a.section ?? "").toLowerCase()) &&
-        !NYT_WORLD_SECTIONS.has((a.section ?? "").toLowerCase())
-    )
-    .slice(0, 8);
-
-  // ── NYT digest: one top story per section ────────────────────────────────
+  // ── NYT digest: one top story per section — the single NYT card.
+  // (The former US / World / Today cards duplicated these articles.)
   const NYT_SECTION_ORDER: Record<string, number> = {
     us: 1, national: 2, politics: 3, nyregion: 4,
     world: 5, business: 6, technology: 7, science: 8,
@@ -849,7 +841,7 @@ export default async function CommandCenter() {
   }
   const nytDigest = Array.from(nytBySectionMap.entries())
     .sort(([a], [b]) => (NYT_SECTION_ORDER[a] ?? 99) - (NYT_SECTION_ORDER[b] ?? 99))
-    .slice(0, 10);
+    .slice(0, 12);
 
   // ── Economic indicators grouped ───────────────────────────────────────────
   const econByGroup = econIndicators.reduce<Record<string, EconRow[]>>((acc, row) => {
@@ -880,400 +872,345 @@ export default async function CommandCenter() {
     nba, mlb, nfl, nhl, ncaab, ncaaf, wnba,
   };
 
-  return (
-    <div className="px-3 md:px-4 py-3 md:py-4">
-      <MasonryColumns>
+  // ── Personalization: section order + hidden sections ─────────────────────
+  const { data: pageClaims } = await supabase.auth.getClaims();
+  let userOrder: string[] | null = null;
+  let hiddenSections: string[] = [];
+  if (pageClaims?.claims) {
+    const { data: prefs } = await supabase
+      .from("user_home_prefs")
+      .select("section_order, hidden_sections")
+      .eq("user_id", pageClaims.claims.sub as string)
+      .maybeSingle();
+    userOrder = prefs?.section_order ?? null;
+    hiddenSections = prefs?.hidden_sections ?? [];
+  }
 
-        {/* ── Row 1: Asset type watchlist cards ─────────────────────────── */}
+  // ── Card registry: every card is tagged with a section key so user prefs
+  //    can reorder and hide sections. Default order interleaves markets /
+  //    news / sports (DEFAULT_HOME_ORDER).
+  const cards: { section: HomeSectionKey; node: React.ReactNode }[] = [];
 
-        {assets.stocks.length > 0 && (
-          <CollapsibleCard
-            label="Stocks"
-            accent="hsl(142 65% 42%)"
-            href="/markets"
-            count={assets.stocks.length}
-            summary={`${assets.stocks.length} stocks`}
-            contentHeight={tickerCardHeight(assets.stocks.length)}
-          >
-            <TickerGrid rows={assets.stocks} href="/markets" />
-          </CollapsibleCard>
-        )}
+  if (assets.stocks.length > 0) {
+    cards.push({ section: "stocks", node: (
+      <CollapsibleCard label="Stocks" accent="hsl(142 65% 42%)" href="/markets"
+        count={assets.stocks.length} summary={`${assets.stocks.length} stocks`}>
+        <TickerGrid rows={assets.stocks} href="/markets" />
+      </CollapsibleCard>
+    )});
+  }
 
-        {assets.etfs.length > 0 && (
-          <CollapsibleCard
-            label="ETFs"
-            accent="hsl(142 65% 42%)"
-            href="/markets"
-            count={assets.etfs.length}
-            summary={`${assets.etfs.length} ETFs`}
-            contentHeight={tickerCardHeight(assets.etfs.length)}
-          >
-            <TickerGrid rows={assets.etfs} href="/markets" />
-          </CollapsibleCard>
-        )}
+  if (nytDigest.length > 0) {
+    cards.push({ section: "nyt", node: (
+      <CollapsibleCard label="NYT — Top Stories" accent="hsl(220 90% 52%)" href="/news"
+        count={nytDigest.length} summary={`${nytDigest.length} sections`}>
+        <div>
+          {nytDigest.map(([sectionKey, article]) => (
+            <a key={article.id} href={article.url} target="_blank" rel="noopener noreferrer"
+              className="flex items-center gap-1.5 px-2 py-1 border-b border-border last:border-0 hover:bg-secondary/50 transition-colors group">
+              <HubCap label={sectionKey} />
+              <p className="text-[10px] font-semibold leading-tight line-clamp-1 group-hover:underline">
+                {article.title}
+              </p>
+            </a>
+          ))}
+        </div>
+      </CollapsibleCard>
+    )});
+  }
 
-        {assets.forex.length > 0 && (
-          <CollapsibleCard
-            label="FX"
-            accent="hsl(142 65% 42%)"
-            href="/markets"
-            count={assets.forex.length}
-            summary={`${assets.forex.length} pairs`}
-            contentHeight={tickerCardHeight(assets.forex.length)}
-          >
-            <TickerGrid rows={assets.forex} href="/markets" />
-          </CollapsibleCard>
-        )}
+  // Sports — one card per in-season league
+  for (const [key, snapshot] of Object.entries(sportsSnapshots)) {
+    const snap = snapshot as LeagueSnapshot;
+    if (!snap.league) continue;
 
-        {assets.commodities.length > 0 && (
-          <CollapsibleCard
-            label="Commodities"
-            accent="hsl(45 93% 47%)"
-            href="/markets"
-            count={assets.commodities.length}
-            summary={`${assets.commodities.length} commodities`}
-            contentHeight={tickerCardHeight(assets.commodities.length)}
-          >
-            <TickerGrid rows={assets.commodities} href="/markets" />
-          </CollapsibleCard>
-        )}
+    // In-season gate: hide leagues with no games within ±10 days
+    const IN_SEASON_WINDOW_MS = 10 * 24 * 3600 * 1000;
+    const nowMs = Date.now();
+    const inSeason = [...snap.recentGames, ...snap.upcomingGames].some((g) => {
+      const t = g.game_date ? new Date(g.game_date).getTime() : NaN;
+      return Number.isFinite(t) && Math.abs(nowMs - t) <= IN_SEASON_WINDOW_MS;
+    });
+    if (!inSeason) continue;
 
-        {econIndicators.length > 0 && (
-          <CollapsibleCard
-            label="Economic Indicators"
-            accent="hsl(142 65% 42%)"
-            href="/markets"
-            count={econIndicators.length}
-            summary={`${econIndicators.length} indicators`}
-            contentHeight={indicatorCardHeight(econIndicators.length)}
-          >
-            <div>
-              {Object.entries(econByGroup).map(([group, rows]) => (
-                <div key={group}>
-                  <p className="px-2 py-0.5 text-[8px] font-mono uppercase tracking-widest text-muted-foreground bg-secondary/40 border-b border-border sticky top-0">
-                    {group}
-                  </p>
-                  {rows.map((row) => {
-                    const cfg = ECON_CONFIG[row.indicator_name];
-                    return (
-                      <div
-                        key={row.indicator_name}
-                        className="flex items-center justify-between px-2 py-1 border-b border-border last:border-0 hover:bg-secondary/50"
-                      >
-                        <span className="text-[10px] font-mono text-muted-foreground">
-                          {cfg?.label ?? row.indicator_name}
-                        </span>
-                        <div className="flex items-center gap-2 shrink-0">
-                          <span className="text-[10px] font-mono font-bold tabular-nums">
-                            {cfg ? cfg.fmt(row.value) : row.value.toFixed(2)}
-                          </span>
-                          <span className="text-[8px] font-mono text-muted-foreground">
-                            {new Date(row.date).toLocaleDateString("en-US", { month: "short", day: "numeric" })}
-                          </span>
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
+    const games = [...snap.recentGames.slice(0, 4), ...snap.upcomingGames.slice(0, 2)];
+    const news = snap.news.slice(0, 3);
+    const sportsSummary = [
+      games.length > 0 && `${games.length} games`,
+      news.length > 0 && `${news.length} news`,
+    ].filter(Boolean).join(" · ");
+
+    cards.push({ section: "sports", node: (
+      <CollapsibleCard key={key}
+        label={SPORTS_LABEL[key] ?? snap.league.display_name}
+        accent="hsl(25 95% 50%)" href="/sports"
+        count={games.length || undefined} summary={sportsSummary}
+        headerExtra={
+          <span className="text-[7px] font-mono leading-none px-1 py-0.5 rounded bg-secondary text-muted-foreground">
+            ESPN
+          </span>
+        }>
+        <div>
+          {games.length > 0 && (
+            <div className="grid grid-cols-1 min-[380px]:grid-cols-2 min-[380px]:divide-x divide-border border-b border-border">
+              {games.map((g, i) => (
+                <ScoreCell key={i} game={g} leagueSlug={snap.league!.league} />
               ))}
             </div>
-          </CollapsibleCard>
-        )}
-
-        {/* ── Row 2: Market news ─────────────────────────────────────────── */}
-
-        {(hasCryptoQuotes || hasCryptoHeadlines) && (
-          <CollapsibleCard
-            label="Crypto"
-            accent="hsl(45 93% 47%)"
-            href="/markets"
-            count={hasCryptoQuotes ? assets.crypto.length : undefined}
-            summary={`${assets.crypto.length} coins · ${cryptoHeadlines.length} headlines`}
-            contentHeight={cryptoItemCount * 30 < 144 ? "half" : "full"}
-          >
+          )}
+          {news.length > 0 && (
             <div>
-              {hasCryptoQuotes && (
-                <div className="border-b border-border">
-                  <TickerGrid rows={assets.crypto} href="/markets" />
-                </div>
-              )}
-              {hasCryptoHeadlines && (
-                <div>
-                  {cryptoHeadlines.map((item: any) => (
-                    <a
-                      key={item.id}
-                      href={item.url}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="flex items-center gap-1.5 px-2 py-1 border-b border-border last:border-0 hover:bg-secondary/50 transition-colors group"
-                    >
-                      {item.source && <HubCap label={item.source} />}
-                      <p className="text-[10px] font-medium leading-tight line-clamp-1 group-hover:underline">
-                        {item.headline}
-                      </p>
-                    </a>
-                  ))}
-                </div>
-              )}
-            </div>
-          </CollapsibleCard>
-        )}
-
-        {companyNews.length > 0 && (
-          <CollapsibleCard
-            label="Stock News"
-            accent="hsl(142 65% 42%)"
-            href="/markets"
-            count={companyNews.length}
-            summary={`${companyNews.length} articles`}
-            contentHeight={newsCardHeight(companyNews.length)}
-          >
-            <div>
-              {companyNews.map((item) => (
-                <a
-                  key={item.id}
-                  href={item.url}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="flex items-center gap-1.5 px-2 py-1 border-b border-border last:border-0 hover:bg-secondary/50 transition-colors group"
-                >
-                  {item.source && <HubCap label={item.source} />}
-                  <div className="min-w-0">
-                    <p className="text-[10px] font-medium leading-tight line-clamp-1 group-hover:underline">
-                      {item.headline}
-                    </p>
-                    {(item.related_tickers ?? []).length > 0 && (
-                      <div className="flex items-center gap-1 flex-wrap mt-0.5">
-                        {(item.related_tickers ?? []).slice(0, 3).map((t) => (
-                          <Link
-                            key={t}
-                            href={`/markets/${t}`}
-                            className="text-[8px] font-mono px-0.5 bg-secondary leading-none hover:bg-border"
-                          >
-                            {t}
-                          </Link>
-                        ))}
-                      </div>
-                    )}
-                  </div>
+              {news.map((n) => (
+                <a key={n.id} href={n.url} target="_blank" rel="noopener noreferrer"
+                  className="block px-2 py-1 border-b border-border last:border-0 text-[10px] leading-tight hover:underline hover:bg-secondary/50 transition-colors">
+                  <span className="line-clamp-2">{n.title}</span>
                 </a>
               ))}
             </div>
-          </CollapsibleCard>
-        )}
+          )}
+        </div>
+      </CollapsibleCard>
+    )});
+  }
 
-        {marketNews.length > 0 && (
-          <CollapsibleCard
-            label="Market News"
-            accent="hsl(142 65% 42%)"
-            href="/markets"
-            count={marketNews.length}
-            summary={`${marketNews.length} articles`}
-            contentHeight={newsCardHeight(marketNews.length)}
-          >
+  if (marketNews.length > 0) {
+    cards.push({ section: "market_news", node: (
+      <CollapsibleCard label="Market News" accent="hsl(142 65% 42%)" href="/markets"
+        count={marketNews.length} summary={`${marketNews.length} articles`}>
+        <div>
+          {/* eslint-disable-next-line @typescript-eslint/no-explicit-any */}
+          {marketNews.map((item: any) => (
+            <a key={item.id} href={item.url} target="_blank" rel="noopener noreferrer"
+              className="flex items-center gap-1.5 px-2 py-1 border-b border-border last:border-0 hover:bg-secondary/50 transition-colors group">
+              {/* Two stacked hub caps: category on top, source below */}
+              <div className="flex flex-col gap-0.5 shrink-0 items-center">
+                {item.category && <HubCap label={item.category} />}
+                {item.source && <HubCap label={item.source} />}
+              </div>
+              {/* Cell is two lines tall because of the stacked pills — let the
+                  headline use both lines instead of truncating at one */}
+              <p className="text-[10px] font-medium leading-tight line-clamp-2 group-hover:underline">
+                {item.headline}
+              </p>
+            </a>
+          ))}
+        </div>
+      </CollapsibleCard>
+    )});
+  }
+
+  if (assets.etfs.length > 0) {
+    cards.push({ section: "etfs", node: (
+      <CollapsibleCard label="ETFs" accent="hsl(142 65% 42%)" href="/markets"
+        count={assets.etfs.length} summary={`${assets.etfs.length} ETFs`}>
+        <TickerGrid rows={assets.etfs} href="/markets" />
+      </CollapsibleCard>
+    )});
+  }
+
+  if (econIndicators.length > 0) {
+    const yieldRows = econByGroup["Yield Curve"] ?? [];
+    const macroRows = econByGroup["Macro"] ?? [];
+    const otherRows = Object.entries(econByGroup).filter(([g]) => g !== "Yield Curve" && g !== "Macro");
+    cards.push({ section: "econ", node: (
+      <CollapsibleCard label="Economic Indicators" accent="hsl(142 65% 42%)" href="/economy"
+        count={econIndicators.length} summary={`${econIndicators.length} indicators`}>
+        <div>
+          {yieldRows.length > 0 && (
             <div>
-              {marketNews.map((item: any) => (
-                <a
-                  key={item.id}
-                  href={item.url}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="flex items-center gap-1.5 px-2 py-1 border-b border-border last:border-0 hover:bg-secondary/50 transition-colors group"
-                >
-                  {/* Two stacked hub caps: category on top, source below */}
-                  <div className="flex flex-col gap-0.5 shrink-0 items-center">
-                    {item.category && <HubCap label={item.category} />}
-                    {item.source && <HubCap label={item.source} />}
+              <p className="px-2 py-0.5 text-[8px] font-mono uppercase tracking-widest text-muted-foreground bg-secondary/40 border-b border-border">
+                Yield Curve
+              </p>
+              {/* One horizontal row: maturity above, rate below */}
+              <div className="flex divide-x divide-border border-b border-border">
+                {yieldRows.map((row) => (
+                  <div key={row.indicator_name} className="flex-1 px-1 py-1 text-center min-w-0">
+                    <p className="text-[8px] font-mono text-muted-foreground leading-none">
+                      {ECON_CONFIG[row.indicator_name]?.label ?? row.indicator_name}
+                    </p>
+                    <p className="text-[10px] font-mono font-bold tabular-nums leading-tight mt-0.5">
+                      {row.value.toFixed(2)}
+                    </p>
                   </div>
+                ))}
+              </div>
+            </div>
+          )}
+          {macroRows.length > 0 && (
+            <div>
+              <p className="px-2 py-0.5 text-[8px] font-mono uppercase tracking-widest text-muted-foreground bg-secondary/40 border-b border-border">
+                Macro
+              </p>
+              {/* Two-column grid halves the vertical footprint */}
+              <div className="grid grid-cols-2">
+                {macroRows.map((row) => {
+                  const cfg = ECON_CONFIG[row.indicator_name];
+                  return (
+                    <div key={row.indicator_name}
+                      className="flex items-center justify-between gap-1 px-2 py-1 border-b border-r border-border min-w-0">
+                      <span className="text-[9px] font-mono text-muted-foreground truncate">
+                        {cfg?.label ?? row.indicator_name}
+                      </span>
+                      <span className="text-[9px] font-mono font-bold tabular-nums shrink-0">
+                        {cfg ? cfg.fmt(row.value) : row.value.toFixed(2)}
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+          {otherRows.map(([group, rows]) => (
+            <div key={group}>
+              <p className="px-2 py-0.5 text-[8px] font-mono uppercase tracking-widest text-muted-foreground bg-secondary/40 border-b border-border">
+                {group}
+              </p>
+              <div className="grid grid-cols-2">
+                {rows.map((row) => (
+                  <div key={row.indicator_name}
+                    className="flex items-center justify-between gap-1 px-2 py-1 border-b border-r border-border min-w-0">
+                    <span className="text-[9px] font-mono text-muted-foreground truncate">{row.indicator_name}</span>
+                    <span className="text-[9px] font-mono font-bold tabular-nums shrink-0">{row.value.toFixed(2)}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
+      </CollapsibleCard>
+    )});
+  }
+
+  if (companyNews.length > 0) {
+    cards.push({ section: "stock_news", node: (
+      <CollapsibleCard label="Stock News" accent="hsl(142 65% 42%)" href="/markets"
+        count={companyNews.length} summary={`${companyNews.length} articles`}>
+        <div>
+          {companyNews.map((item) => (
+            <a key={item.id} href={item.url} target="_blank" rel="noopener noreferrer"
+              className="flex items-center gap-1.5 px-2 py-1 border-b border-border last:border-0 hover:bg-secondary/50 transition-colors group">
+              {item.source && <HubCap label={item.source} />}
+              <div className="min-w-0">
+                <p className="text-[10px] font-medium leading-tight line-clamp-1 group-hover:underline">
+                  {item.headline}
+                </p>
+                {(item.related_tickers ?? []).length > 0 && (
+                  <div className="flex items-center gap-1 flex-wrap mt-0.5">
+                    {(item.related_tickers ?? []).slice(0, 3).map((t) => (
+                      <Link key={t} href={`/markets/${t}`}
+                        className="text-[8px] font-mono px-0.5 bg-secondary leading-none hover:bg-border">
+                        {t}
+                      </Link>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </a>
+          ))}
+        </div>
+      </CollapsibleCard>
+    )});
+  }
+
+  if (hasCryptoQuotes || hasCryptoHeadlines) {
+    cards.push({ section: "crypto", node: (
+      <CollapsibleCard label="Crypto" accent="hsl(45 93% 47%)" href="/markets"
+        count={hasCryptoQuotes ? assets.crypto.length : undefined}
+        summary={`${assets.crypto.length} coins · ${cryptoHeadlines.length} headlines`}>
+        <div>
+          {hasCryptoQuotes && (
+            <div className="border-b border-border">
+              <TickerGrid rows={assets.crypto} href="/markets" />
+            </div>
+          )}
+          {hasCryptoHeadlines && (
+            <div>
+              {/* eslint-disable-next-line @typescript-eslint/no-explicit-any */}
+              {cryptoHeadlines.map((item: any) => (
+                <a key={item.id} href={item.url} target="_blank" rel="noopener noreferrer"
+                  className="flex items-center gap-1.5 px-2 py-1 border-b border-border last:border-0 hover:bg-secondary/50 transition-colors group">
+                  {item.source && <HubCap label={item.source} />}
                   <p className="text-[10px] font-medium leading-tight line-clamp-1 group-hover:underline">
                     {item.headline}
                   </p>
                 </a>
               ))}
             </div>
-          </CollapsibleCard>
-        )}
+          )}
+        </div>
+      </CollapsibleCard>
+    )});
+  }
 
-        {/* ── NYT: digest card (top story per section) ──────────────────── */}
+  if (assets.forex.length > 0) {
+    cards.push({ section: "forex", node: (
+      <CollapsibleCard label="FX" accent="hsl(142 65% 42%)" href="/markets"
+        count={assets.forex.length} summary={`${assets.forex.length} pairs`}>
+        <TickerGrid rows={assets.forex} href="/markets" />
+      </CollapsibleCard>
+    )});
+  }
 
-        {nytDigest.length > 0 && (
-          <CollapsibleCard
-            label="NYT — Top Stories"
-            accent="hsl(220 90% 52%)"
-            href="/news"
-            count={nytDigest.length}
-            summary={`${nytDigest.length} sections`}
-            contentHeight={newsCardHeight(nytDigest.length)}
-          >
-            <div>
-              {nytDigest.map(([sectionKey, article]) => (
-                <a
-                  key={article.id}
-                  href={article.url}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="flex items-center gap-1.5 px-2 py-1 border-b border-border last:border-0 hover:bg-secondary/50 transition-colors group"
-                >
-                  <HubCap label={sectionKey} />
-                  <p className="text-[10px] font-semibold leading-tight line-clamp-1 group-hover:underline">
-                    {article.title}
-                  </p>
-                </a>
-              ))}
-            </div>
-          </CollapsibleCard>
-        )}
+  if (assets.commodities.length > 0) {
+    cards.push({ section: "commodities", node: (
+      <CollapsibleCard label="Commodities" accent="hsl(45 93% 47%)" href="/markets"
+        count={assets.commodities.length} summary={`${assets.commodities.length} commodities`}>
+        <TickerGrid rows={assets.commodities} href="/markets" />
+      </CollapsibleCard>
+    )});
+  }
 
-        {/* ── NYT: grouped section cards ─────────────────────────────────── */}
-
-        {usStories.length > 0 && (
-          <CollapsibleCard
-            label="Top Stories — US"
-            accent="hsl(220 90% 52%)"
-            href="/news"
-            count={usStories.length}
-            summary={`${usStories.length} articles`}
-            contentHeight={newsCardHeight(usStories.length)}
-            icon={<Flag size={9} />}
-          >
-            <NytList articles={usStories} showSection={false} />
-          </CollapsibleCard>
-        )}
-
-        {worldStories.length > 0 && (
-          <CollapsibleCard
-            label="Top Stories — World"
-            accent="hsl(220 90% 52%)"
-            href="/news"
-            count={worldStories.length}
-            summary={`${worldStories.length} articles`}
-            contentHeight={newsCardHeight(worldStories.length)}
-            icon={<Globe size={9} />}
-          >
-            <NytList articles={worldStories} showSection={false} />
-          </CollapsibleCard>
-        )}
-
-        {otherStories.length > 0 && (
-          <CollapsibleCard
-            label="NYT — Today"
-            accent="hsl(220 90% 52%)"
-            href="/news"
-            count={otherStories.length}
-            summary={`${otherStories.length} articles`}
-            contentHeight={newsCardHeight(otherStories.length)}
-          >
-            <NytList articles={otherStories} showSection={true} />
-          </CollapsibleCard>
-        )}
-
-        {/* ── Rows 4-5: Sports ──────────────────────────────────────────── */}
-
-        {Object.entries(sportsSnapshots).map(([key, snapshot]) => {
-          const snap = snapshot as LeagueSnapshot;
-          if (!snap.league) return null;
-
-          // In-season gate: only show a league whose games fall within the
-          // last/next 10 days. Off-season leagues (with only stale scores
-          // and evergreen news) are hidden entirely.
-          const IN_SEASON_WINDOW_MS = 10 * 24 * 3600 * 1000;
-          const nowMs = Date.now();
-          const inSeason = [...snap.recentGames, ...snap.upcomingGames].some((g) => {
-            const t = g.game_date ? new Date(g.game_date).getTime() : NaN;
-            return Number.isFinite(t) && Math.abs(nowMs - t) <= IN_SEASON_WINDOW_MS;
-          });
-          if (!inSeason) return null;
-
-          // Cap rows so the card never needs to scroll
-          const games = [...snap.recentGames.slice(0, 4), ...snap.upcomingGames.slice(0, 2)];
-          const news = snap.news.slice(0, 3);
-          const sportsSummary = [
-            games.length > 0 && `${games.length} games`,
-            news.length > 0 && `${news.length} news`,
-          ]
-            .filter(Boolean)
-            .join(" · ");
-
-          return (
-            <CollapsibleCard
-              key={key}
-              label={SPORTS_LABEL[key] ?? snap.league.display_name}
-              accent="hsl(25 95% 50%)"
-              href="/sports"
-              count={games.length || undefined}
-              summary={sportsSummary}
-              headerExtra={<HubCap label="ESPN" />}
-            >
-              <div>
-                {games.length > 0 && (
-                  <div className="border-b border-border">
-                    {games.map((g, i) => (
-                      <ScoreCell key={i} game={g} leagueSlug={snap.league!.league} />
-                    ))}
-                  </div>
-                )}
-
-                {/* News — source pill lives in the card header, not per item */}
-                {news.length > 0 && (
-                  <div>
-                    {news.map((n) => (
-                      <a
-                        key={n.id}
-                        href={n.url}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="block px-2 py-1 border-b border-border last:border-0 text-[10px] leading-tight hover:underline hover:bg-secondary/50 transition-colors"
-                      >
-                        <span className="line-clamp-2">{n.title}</span>
-                      </a>
-                    ))}
-                  </div>
-                )}
+  if (spotifyReleases.length > 0) {
+    cards.push({ section: "spotify", node: (
+      <CollapsibleCard label="Spotify" accent="hsl(340 78% 50%)" href="/media"
+        count={spotifyReleases.length} summary={`${spotifyReleases.length} releases`}>
+        <div>
+          {/* eslint-disable-next-line @typescript-eslint/no-explicit-any */}
+          {spotifyReleases.slice(0, 8).map((r: any) => (
+            <a key={r.id} href={r.external_url ?? "#"} target="_blank" rel="noopener noreferrer"
+              className="flex items-center gap-2 px-2 py-1 border-b border-border last:border-0 hover:bg-secondary/50 transition-colors group">
+              <span className="text-[10px] shrink-0" style={{ color: "hsl(340 78% 50%)" }}>♫</span>
+              <div className="min-w-0 flex-1">
+                <p className="text-[10px] font-bold line-clamp-1 group-hover:underline">{r.name}</p>
+                <p className="text-[8px] text-muted-foreground line-clamp-1">
+                  {(r.artists ?? []).join(", ")}
+                </p>
               </div>
-            </CollapsibleCard>
-          );
-        })}
+              {r.album_type && (
+                <span className="text-[8px] font-mono text-muted-foreground uppercase shrink-0">
+                  {r.album_type}
+                </span>
+              )}
+            </a>
+          ))}
+        </div>
+      </CollapsibleCard>
+    )});
+  }
 
-        {/* ── Spotify ───────────────────────────────────────────────────── */}
+  // Apply user prefs: hide, then stable-sort by section position
+  const orderList =
+    userOrder && userOrder.length > 0
+      ? [
+          ...userOrder.filter((k) => (DEFAULT_HOME_ORDER as string[]).includes(k)),
+          ...DEFAULT_HOME_ORDER.filter((k) => !userOrder!.includes(k)),
+        ]
+      : (DEFAULT_HOME_ORDER as string[]);
+  const sectionPos = new Map(orderList.map((k, i) => [k, i]));
+  const visibleCards = cards
+    .map((c, i) => ({ ...c, i }))
+    .filter((c) => !hiddenSections.includes(c.section))
+    .sort(
+      (a, b) =>
+        (sectionPos.get(a.section) ?? 99) - (sectionPos.get(b.section) ?? 99) || a.i - b.i
+    );
 
-        {spotifyReleases.length > 0 && (
-          <CollapsibleCard
-            label="Spotify"
-            accent="hsl(340 78% 50%)"
-            href="/media"
-            count={spotifyReleases.length}
-            summary={`${spotifyReleases.length} releases`}
-            contentHeight={newsCardHeight(spotifyReleases.length)}
-          >
-            <div>
-              {spotifyReleases.map((r: any) => (
-                <a
-                  key={r.id}
-                  href={r.external_url ?? "#"}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="flex items-center gap-2 px-2 py-1 border-b border-border last:border-0 hover:bg-secondary/50 transition-colors group"
-                >
-                  <span className="text-[10px] shrink-0" style={{ color: "hsl(340 78% 50%)" }}>
-                    ♫
-                  </span>
-                  <div className="min-w-0 flex-1">
-                    <p className="text-[10px] font-bold line-clamp-1 group-hover:underline">{r.name}</p>
-                    <p className="text-[8px] text-muted-foreground line-clamp-1">
-                      {(r.artists ?? []).join(", ")}
-                    </p>
-                  </div>
-                  {r.album_type && (
-                    <span className="text-[8px] font-mono text-muted-foreground uppercase shrink-0">
-                      {r.album_type}
-                    </span>
-                  )}
-                </a>
-              ))}
-            </div>
-          </CollapsibleCard>
-        )}
-
+  return (
+    <div className="px-3 md:px-4 py-3 md:py-4">
+      <MasonryColumns>
+        {visibleCards.map((c, i) => (
+          <Fragment key={`${c.section}-${i}`}>{c.node}</Fragment>
+        ))}
       </MasonryColumns>
     </div>
   );
