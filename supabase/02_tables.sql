@@ -278,3 +278,23 @@ CREATE TABLE IF NOT EXISTS info_agg.economic_indicators (
     value          DECIMAL(20, 6),
     UNIQUE (indicator_name, date)
 );
+
+
+-- ============================================================
+-- OPS — etl_runs (pipeline run metadata / observability)
+-- One row per ETL invocation. Written by the Python orchestrators
+-- with the service role; publicly readable so the frontend can
+-- surface health and freshness (header Live dot, admin dashboard).
+-- ============================================================
+CREATE TABLE IF NOT EXISTS info_agg.etl_runs (
+    id               UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    triggered_by     TEXT NOT NULL DEFAULT 'manual',  -- 'cron' | 'manual' | 'dispatch'
+    tier             TEXT NOT NULL DEFAULT 'daily',   -- 'daily' | 'a' | 'b'
+    status           TEXT NOT NULL DEFAULT 'running', -- 'running' | 'success' | 'partial' | 'failed'
+    started_at       TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+    finished_at      TIMESTAMP WITH TIME ZONE,
+    duration_seconds DECIMAL(8, 1),
+    stats            JSONB,  -- per-domain stats from the run report
+    errors           JSONB,  -- flattened error strings
+    cleanup          JSONB   -- cleanup_daily() report, when run
+);
