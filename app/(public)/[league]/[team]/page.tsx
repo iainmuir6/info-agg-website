@@ -46,24 +46,48 @@ export default async function TeamPage({
   if (!leagueRow) notFound();
 
   // Slugs are team abbreviations (e.g. /wnba/DAL). Legacy full-name links
-  // still resolve via the name match below.
-  const slug = decodeURIComponent(teamParam).toUpperCase();
+  // still resolve via the name fallback below.
+  const raw = decodeURIComponent(teamParam);
+  const slug = raw.toUpperCase();
 
-  const { data: scoreRows } = await supabase
-    .from("sports_scores")
-    .select("id, event_id, home_team, away_team, home_abbrev, away_abbrev, home_score, away_score, status, status_detail, game_date, venue, broadcast")
-    .eq("league_id", leagueRow.id)
-    .order("game_date", { ascending: false })
-    .limit(400);
+  const COLUMNS =
+    "id, event_id, home_team, away_team, home_abbrev, away_abbrev, home_score, away_score, status, status_detail, game_date, venue, broadcast";
 
-  const all = (scoreRows ?? []) as Score[];
+  // Filter by team in the query rather than pulling the league's most recent
+  // games and filtering here — a busy league (MLB) would otherwise fill the
+  // row limit with ~2 weeks of games and the record would miss the season.
+  const byTeam = () =>
+    supabase
+      .from("sports_scores")
+      .select(COLUMNS)
+      .eq("league_id", leagueRow.id)
+      .order("game_date", { ascending: false })
+      .limit(400);
+
+  const { data: abbrevRows } = await byTeam().or(
+    `home_abbrev.eq.${slug},away_abbrev.eq.${slug}`,
+  );
+
+  let all = (abbrevRows ?? []) as Score[];
+  if (all.length === 0) {
+    // Legacy full-name link: match on team name (two queries — a name with a
+    // comma would break PostgREST's or() value list).
+    const [homeRes, awayRes] = await Promise.all([
+      byTeam().eq("home_team", raw),
+      byTeam().eq("away_team", raw),
+    ]);
+    all = [...((homeRes.data ?? []) as Score[]), ...((awayRes.data ?? []) as Score[])].sort(
+      (a, b) => new Date(b.game_date ?? 0).getTime() - new Date(a.game_date ?? 0).getTime(),
+    );
+  }
+
   const matches = (s: Score, side: "home" | "away") => {
     const abbrev = (side === "home" ? s.home_abbrev : s.away_abbrev)?.toUpperCase();
-    const name = (side === "home" ? s.home_team : s.away_team)?.toUpperCase();
-    return abbrev === slug || name === slug;
+    const name = side === "home" ? s.home_team : s.away_team;
+    return abbrev === slug || name === raw;
   };
 
-  const games = all.filter((s) => matches(s, "home") || matches(s, "away"));
+  const games = all;
   if (games.length === 0) notFound();
 
   const sample = games[0];
