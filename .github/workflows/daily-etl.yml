@@ -2,7 +2,12 @@ name: Daily ETL
 
 on:
   schedule:
-    - cron: '5 12 * * *'  # 7:05/8:05 AM ET (12:05 UTC) every day — offset to avoid on-the-hour congestion
+    # 10:43 UTC = 6:43am EDT / 5:43am EST. GitHub fires crons late when the
+    # scheduler is congested — load peaks at :00/:15/:30/:45 and around
+    # 12:00–14:00 UTC, where this repo saw 1.5–2.5h delays. An odd minute in
+    # a quieter hour keeps the delay small while staying pre-market (cleanup
+    # collapses completed NY trading days).
+    - cron: '43 10 * * *'
   workflow_dispatch:       # Manual trigger from GitHub Actions UI or the admin button
 
 # Never overlap with another daily run or an intraday refresh — they hit the
@@ -53,7 +58,7 @@ jobs:
 
       # --cleanup runs info_agg.cleanup_daily() retention after the domains
       # complete: intraday quotes collapse to EOD, 7-day news pruning, etc.
-      # The 12:05 UTC schedule is before US market open, so every prior
+      # The 10:43 UTC schedule is before US market open, so every prior
       # NY-calendar day is a completed trading day.
       - name: Run ETL pipeline with retention cleanup
         run: python src/api/run_etl.py --triggered-by cron --cleanup --output etl-report.json
