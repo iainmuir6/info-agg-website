@@ -73,11 +73,16 @@ async function getSportsData(supabase: Awaited<ReturnType<typeof createClient>>)
       .select("id, sport, league, display_name")
       .eq("is_active", true)
       .order("sport"),
+    // Window around today. Ordering by game_date desc without a window
+    // returns only far-future fixtures (e.g. college football in August),
+    // which the in-season filter then rejects — leaving the page blank.
     supabase
       .from("sports_scores")
-      .select("id, league_id, home_team, away_team, home_score, away_score, home_record, away_record, status, status_detail, game_date, venue, broadcast")
+      .select("id, league_id, home_team, away_team, home_abbrev, away_abbrev, event_id, home_score, away_score, home_record, away_record, status, status_detail, game_date, venue, broadcast")
+      .gte("game_date", new Date(Date.now() - 10 * 24 * 3600 * 1000).toISOString())
+      .lte("game_date", new Date(Date.now() + 10 * 24 * 3600 * 1000).toISOString())
       .order("game_date", { ascending: false })
-      .limit(100),
+      .limit(400),
     supabase
       .from("sports_news")
       .select("id, league_id, title, description, url, image_url, published_at, source")
@@ -112,7 +117,7 @@ export default async function SportsPage() {
   const hasData = leagues.length > 0 && (scores.length > 0 || news.length > 0);
 
   return (
-    <div className="px-6 py-6 max-w-7xl mx-auto space-y-6">
+    <div className="px-6 py-6 space-y-6">
       {/* Page header */}
       <div>
         <div className="rule-double mb-3" />

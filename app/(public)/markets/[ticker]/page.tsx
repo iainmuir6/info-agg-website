@@ -1,7 +1,7 @@
 import { createClient } from "@/lib/supabase/server";
 import { notFound } from "next/navigation";
 import Link from "next/link";
-import { SparklineChart } from "@/components/sparkline-chart";
+import { LineChart, type ChartPoint } from "@/components/line-chart";
 
 type QuoteHistory = {
   current_price: number;
@@ -74,6 +74,13 @@ export default async function StockDetailPage({
   // Latest quote is the most recent (last in ascending array)
   const latest = quotes[quotes.length - 1] ?? null;
   const sparkData = quotes.map((q) => parseFloat(String(q.current_price)));
+  const chartPoints: ChartPoint[] = quotes.map((q) => ({
+    label: new Date(q.fetched_at).toLocaleDateString("en-US", {
+      month: "short",
+      day: "numeric",
+    }),
+    value: parseFloat(String(q.current_price)),
+  }));
 
   const pct = latest ? parseFloat(String(latest.percent_change)) : 0;
   const isPos = pct >= 0;
@@ -90,7 +97,7 @@ export default async function StockDetailPage({
       : null;
 
   return (
-    <div className="px-6 py-6 max-w-5xl mx-auto space-y-6">
+    <div className="px-6 py-6 space-y-6">
       {/* Back navigation */}
       <div className="flex items-center gap-2">
         <Link
@@ -196,10 +203,11 @@ export default async function StockDetailPage({
             </span>
           </div>
           <div className="px-4 py-4">
-            <SparklineChart
-              data={sparkData}
-              height={120}
-              className="w-full"
+            <LineChart
+              points={chartPoints}
+              precision={2}
+              height={260}
+              ariaLabel={`${stock.ticker} price history`}
             />
             {/* Date labels */}
             <div className="flex justify-between mt-1">

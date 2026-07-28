@@ -255,6 +255,81 @@ def sync_all_sports_data(
     return stats
 
 
+def sync_season_schedules(
+    supabase: Client,
+    days_back: int = 150,
+    days_forward: int = 14,
+    chunk_days: int = 14,
+) -> Dict[str, Any]:
+    """Fetch the full season schedule for every in-season league.
+
+    The daily scoreboard call only returns today's slate, so team pages
+    computed win/loss records from a handful of games. This walks the
+    season in date-range chunks (ESPN accepts dates=YYYYMMDD-YYYYMMDD) for
+    leagues that actually have games near today, so records are complete.
+
+    Runs once per day (run_etl.py --season-schedules), not on the intraday
+    tiers — it costs roughly (days_back / chunk_days) ESPN calls per league.
+    """
+    stats: Dict[str, Any] = {
+        'leagues_processed': 0,
+        'scores_inserted': 0,
+        'errors': [],
+    }
+
+    try:
+        resp = supabase.table('leagues').select('id,sport,league').execute()
+        league_rows = resp.data or []
+    except Exception as e:
+        stats['errors'].append(f"Failed to load leagues: {e}")
+        return stats
+
+    now = datetime.now()
+    window_start = now - timedelta(days=days_back)
+    window_end = now + timedelta(days=days_forward)
+
+    for row in league_rows:
+        sport, league, league_id = row['sport'], row['league'], row['id']
+
+        # In-season check: any game within +/-10 days of today?
+        try:
+            probe = (
+                supabase.table('sports_scores')
+                .select('id')
+                .eq('league_id', league_id)
+                .gte('game_date', (now - timedelta(days=10)).isoformat())
+                .lte('game_date', (now + timedelta(days=10)).isoformat())
+                .limit(1)
+                .execute()
+            )
+            if not (probe.data or []):
+                continue
+        except Exception as e:
+            stats['errors'].append(f"{league}: in-season probe failed: {e}")
+            continue
+
+        stats['leagues_processed'] += 1
+        league_records: List[Dict[str, Any]] = []
+
+        cursor = window_start
+        while cursor < window_end:
+            chunk_end = min(cursor + timedelta(days=chunk_days - 1), window_end)
+            date_range = f"{cursor.strftime('%Y%m%d')}-{chunk_end.strftime('%Y%m%d')}"
+            try:
+                games = fetch_espn_scores(sport, league, dates=date_range)
+                league_records.extend(_sports_score_records(league_id, games))
+            except Exception as e:
+                stats['errors'].append(f"{league} {date_range}: {e}")
+            cursor = chunk_end + timedelta(days=1)
+
+        if league_records:
+            stats['scores_inserted'] += _upsert_sports_score_records(
+                supabase, league_records, errors=stats['errors']
+            )
+
+    return stats
+
+
 def backfill_sports_scores(
     supabase: Client,
     days_back: int = 30,

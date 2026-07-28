@@ -49,7 +49,7 @@ export default async function NewsPage() {
     : "Never";
 
   return (
-    <div className="px-6 py-6 max-w-7xl mx-auto space-y-6">
+    <div className="px-6 py-6 space-y-6">
       {/* Page header */}
       <div>
         <div className="rule-double mb-3" />

@@ -2,8 +2,12 @@ import Link from "next/link";
 import { unstable_cache } from "next/cache";
 import { ThemeSwitcher } from "@/components/theme-switcher";
 import { createClient, createStaticClient } from "@/lib/supabase/server";
+import { FooterTickers } from "@/components/footer-tickers";
 import {
-  NewsTickerClient,
+  normalizeSportsRows,
+  type SportsTickerItem,
+} from "@/components/sports-ticker-client";
+import {
   normalizeTickerRows,
   TICKER_MAG7,
   TICKER_ETFS,
@@ -38,6 +42,27 @@ const getTickerItems = unstable_cache(
   },
   ["ticker-items"],
   { tags: ["etl-data"], revalidate: 300 },
+);
+
+// Sports ticker snapshot — games from the last 36h / next 24h
+const getSportsTickerItems = unstable_cache(
+  async (): Promise<SportsTickerItem[]> => {
+    try {
+      const supabase = createStaticClient();
+      const { data } = await supabase
+        .from("sports_scores")
+        .select("id, home_team, away_team, home_abbrev, away_abbrev, home_score, away_score, status, status_detail, game_date, leagues(league)")
+        .gte("game_date", new Date(Date.now() - 36 * 3600 * 1000).toISOString())
+        .lte("game_date", new Date(Date.now() + 24 * 3600 * 1000).toISOString())
+        .order("game_date", { ascending: false })
+        .limit(30);
+      return normalizeSportsRows(data ?? []);
+    } catch {
+      return [];
+    }
+  },
+  ["sports-ticker-items"],
+  { tags: ["etl-data"], revalidate: 120 },
 );
 
 type EtlHealth = {
@@ -146,20 +171,14 @@ export default async function PublicLayout({ children }: { children: React.React
           </div>
         </div>
 
-        {/* Category nav + centered title */}
-        <nav className="px-6 flex items-center overflow-x-auto">
-          <div className="flex items-center gap-1">
-            <Link
-              href="/"
-              className="px-4 py-2.5 text-xs font-mono tracking-widest uppercase text-muted-foreground hover:text-foreground transition-colors shrink-0"
-            >
-              Overview
-            </Link>
+        {/* Category nav — evenly spaced on mobile, left-aligned from sm up */}
+        <nav className="px-2 sm:px-6 flex items-center">
+          <div className="flex items-center w-full sm:w-auto sm:gap-1">
             {NAV_LINKS.map((item) => (
               <Link
                 key={item.href}
                 href={item.href}
-                className="relative px-4 py-2.5 text-xs font-mono tracking-widest uppercase text-muted-foreground hover:text-foreground transition-colors shrink-0 group"
+                className="relative flex-1 sm:flex-none text-center px-2 sm:px-4 py-2.5 text-[11px] sm:text-xs font-mono tracking-widest uppercase text-muted-foreground hover:text-foreground transition-colors group"
               >
                 {item.label}
                 <span
@@ -169,36 +188,12 @@ export default async function PublicLayout({ children }: { children: React.React
               </Link>
             ))}
           </div>
-
-          <div className="flex-1 flex justify-center">
-            <span
-              className="text-xs font-mono tracking-[0.2em] uppercase text-muted-foreground"
-              style={{ fontFamily: "Georgia, serif" }}
-            >
-              COMMAND CENTER
-            </span>
-          </div>
-
-          <div className="w-24 shrink-0" />
         </nav>
       </header>
 
       <main className="flex-1">{children}</main>
 
-      <footer className="border-t border-border">
-        {/* Market ticker row */}
-        <div className="border-b border-border">
-          <NewsTickerClient items={await getTickerItems()} />
-        </div>
-
-        {/* Footer meta */}
-        <div className="px-6 py-3 flex items-center justify-between">
-          <span className="text-[10px] font-mono text-muted-foreground tracking-wider">
-            INFORMATION AGGREGATOR
-          </span>
-          <span className="text-[10px] font-mono text-muted-foreground">{now.getFullYear()}</span>
-        </div>
-      </footer>
+      <FooterTickers quotes={await getTickerItems()} games={await getSportsTickerItems()} />
     </div>
   );
 }

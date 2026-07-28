@@ -716,7 +716,7 @@ function ScoreCell({ game, leagueSlug }: { game: ScoreRowType; leagueSlug: strin
     : null;
 
   return (
-    <div className="relative flex items-center gap-1.5 px-1.5 py-1 border-b border-border hover:bg-secondary/50 transition-colors text-[9px] font-mono leading-tight">
+    <div className="relative flex items-center justify-center gap-2 px-2 py-1.5 border-b border-border hover:bg-secondary/50 transition-colors text-[9px] font-mono leading-tight">
       {/* Stretched link: the row body opens the ESPN game page; team links sit above it */}
       {espnUrl && (
         <a
@@ -727,7 +727,7 @@ function ScoreCell({ game, leagueSlug }: { game: ScoreRowType; leagueSlug: strin
           className="absolute inset-0"
         />
       )}
-      <div className="grid shrink-0 items-center gap-x-1 [grid-template-columns:4ch_2.5ch_1ch_2.5ch_4ch]">
+      <div className="grid shrink-0 items-center gap-x-1.5 [grid-template-columns:4ch_2.5ch_1ch_2.5ch_4ch]">
         <Link
           href={`/sports/${leagueSlug}/${encodeURIComponent(game.away_team)}`}
           title={game.away_team}
@@ -750,16 +750,15 @@ function ScoreCell({ game, leagueSlug }: { game: ScoreRowType; leagueSlug: strin
           {homeAbbr}
         </Link>
       </div>
-      <div className="flex-1 min-w-0" />
       {isLive ? (
-        <div className="flex items-center gap-1 shrink-0">
+        <div className="flex items-center gap-1 shrink-0 w-10">
           <div className="w-1.5 h-1.5 rounded-full animate-pulse-dot shrink-0" style={{ backgroundColor: "hsl(142 65% 42%)" }} />
-          <span className="text-[7px] leading-none" style={{ color: "hsl(142 65% 42%)" }}>
+          <span className="text-[7px] leading-none truncate" style={{ color: "hsl(142 65% 42%)" }}>
             {game.status_detail ?? "LIVE"}
           </span>
         </div>
       ) : (
-        <span className="text-[7px] leading-none text-muted-foreground uppercase shrink-0">
+        <span className="text-[7px] leading-none text-muted-foreground uppercase shrink-0 w-10 text-left">
           {isFinal ? "Final" : tipOff ?? "Sched"}
         </span>
       )}
@@ -843,6 +842,15 @@ export default async function CommandCenter() {
     .sort(([a], [b]) => (NYT_SECTION_ORDER[a] ?? 99) - (NYT_SECTION_ORDER[b] ?? 99))
     .slice(0, 12);
 
+  // Second NYT panel: the next-best stories the digest didn't surface —
+  // one story per section is a thin slice of a busy news day, so this shows
+  // the runner-up headlines from the highest-signal sections.
+  const digestUrls = new Set(nytDigest.map(([, a]) => a.url));
+  const NYT_DEEP_SECTIONS = new Set(["us", "world", "business", "technology", "politics", "science", "opinion"]);
+  const nytMore = nytAll
+    .filter((a) => !digestUrls.has(a.url) && NYT_DEEP_SECTIONS.has((a.section ?? "").toLowerCase()))
+    .slice(0, 10);
+
   // ── Economic indicators grouped ───────────────────────────────────────────
   const econByGroup = econIndicators.reduce<Record<string, EconRow[]>>((acc, row) => {
     const cfg = ECON_CONFIG[row.indicator_name];
@@ -919,6 +927,25 @@ export default async function CommandCenter() {
     )});
   }
 
+  if (nytMore.length > 0) {
+    cards.push({ section: "nyt_more", node: (
+      <CollapsibleCard label="NYT — More Headlines" accent="hsl(220 90% 52%)" href="/news"
+        count={nytMore.length}>
+        <div>
+          {nytMore.map((article) => (
+            <a key={article.id} href={article.url} target="_blank" rel="noopener noreferrer"
+              className="flex items-center gap-1.5 px-2 py-1 border-b border-border last:border-0 hover:bg-secondary/50 transition-colors group">
+              {article.section && <HubCap label={article.section} />}
+              <p className="text-[10px] font-semibold leading-tight line-clamp-2 min-h-[2.2em] group-hover:underline">
+                {article.title}
+              </p>
+            </a>
+          ))}
+        </div>
+      </CollapsibleCard>
+    )});
+  }
+
   // Sports — one card per in-season league
   for (const [key, snapshot] of Object.entries(sportsSnapshots)) {
     const snap = snapshot as LeagueSnapshot;
@@ -945,11 +972,7 @@ export default async function CommandCenter() {
         label={SPORTS_LABEL[key] ?? snap.league.display_name}
         accent="hsl(25 95% 50%)" href="/sports"
         count={games.length || undefined} summary={sportsSummary}
-        headerExtra={
-          <span className="text-[7px] font-mono leading-none px-1 py-0.5 rounded bg-secondary text-muted-foreground">
-            ESPN
-          </span>
-        }>
+      >
         <div>
           {games.length > 0 && (
             <div className="grid grid-cols-1 min-[380px]:grid-cols-2 min-[380px]:divide-x divide-border border-b border-border">
@@ -1091,7 +1114,7 @@ export default async function CommandCenter() {
               className="flex items-center gap-1.5 px-2 py-1 border-b border-border last:border-0 hover:bg-secondary/50 transition-colors group">
               {item.source && <HubCap label={item.source} />}
               <div className="min-w-0">
-                <p className="text-[10px] font-medium leading-tight line-clamp-1 group-hover:underline">
+                <p className="text-[10px] font-medium leading-tight line-clamp-2 min-h-[2.2em] group-hover:underline">
                   {item.headline}
                 </p>
                 {(item.related_tickers ?? []).length > 0 && (
