@@ -1,10 +1,38 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { isSuperAdmin } from "@/lib/rbac";
-import { execFile } from "child_process";
-import path from "path";
-import { getEtlPythonExecutable } from "@/lib/etl-python";
 import { isAllowedSameOriginMutation } from "@/lib/security";
+
+// Triggers the GitHub Actions ETL workflows via workflow_dispatch and
+// returns immediately — Vercel serverless has no Python runtime, so the
+// pipeline cannot run in-process. Progress is visible in info_agg.etl_runs
+// (written by the Python orchestrators) and the Actions tab.
+//
+// Requires env:
+//   GITHUB_DISPATCH_TOKEN — fine-grained PAT with Actions read/write on the repo
+//   GITHUB_REPOSITORY     — owner/repo (defaults below)
+
+const REPO = process.env.GITHUB_REPOSITORY ?? "iainmuir6/info-agg-website";
+const BRANCH = process.env.GITHUB_DISPATCH_REF ?? "main";
+
+async function dispatchWorkflow(
+  workflowFile: string,
+  inputs: Record<string, string> | undefined,
+  token: string
+): Promise<Response> {
+  return fetch(
+    `https://api.github.com/repos/${REPO}/actions/workflows/${workflowFile}/dispatches`,
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        Accept: "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+      },
+      body: JSON.stringify({ ref: BRANCH, ...(inputs ? { inputs } : {}) }),
+    }
+  );
+}
 
 // Only allow triggering from super_admin users
 export async function POST(request: NextRequest) {
@@ -24,87 +52,35 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Forbidden" }, { status: 403 });
     }
 
-    const body = await request.json().catch(() => ({}));
-    const domain = body.domain as string | undefined; // 'sports' | 'markets' | 'news' | 'media' | undefined (all)
-    const mode = body.mode as string | undefined;     // 'quick' → run_quick_refresh.py
-
-    const cwd = process.cwd();
-    const python = getEtlPythonExecutable(cwd);
-
-    // Quick refresh: sports + news + quotes only, no sentiment/econ/media
-    if (mode === "quick") {
-      const scriptPath = path.join(cwd, "src", "api", "run_quick_refresh.py");
-      return new Promise<NextResponse>((resolve) => {
-        execFile(
-          python,
-          [scriptPath],
-          {
-            timeout: 120_000,
-            env: {
-              ...process.env,
-              PYTHONPATH: path.join(cwd, "src", "api"),
-            },
-          },
-          (err, stdout, stderr) => {
-            if (err && err.code !== 0) {
-              console.error("Quick refresh ETL error:", stderr);
-              resolve(
-                NextResponse.json(
-                  { success: false, error: "Quick refresh ETL failed" },
-                  { status: 500 }
-                )
-              );
-            } else {
-              resolve(NextResponse.json({ success: true, mode: "quick", output: stdout?.slice(-1000) }));
-            }
-          }
-        );
-      });
-    }
-
-    // Build CLI args for full ETL
-    const args: string[] = [];
-    if (domain && ["sports", "markets", "news", "media"].includes(domain)) {
-      args.push(`--${domain}-only`);
-    }
-    // OHLCV/candle backfill is not part of run_etl.py (use run_db_seed.py); no --no-candles flag.
-
-    const scriptPath = path.join(cwd, "src", "api", "run_etl.py");
-
-    return new Promise<NextResponse>((resolve) => {
-      execFile(
-        python,
-        [scriptPath, ...args],
-        {
-          timeout: 120_000, // 2 minute timeout
-          env: {
-            ...process.env,
-            PYTHONPATH: path.join(cwd, "src", "api"),
-          },
-        },
-        (err, stdout, stderr) => {
-          if (err && err.code !== 0) {
-            console.error("ETL error:", stderr);
-            resolve(
-              NextResponse.json(
-                {
-                  success: false,
-                  error: "ETL run failed",
-                },
-                { status: 500 }
-              )
-            );
-          } else {
-            resolve(
-              NextResponse.json({
-                success: true,
-                domain: domain ?? "all",
-                output: stdout?.slice(-1000), // last 1000 chars
-              })
-            );
-          }
-        }
+    const token = process.env.GITHUB_DISPATCH_TOKEN;
+    if (!token) {
+      return NextResponse.json(
+        { error: "GITHUB_DISPATCH_TOKEN not configured" },
+        { status: 503 }
       );
+    }
+
+    const body = await request.json().catch(() => ({}));
+    const mode = body.mode as string | undefined; // 'quick' → intraday tier B; else full daily run
+
+    const res =
+      mode === "quick"
+        ? await dispatchWorkflow("intraday-refresh.yml", { tier: "b" }, token)
+        : await dispatchWorkflow("daily-etl.yml", undefined, token);
+
+    if (res.status !== 204) {
+      const detail = await res.text().catch(() => "");
+      console.error("workflow_dispatch failed:", res.status, detail);
+      return NextResponse.json(
+        { success: false, error: `GitHub dispatch failed (${res.status})` },
+        { status: 502 }
+      );
+    }
+
+    return NextResponse.json({
+      success: true,
+      queued: mode === "quick" ? "intraday-refresh (tier b)" : "daily-etl",
+      note: "Run queued on GitHub Actions; status appears in etl_runs when it starts.",
     });
   } catch (err) {
     console.error("ETL route error:", err);
@@ -114,8 +90,8 @@ export async function POST(request: NextRequest) {
 
 export async function GET() {
   return NextResponse.json({
-    message: "ETL trigger endpoint. POST with { domain } for a single domain, { mode: 'quick' } for fast refresh, or no body for full run.",
-    domains: ["sports", "markets", "news", "media"],
+    message:
+      "ETL trigger endpoint. POST {} to queue the full daily workflow, or { mode: 'quick' } for an intraday tier-B refresh.",
     modes: ["quick"],
   });
 }

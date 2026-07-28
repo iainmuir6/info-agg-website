@@ -2,8 +2,18 @@ name: Daily ETL
 
 on:
   schedule:
-    - cron: '5 12 * * *'  # 7:05 AM ET (12:05 UTC) every day — offset to avoid on-the-hour congestion
-  workflow_dispatch:       # Manual trigger from GitHub Actions UI
+    - cron: '5 12 * * *'  # 7:05/8:05 AM ET (12:05 UTC) every day — offset to avoid on-the-hour congestion
+  workflow_dispatch:       # Manual trigger from GitHub Actions UI or the admin button
+
+# Never overlap with another daily run or an intraday refresh — they hit the
+# same rate-limited APIs and tables.
+concurrency:
+  group: etl
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  issues: write   # failure step opens/updates an issue
 
 jobs:
   run-etl:
@@ -16,12 +26,15 @@ jobs:
       SUPABASE_SERVICE_ROLE_KEY:       ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
       NYT_API_KEY_1:                   ${{ secrets.NYT_API_KEY_1 }}
       NYT_API_KEY_2:                   ${{ secrets.NYT_API_KEY_2 }}
+      NYT_API_KEY_3:                   ${{ secrets.NYT_API_KEY_3 }}
       FINNHUB_API_KEY_1:               ${{ secrets.FINNHUB_API_KEY_1 }}
       FINNHUB_API_KEY_2:               ${{ secrets.FINNHUB_API_KEY_2 }}
+      FINNHUB_API_KEY_3:               ${{ secrets.FINNHUB_API_KEY_3 }}
       FMP_API_KEY:                     ${{ secrets.FMP_API_KEY }}
       ALPHA_VANTAGE_API_KEY:           ${{ secrets.ALPHA_VANTAGE_API_KEY }}
       ALPHA_VANTAGE_API_KEY_1:         ${{ secrets.ALPHA_VANTAGE_API_KEY_1 }}
       ALPHA_VANTAGE_API_KEY_2:         ${{ secrets.ALPHA_VANTAGE_API_KEY_2 }}
+      ALPHA_VANTAGE_API_KEY_3:         ${{ secrets.ALPHA_VANTAGE_API_KEY_3 }}
       SPOTIFY_CLIENT_ID:               ${{ secrets.SPOTIFY_CLIENT_ID }}
       SPOTIFY_CLIENT_SECRET:           ${{ secrets.SPOTIFY_CLIENT_SECRET }}
 
@@ -38,7 +51,55 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      - name: Run ETL pipeline
-        run: python src/api/run_etl.py
+      # --cleanup runs info_agg.cleanup_daily() retention after the domains
+      # complete: intraday quotes collapse to EOD, 7-day news pruning, etc.
+      # The 12:05 UTC schedule is before US market open, so every prior
+      # NY-calendar day is a completed trading day.
+      - name: Run ETL pipeline with retention cleanup
+        run: python src/api/run_etl.py --triggered-by cron --cleanup --output etl-report.json
         env:
           PYTHONPATH: src/api
+
+      - name: Upload run report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: etl-report-${{ github.run_id }}
+          path: etl-report.json
+          if-no-files-found: ignore
+          retention-days: 30
+
+      - name: Revalidate site cache
+        if: success()
+        env:
+          SITE_URL: ${{ secrets.NEXT_PUBLIC_SITE_URL }}
+          REVALIDATE_SECRET: ${{ secrets.REVALIDATE_SECRET }}
+        run: |
+          if [ -n "$SITE_URL" ] && [ -n "$REVALIDATE_SECRET" ]; then
+            curl -fsS -X POST "$SITE_URL/api/revalidate" \
+              -H "Authorization: Bearer $REVALIDATE_SECRET" \
+              || echo "::warning::revalidate call failed (non-fatal)"
+          else
+            echo "NEXT_PUBLIC_SITE_URL / REVALIDATE_SECRET not set — skipping revalidate"
+          fi
+
+      - name: Report failure as issue
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          gh label create etl-failure --repo "$GITHUB_REPOSITORY" --force \
+            --description "Automated ETL failure reports" --color B60205 || true
+          existing=$(gh issue list --repo "$GITHUB_REPOSITORY" --label etl-failure \
+            --state open --json number --jq '.[0].number // empty')
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --repo "$GITHUB_REPOSITORY" \
+              --body "Daily ETL failed again: $RUN_URL"
+          else
+            gh issue create --repo "$GITHUB_REPOSITORY" --label etl-failure \
+              --title "Daily ETL failing" \
+              --body "The scheduled ETL run failed. Logs: $RUN_URL
+
+          This issue is updated by the workflow on each failure; close it once the pipeline is green."
+          fi
