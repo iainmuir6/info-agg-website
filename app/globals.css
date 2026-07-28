@@ -144,6 +144,16 @@
   animation-play-state: paused;
 }
 
+/* Respect reduced-motion preferences: stop the infinite loops */
+@media (prefers-reduced-motion: reduce) {
+  .animate-ticker,
+  .animate-scroll-left,
+  .animate-scroll-right,
+  .animate-pulse-dot {
+    animation: none;
+  }
+}
+
 /* Stagger delays for list items */
 .stagger-1 { animation-delay: 0.05s; }
 .stagger-2 { animation-delay: 0.10s; }

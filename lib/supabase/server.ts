@@ -1,5 +1,20 @@
 import { createServerClient } from "@supabase/ssr";
+import { createClient as createSupabaseClient } from "@supabase/supabase-js";
 import { cookies } from "next/headers";
+
+/**
+ * Cookie-free anon client for PUBLIC data queries that should be cacheable
+ * (`unstable_cache` forbids reading cookies). All info_agg tables are
+ * anon-readable via RLS, so this covers every non-auth query. Auth flows
+ * must keep using `createClient()` below.
+ */
+export function createStaticClient() {
+  return createSupabaseClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY!,
+    { db: { schema: "info_agg" }, auth: { persistSession: false } },
+  );
+}
 
 /**
  * Especially important if using Fluid compute: Don't put this client in a

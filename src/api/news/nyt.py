@@ -8,15 +8,20 @@
 
 from typing import Dict, List, Optional, Any
 from datetime import datetime, timedelta
-import pandas as pd
 import requests
 import time
 import threading
 import os
+import sys
 
 # Load Environment Variables
 from dotenv import load_dotenv
 load_dotenv()
+
+_PARENT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _PARENT not in sys.path:
+    sys.path.insert(0, _PARENT)
+from etl_lib import get_http_session, MinInterval
 
 ROOT_DIR = os.getenv('ROOT_DIR')
 
@@ -41,10 +46,11 @@ NYT_POPULAR_TYPES = ['viewed', 'shared', 'emailed']
 
 # Enforce a simple >=1s minimum between any NYT HTTP calls in this module.
 # This satisfies the “no endpoint burst in loops” requirement even when callers
-# don't explicitly sleep.
+# don't explicitly sleep. MinInterval sleeps outside its lock so concurrent
+# callers are paced without being serialized.
 _NYT_MIN_INTERVAL_S = 1.0
-_NYT_LOCK = threading.Lock()
-_NYT_LAST_CALL_TS: Optional[float] = None
+_NYT_LOCK = threading.Lock()  # guards the disabled-keys set only
+_nyt_pacer = MinInterval(_NYT_MIN_INTERVAL_S)
 
 # If NYT returns 429 for a specific key, we stop using that key for the
 # remainder of the current ETL run.
@@ -52,15 +58,7 @@ _NYT_DISABLED_KEYS: set[str] = set()
 
 
 def _nyt_min_interval() -> None:
-    global _NYT_LAST_CALL_TS
-    with _NYT_LOCK:
-        now = time.time()
-        if _NYT_LAST_CALL_TS is not None:
-            elapsed = now - _NYT_LAST_CALL_TS
-            if elapsed < _NYT_MIN_INTERVAL_S:
-                time.sleep(_NYT_MIN_INTERVAL_S - elapsed)
-                now = time.time()
-        _NYT_LAST_CALL_TS = now
+    _nyt_pacer.wait()
 
 
 def _nyt_is_key_disabled(api_key: str) -> bool:
@@ -117,7 +115,7 @@ def fetch_nyt_top_stories(section: str = 'home', api_key: Optional[str] = None) 
 
     try:
         _nyt_min_interval()
-        response = requests.get(url, params=params, timeout=10)
+        response = get_http_session().get(url, params=params, timeout=10)
         if response.status_code == 429:
             _nyt_disable_key(api_key)
             return None
@@ -216,7 +214,7 @@ def fetch_nyt_most_popular(
 
     try:
         _nyt_min_interval()
-        response = requests.get(url, params=params, timeout=10)
+        response = get_http_session().get(url, params=params, timeout=10)
         if response.status_code == 429:
             _nyt_disable_key(api_key)
             return None
@@ -360,7 +358,7 @@ def fetch_nyt_archive(
 
     try:
         _nyt_min_interval()
-        response = requests.get(url, params=params, timeout=30)
+        response = get_http_session().get(url, params=params, timeout=30)
         if response.status_code == 429:
             _nyt_disable_key(api_key)
             return []
@@ -487,6 +485,7 @@ def fetch_all_nyt_top_stories(api_key: Optional[str] = None) -> Dict[str, Option
 
 
 if __name__ == "__main__":
+    import pandas as pd
     print("=" * 60)
     print("Fetching news data from New York Times API...")
     print("=" * 60)

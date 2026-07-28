@@ -1,0 +1,101 @@
+name: Intraday Refresh
+
+# Tiered refresh cadence (docs/IMPROVEMENT_PLAN.md §1.1). Times in UTC;
+# ET is UTC-4 (EDT) / UTC-5 (EST).
+#
+#   Tier A — every 15 min, 12:00–03:45 UTC (8am–11:45pm EDT): Finnhub
+#     quotes (stocks/ETFs/crypto), ESPN scoreboards, Finnhub market news.
+#     Consumes no daily API budget.
+#   Tier B — hourly at :30, 10:30–23:30 UTC (6:30am–7:30pm EDT): adds NYT
+#     top stories, ESPN news, and FMP forex/commodity quotes. 14 runs/day
+#     × 13 FMP calls = 182, + the daily run's 21 ≈ 203 of the 250/day cap.
+on:
+  schedule:
+    - cron: '*/15 12-23 * * *'   # Tier A — daytime/evening
+    - cron: '*/15 0-3 * * *'     # Tier A — late evening ET
+    - cron: '30 10-23 * * *'     # Tier B — hourly
+  workflow_dispatch:
+    inputs:
+      tier:
+        description: Refresh tier
+        type: choice
+        options: [a, b]
+        default: a
+
+# Shares the 'etl' group with the daily workflow so refreshes never overlap
+# a daily run (same rate-limited APIs and tables). A refresh that fires
+# mid-daily simply queues.
+concurrency:
+  group: etl
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  refresh:
+    name: Quick Refresh
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    env:
+      NEXT_PUBLIC_SUPABASE_URL:  ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+      NYT_API_KEY_1:             ${{ secrets.NYT_API_KEY_1 }}
+      NYT_API_KEY_2:             ${{ secrets.NYT_API_KEY_2 }}
+      NYT_API_KEY_3:             ${{ secrets.NYT_API_KEY_3 }}
+      FINNHUB_API_KEY_1:         ${{ secrets.FINNHUB_API_KEY_1 }}
+      FINNHUB_API_KEY_2:         ${{ secrets.FINNHUB_API_KEY_2 }}
+      FINNHUB_API_KEY_3:         ${{ secrets.FINNHUB_API_KEY_3 }}
+      FMP_API_KEY:               ${{ secrets.FMP_API_KEY }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Resolve tier
+        id: tier
+        env:
+          SCHEDULE: ${{ github.event.schedule }}
+          INPUT_TIER: ${{ inputs.tier }}
+        run: |
+          if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
+            tier="${INPUT_TIER:-a}"
+            trigger="dispatch"
+          elif [ "$SCHEDULE" = "30 10-23 * * *" ]; then
+            tier="b"
+            trigger="cron"
+          else
+            tier="a"
+            trigger="cron"
+          fi
+          echo "tier=$tier" >> "$GITHUB_OUTPUT"
+          echo "trigger=$trigger" >> "$GITHUB_OUTPUT"
+
+      - name: Run quick refresh
+        run: python src/api/run_quick_refresh.py --tier "${{ steps.tier.outputs.tier }}" --triggered-by "${{ steps.tier.outputs.trigger }}"
+        env:
+          PYTHONPATH: src/api
+
+      - name: Revalidate site cache
+        if: success()
+        env:
+          SITE_URL: ${{ secrets.NEXT_PUBLIC_SITE_URL }}
+          REVALIDATE_SECRET: ${{ secrets.REVALIDATE_SECRET }}
+        run: |
+          if [ -n "$SITE_URL" ] && [ -n "$REVALIDATE_SECRET" ]; then
+            curl -fsS -X POST "$SITE_URL/api/revalidate" \
+              -H "Authorization: Bearer $REVALIDATE_SECRET" \
+              || echo "::warning::revalidate call failed (non-fatal)"
+          else
+            echo "NEXT_PUBLIC_SITE_URL / REVALIDATE_SECRET not set — skipping revalidate"
+          fi

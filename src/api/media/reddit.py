@@ -8,9 +8,16 @@
 from typing import List, Optional, Dict, Any
 from datetime import datetime
 import requests
+import os
+import sys
 
 from dotenv import load_dotenv
 load_dotenv()
+
+_PARENT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _PARENT not in sys.path:
+    sys.path.insert(0, _PARENT)
+from etl_lib import get_http_session
 
 REDDIT_BASE_URL = "https://www.reddit.com"
 
@@ -41,7 +48,7 @@ def fetch_reddit_hot(subreddit: str = 'all', limit: int = 25) -> Optional[List[D
     try:
         if _REDDIT_DISABLED_DUE_TO_429:
             raise RedditRateLimited("Reddit disabled due to a rate/blocked response in this ETL run")
-        response = requests.get(url, headers=headers, params=params, timeout=10)
+        response = get_http_session().get(url, headers=headers, params=params, timeout=10)
         if response.status_code in (403, 429):
             _REDDIT_DISABLED_DUE_TO_429 = True
             reason = "403 blocked" if response.status_code == 403 else "429 rate-limited"
@@ -81,8 +88,10 @@ def fetch_reddit_hot(subreddit: str = 'all', limit: int = 25) -> Optional[List[D
         if ("403" in msg and "Client Error" in msg) or ("Blocked for url" in msg):
             _REDDIT_DISABLED_DUE_TO_429 = True
             raise RedditRateLimited("Reddit blocked (403) in this ETL run; stopping remaining subreddits")
+        print(f"Error fetching r/{subreddit}: {e}")
         return None
-    except Exception:
+    except Exception as e:
+        print(f"Error parsing r/{subreddit} response: {e}")
         return None
 
 

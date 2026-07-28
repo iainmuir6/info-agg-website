@@ -10,12 +10,18 @@ from typing import Dict, List, Optional, Any, Tuple
 from datetime import datetime, timedelta
 import requests
 import os
+import sys
 import base64
 import time
 
 # Load Environment Variables
 from dotenv import load_dotenv
 load_dotenv()
+
+_PARENT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _PARENT not in sys.path:
+    sys.path.insert(0, _PARENT)
+from etl_lib import get_http_session
 
 # API base URLs
 SPOTIFY_BASE_URL = "https://api.spotify.com/v1"
@@ -66,7 +72,7 @@ def get_spotify_access_token(client_id: Optional[str] = None, client_secret: Opt
     }
 
     try:
-        response = requests.post(SPOTIFY_AUTH_URL, headers=headers, data=data, timeout=10)
+        response = get_http_session().post(SPOTIFY_AUTH_URL, headers=headers, data=data, timeout=10)
         response.raise_for_status()
         token_data = response.json()
 
@@ -118,7 +124,7 @@ def fetch_spotify_new_releases(
     }
 
     try:
-        response = requests.get(url, headers=headers, params=params, timeout=10)
+        response = get_http_session().get(url, headers=headers, params=params, timeout=10)
         response.raise_for_status()
         data = response.json()
 
@@ -213,7 +219,7 @@ def fetch_spotify_user_top_items(
     }
 
     try:
-        response = requests.get(url, headers=headers, params=params, timeout=10)
+        response = get_http_session().get(url, headers=headers, params=params, timeout=10)
 
         # Check for 401 (unauthorized) before raising
         if response.status_code == 401:
@@ -331,7 +337,7 @@ def fetch_spotify_related_artists(
     }
 
     try:
-        response = requests.get(url, headers=headers, timeout=10)
+        response = get_http_session().get(url, headers=headers, timeout=10)
         response.raise_for_status()
         data = response.json()
 
@@ -437,7 +443,7 @@ def fetch_spotify_recommendations(
             seed_count += len(seed_tracks_list)
 
     try:
-        response = requests.get(url, headers=headers, params=params, timeout=10)
+        response = get_http_session().get(url, headers=headers, params=params, timeout=10)
         response.raise_for_status()
         data = response.json()
 
@@ -537,7 +543,7 @@ def fetch_spotify_featured_playlists(
     }
 
     try:
-        response = requests.get(url, headers=headers, params=params, timeout=10)
+        response = get_http_session().get(url, headers=headers, params=params, timeout=10)
         response.raise_for_status()
         data = response.json()
 
@@ -622,7 +628,7 @@ def fetch_spotify_artist_top_tracks(
     }
 
     try:
-        response = requests.get(url, headers=headers, params=params, timeout=10)
+        response = get_http_session().get(url, headers=headers, params=params, timeout=10)
         response.raise_for_status()
         data = response.json()
 
@@ -794,7 +800,7 @@ def fetch_spotify_search(
     }
 
     try:
-        response = requests.get(url, headers=headers, params=params, timeout=10)
+        response = get_http_session().get(url, headers=headers, params=params, timeout=10)
         response.raise_for_status()
         data = response.json()
 

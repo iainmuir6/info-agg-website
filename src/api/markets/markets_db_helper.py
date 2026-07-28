@@ -1062,8 +1062,8 @@ def sync_news_sentiment(
             try:
                 articles = fetch_news_sentiment(api_key=key, tickers=tickers, topic=topic)
                 collected.extend(articles)
-            except Exception:
-                stats['errors'].append(f"Error fetching news sentiment for topic: {topic}")
+            except Exception as e:
+                stats['errors'].append(f"Sentiment topic {topic}: {e}")
             
         return collected
 

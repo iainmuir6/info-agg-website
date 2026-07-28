@@ -117,3 +117,18 @@ CREATE INDEX IF NOT EXISTS idx_reddit_posts_score
 
 CREATE INDEX IF NOT EXISTS idx_news_sentiment_primary_ticker_id
     ON info_agg.news_sentiment (primary_ticker_id);
+
+
+-- ── MARKETS — stock_quotes ──────────────────────────────────
+-- Backs the cleanup_daily() intraday collapse and history cap
+-- (01_schema.sql); re-added after being dropped in 05_prune.sql
+-- because the intraday refresh cadence grows this table.
+
+CREATE INDEX IF NOT EXISTS idx_stock_quotes_quote_timestamp
+    ON info_agg.stock_quotes (quote_timestamp);
+
+
+-- ── OPS — etl_runs ──────────────────────────────────────────
+
+CREATE INDEX IF NOT EXISTS idx_etl_runs_started_at
+    ON info_agg.etl_runs (started_at DESC);

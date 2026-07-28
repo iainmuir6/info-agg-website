@@ -127,3 +127,14 @@ CREATE POLICY "reddit_posts: anon read"
     ON info_agg.reddit_posts FOR SELECT
     TO anon, authenticated
     USING (true);
+
+
+-- ── OPS ─────────────────────────────────────────────────────
+
+ALTER TABLE info_agg.etl_runs ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "etl_runs: anon read" ON info_agg.etl_runs;
+CREATE POLICY "etl_runs: anon read"
+    ON info_agg.etl_runs FOR SELECT
+    TO anon, authenticated
+    USING (true);
