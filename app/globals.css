@@ -197,6 +197,31 @@
 .bg-media   { background-color: hsl(var(--media-accent)); }
 
 /* ============================================================
+   FAVORITES
+   ============================================================ */
+/* Gold is the favorite colour everywhere (☆ buttons, stars, cell rings).
+   Kept as a variable so the ring and the star can never drift apart. */
+:root { --favorite: 45 90% 52%; }
+
+.text-favorite { color: hsl(var(--favorite)); }
+
+/* Faint gold ring for a favorited row/cell. Drawn as an inset shadow rather
+   than a border so it can't shift a grid that already allocates every pixel to
+   `border-b border-r` dividers. */
+.favorite-ring {
+  box-shadow: inset 0 0 0 1px hsl(var(--favorite) / 0.45);
+}
+
+/* Same ring plus a whisper of fill, for the dense Command Center cells where
+   a 1px ring alone is easy to miss. Table rows use `.favorite-ring` instead —
+   at full row width the ring reads fine and a tint fights the row's own
+   background and hover state. */
+.favorite-cell {
+  box-shadow: inset 0 0 0 1px hsl(var(--favorite) / 0.45);
+  background-color: hsl(var(--favorite) / 0.05);
+}
+
+/* ============================================================
    MARKET DATA COLORS
    ============================================================ */
 .text-positive { color: hsl(var(--markets-accent)); }
