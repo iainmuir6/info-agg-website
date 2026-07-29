@@ -40,10 +40,6 @@ jobs:
       ALPHA_VANTAGE_API_KEY_1:         ${{ secrets.ALPHA_VANTAGE_API_KEY_1 }}
       ALPHA_VANTAGE_API_KEY_2:         ${{ secrets.ALPHA_VANTAGE_API_KEY_2 }}
       ALPHA_VANTAGE_API_KEY_3:         ${{ secrets.ALPHA_VANTAGE_API_KEY_3 }}
-      SPOTIFY_CLIENT_ID:               ${{ secrets.SPOTIFY_CLIENT_ID }}
-      SPOTIFY_CLIENT_SECRET:           ${{ secrets.SPOTIFY_CLIENT_SECRET }}
-      REDDIT_CLIENT_ID:                ${{ secrets.REDDIT_CLIENT_ID }}
-      REDDIT_CLIENT_SECRET:            ${{ secrets.REDDIT_CLIENT_SECRET }}
       YOUTUBE_API_KEY:                 ${{ secrets.YOUTUBE_API_KEY }}
 
     steps:

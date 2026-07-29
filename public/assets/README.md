@@ -7,7 +7,7 @@ This directory contains logos and images for different information sources.
 - `logos/news/` - News source logos (NYT, BBC, CNN, Reuters, etc.)
 - `logos/sports/` - Sports source logos (ESPN, NFL, NBA, etc.)
 - `logos/markets/` - Financial source logos (Robinhood, Yahoo Finance, etc.)
-- `logos/media/` - Media source logos (YouTube, Twitter, Reddit, etc.)
+- `logos/media/` - Media source logos (YouTube, Spotify, etc.)
 
 ## Usage
 
