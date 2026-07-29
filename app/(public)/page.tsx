@@ -731,7 +731,7 @@ function ScoreCell({ game, leagueSlug }: { game: ScoreRowType; leagueSlug: strin
        The two team columns are minmax(0,1fr): they absorb slack evenly and
        truncate under pressure instead of pushing the row past the card edge,
        which fixed ch widths did at narrow masonry column widths. */
-    <div className="relative grid items-center gap-x-1 px-2 py-1.5 border-b border-border hover:bg-secondary/50 transition-colors text-[9px] font-mono leading-tight overflow-hidden [grid-template-columns:minmax(0,1fr)_auto_auto_auto_minmax(0,1fr)_2.75rem]">
+    <div className="relative grid items-center gap-x-0.5 px-1.5 py-1.5 border-b border-border hover:bg-secondary/50 transition-colors text-[9px] font-mono leading-tight overflow-hidden [grid-template-columns:minmax(3.5ch,1fr)_auto_auto_auto_minmax(3.5ch,1fr)_1.9rem]">
       {/* Stretched link: the row body opens the ESPN game page; team links sit above it */}
       {espnUrl && (
         <a
@@ -752,7 +752,7 @@ function ScoreCell({ game, leagueSlug }: { game: ScoreRowType; leagueSlug: strin
       <span className={`${scoreCls(awayWon)} text-right tabular-nums`}>
         {isScheduled ? "" : awayN ?? ""}
       </span>
-      <span className="text-muted-foreground/60 text-center px-0.5">{isScheduled ? "@" : "–"}</span>
+      <span className="text-[7px] text-muted-foreground/50 text-center px-0">{isScheduled ? "@" : "–"}</span>
       <span className={`${scoreCls(homeWon)} text-left tabular-nums`}>
         {isScheduled ? "" : homeN ?? ""}
       </span>

@@ -2,6 +2,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { LEAGUES, leagueBySlug, espnGameUrl } from "@/lib/leagues";
+import { compactStatus } from "@/lib/sports-status";
 
 // Top-level league routes: /nba, /wnba, /mlb … Static routes (/news, /markets,
 // /economy …) take precedence over this dynamic segment; anything not in the
@@ -106,45 +107,54 @@ export default async function LeaguePage({
           timeZone: "America/New_York",
         })
       : "";
+    const liveStatus = compactStatus(g.status_detail);
 
     return (
-      <div className="relative bg-background px-3 py-2 hover:bg-secondary/50 transition-colors">
+      <div className="relative bg-background px-2 py-2 hover:bg-secondary/50 transition-colors">
         {url && (
           <a href={url} target="_blank" rel="noopener noreferrer"
             aria-label="Open game on ESPN" className="absolute inset-0" />
         )}
-        <div className="flex items-center justify-between gap-2 text-[11px] font-mono">
-          <span className="text-[9px] text-muted-foreground w-10 shrink-0">{when}</span>
-          <div className="grid flex-1 items-center gap-x-2 [grid-template-columns:4ch_2.5ch_1ch_2.5ch_4ch] justify-center">
-            <Link href={`/${meta!.slug}/${away}`}
-              className={`relative z-10 font-black hover:underline ${state === "final" && !awayWon ? "text-muted-foreground" : ""}`}>
-              {away}
-            </Link>
-            <span className={`text-right tabular-nums ${state === "final" && !awayWon ? "text-muted-foreground" : "font-bold"}`}>
-              {state === "scheduled" ? "" : g.away_score ?? ""}
-            </span>
-            <span className="text-center text-muted-foreground/60">
-              {state === "scheduled" ? "@" : "–"}
-            </span>
-            <span className={`text-right tabular-nums ${state === "final" && !homeWon ? "text-muted-foreground" : "font-bold"}`}>
-              {state === "scheduled" ? "" : g.home_score ?? ""}
-            </span>
-            <Link href={`/${meta!.slug}/${home}`}
-              className={`relative z-10 font-black hover:underline ${state === "final" && !homeWon ? "text-muted-foreground" : ""}`}>
-              {home}
-            </Link>
-          </div>
-          <span className="text-[9px] uppercase text-muted-foreground w-14 text-right shrink-0"
-            style={state === "live" ? { color: "hsl(142 65% 42%)" } : undefined}>
-            {state === "final" ? "Final" : state === "live" ? g.status_detail ?? "Live" : tip}
+        {/* One grid across the row: the container allocates width and the
+            team columns truncate under pressure. Fixed ch widths overflowed
+            once these cells sat in a 2- or 3-up grid. */}
+        <div className="grid items-center gap-x-1 text-[11px] font-mono overflow-hidden [grid-template-columns:2.6rem_minmax(3.5ch,1fr)_auto_auto_auto_minmax(3.5ch,1fr)_2.2rem]">
+          <span className="text-[9px] text-muted-foreground truncate">{when}</span>
+          <Link href={`/${meta!.slug}/${away}`}
+            className={`relative z-10 font-black hover:underline text-right truncate ${state === "final" && !awayWon ? "text-muted-foreground" : ""}`}>
+            {away}
+          </Link>
+          <span className={`text-right tabular-nums ${state === "final" && !awayWon ? "text-muted-foreground" : "font-bold"}`}>
+            {state === "scheduled" ? "" : g.away_score ?? ""}
           </span>
+          <span className="text-[8px] text-center text-muted-foreground/50">
+            {state === "scheduled" ? "@" : "–"}
+          </span>
+          <span className={`text-left tabular-nums ${state === "final" && !homeWon ? "text-muted-foreground" : "font-bold"}`}>
+            {state === "scheduled" ? "" : g.home_score ?? ""}
+          </span>
+          <Link href={`/${meta!.slug}/${home}`}
+            className={`relative z-10 font-black hover:underline text-left truncate ${state === "final" && !homeWon ? "text-muted-foreground" : ""}`}>
+            {home}
+          </Link>
+          {state === "live" ? (
+            <span className="flex flex-col items-end leading-none text-[8px]"
+              style={{ color: "hsl(142 65% 42%)" }} title={g.status_detail ?? "Live"}>
+              <span className="truncate max-w-full">{liveStatus.top}</span>
+              {liveStatus.bottom && <span className="truncate max-w-full">{liveStatus.bottom}</span>}
+            </span>
+          ) : (
+            <span className="text-[8px] uppercase text-muted-foreground text-right truncate">
+              {state === "final" ? "Final" : tip}
+            </span>
+          )}
         </div>
       </div>
     );
   }
 
   return (
-    <div className="px-6 py-6 space-y-6">
+    <div className="px-3 sm:px-6 py-4 sm:py-6 space-y-6">
       <div>
         <div className="rule-double mb-3" />
         <div className="flex items-baseline justify-between flex-wrap gap-2">

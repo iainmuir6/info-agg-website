@@ -7,6 +7,9 @@ type Score = {
   league_id: number;
   home_team: string;
   away_team: string;
+  home_abbrev: string | null;
+  away_abbrev: string | null;
+  event_id: string | null;
   home_score: number | null;
   away_score: number | null;
   home_record: string | null;
@@ -117,7 +120,7 @@ export default async function SportsPage() {
   const hasData = leagues.length > 0 && (scores.length > 0 || news.length > 0);
 
   return (
-    <div className="px-6 py-6 space-y-6">
+    <div className="px-3 sm:px-6 py-4 sm:py-6 space-y-6">
       {/* Page header */}
       <div>
         <div className="rule-double mb-3" />
@@ -172,12 +175,13 @@ export default async function SportsPage() {
                   className="flex items-center gap-3 px-5 py-3 border-b border-border"
                   style={{ borderLeftWidth: "3px", borderLeftColor: color }}
                 >
-                  <span
-                    className="text-xs font-mono font-bold tracking-widest uppercase"
+                  <Link
+                    href={`/${league.league}`}
+                    className="text-xs font-mono font-bold tracking-widest uppercase hover:underline"
                     style={{ color }}
                   >
                     {league.display_name}
-                  </span>
+                  </Link>
                   <span className="text-[10px] font-mono text-muted-foreground">
                     {leagueScores.length} games · {leagueNews.length} articles
                   </span>
@@ -202,7 +206,7 @@ export default async function SportsPage() {
                                 {/* Away */}
                                 <div className="flex items-center gap-2 w-5/12">
                                   <Link
-                                    href={`/sports/${league.league}/${encodeURIComponent(game.away_team)}`}
+                                    href={`/${league.league}/${(game.away_abbrev ?? game.away_team).toUpperCase()}`}
                                     className="text-muted-foreground truncate hover:text-foreground hover:underline"
                                   >
                                     {game.away_team}
@@ -221,7 +225,7 @@ export default async function SportsPage() {
                                 {/* Home */}
                                 <div className="flex items-center gap-2 w-5/12 justify-end">
                                   <Link
-                                    href={`/sports/${league.league}/${encodeURIComponent(game.home_team)}`}
+                                    href={`/${league.league}/${(game.home_abbrev ?? game.home_team).toUpperCase()}`}
                                     className="text-muted-foreground truncate hover:text-foreground hover:underline"
                                   >
                                     {game.home_team}

@@ -149,28 +149,30 @@ export default async function TeamPage({
       : "";
 
     return (
-      <div className="relative bg-background px-3 py-2 hover:bg-secondary/50 transition-colors">
+      <div className="relative bg-background px-2 py-2 hover:bg-secondary/50 transition-colors">
         {url && (
           <a href={url} target="_blank" rel="noopener noreferrer"
             aria-label="Open game on ESPN" className="absolute inset-0" />
         )}
-        <div className="flex items-center gap-2 text-[11px] font-mono">
-          <span className="text-[9px] text-muted-foreground w-10 shrink-0">{when}</span>
+        {/* Grid rather than flex: these cells sit 4-5 up on wide screens, so
+            the opponent column has to be able to shrink instead of pushing
+            the score out of the cell. */}
+        <div className="grid items-center gap-x-1 text-[11px] font-mono overflow-hidden [grid-template-columns:2.6rem_0.8rem_1.3rem_minmax(3.5ch,1fr)_auto]">
+          <span className="text-[9px] text-muted-foreground truncate">{when}</span>
           {state === "final" ? (
-            <span className="font-black w-3 shrink-0"
+            <span className="font-black"
               style={{ color: won ? "hsl(142 65% 42%)" : lost ? "hsl(0 72% 50%)" : undefined }}>
               {won ? "W" : lost ? "L" : "–"}
             </span>
           ) : (
-            <span className="w-3 shrink-0 text-muted-foreground">·</span>
+            <span className="text-muted-foreground">·</span>
           )}
-          <span className="text-muted-foreground shrink-0">{home ? "vs" : "@"}</span>
+          <span className="text-[9px] text-muted-foreground">{home ? "vs" : "@"}</span>
           <Link href={`/${meta!.slug}/${oppAbbrev}`}
-            className="relative z-10 font-bold hover:underline shrink-0">
+            className="relative z-10 font-bold hover:underline truncate">
             {oppAbbrev}
           </Link>
-          <span className="flex-1" />
-          <span className="tabular-nums font-bold shrink-0">
+          <span className="tabular-nums font-bold text-right whitespace-nowrap">
             {state === "final" ? `${own ?? "–"}–${opp ?? "–"}` : tip}
           </span>
         </div>
@@ -179,7 +181,7 @@ export default async function TeamPage({
   }
 
   return (
-    <div className="px-6 py-6 space-y-6">
+    <div className="px-3 sm:px-6 py-4 sm:py-6 space-y-6">
       {/* Header */}
       <div>
         <div className="rule-double mb-3" />

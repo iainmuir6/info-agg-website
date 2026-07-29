@@ -78,7 +78,7 @@ export default async function EconomyPage() {
   const hasData = curvePoints.length >= 2 || macroKeys.length > 0;
 
   return (
-    <div className="px-6 py-6 space-y-8">
+    <div className="px-3 sm:px-6 py-4 sm:py-6 space-y-8">
       {/* Page header */}
       <div>
         <div className="rule-double mb-3" />

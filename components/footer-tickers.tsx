@@ -1,25 +1,27 @@
 "use client";
 
+import { useEffect, useRef, useState } from "react";
 import { usePathname } from "next/navigation";
 import { NewsTickerClient, type TickerItem } from "@/components/news-ticker-client";
 import { SportsTickerClient, type SportsTickerItem } from "@/components/sports-ticker-client";
 
-/** Height of the two stacked tickers plus their top border. Kept in sync with
- *  TickerShell's h-7/sm:h-8 so the spacer below matches the pinned bar. */
-const BAR_H = "h-[57px] sm:h-[65px]";
-
 /**
  * Market + score tickers.
  *
- * On the Command Center ("/") the bar is pinned to the viewport so it is
- * always visible. It uses `fixed` rather than `sticky bottom-0`: as the last
- * child of the layout's `flex flex-col` column, a sticky-bottom element has no
- * room to offset within its containing block, so it only appeared once you
- * scrolled to the very bottom — i.e. never, in practice, on a long homepage.
- * A fixed bar plus an equal-height spacer is deterministic and keeps the last
- * row of cards clear of the bar.
+ * On the Command Center ("/") the bar is pinned to the viewport with `fixed`
+ * (a `sticky bottom-0` last child of the layout's flex column has no room to
+ * offset, so it only appeared at the very bottom of the page). Every other
+ * page renders it inline at the end of the document.
  *
- * Every other page renders the tickers inline at the end of the document.
+ * The two ticker components are ALWAYS mounted, even when they have no rows
+ * to show. Each one renders null while empty but keeps polling, so a moment
+ * where the server-rendered snapshot came back empty — a cached fetch failure,
+ * or simply no games in the window — repairs itself on the next poll. Bailing
+ * out here instead would unmount the pollers and leave the bar gone until the
+ * next successful server render.
+ *
+ * The spacer is measured from the bar rather than hardcoded, so an empty bar
+ * collapses to nothing instead of reserving a blank strip.
  */
 export function FooterTickers({
   quotes,
@@ -30,10 +32,18 @@ export function FooterTickers({
 }) {
   const pathname = usePathname();
   const pinned = pathname === "/";
+  const barRef = useRef<HTMLElement>(null);
+  const [barHeight, setBarHeight] = useState(0);
 
-  // Both ticker components render null when they have no rows; without this
-  // the footer would leave a stray border line across the page.
-  if (quotes.length === 0 && games.length === 0) return null;
+  useEffect(() => {
+    const el = barRef.current;
+    if (!el || !pinned) return;
+    const update = () => setBarHeight(el.getBoundingClientRect().height);
+    update();
+    const ro = new ResizeObserver(update);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [pinned]);
 
   const tickers = (
     <>
@@ -43,15 +53,16 @@ export function FooterTickers({
   );
 
   if (!pinned) {
-    return (
-      <footer className="border-t border-border bg-background">{tickers}</footer>
-    );
+    return <footer className="border-t border-border bg-background">{tickers}</footer>;
   }
 
   return (
     <>
-      <div aria-hidden className={`${BAR_H} shrink-0`} />
-      <footer className={`fixed bottom-0 left-0 right-0 z-40 border-t border-border bg-background ${BAR_H}`}>
+      <div aria-hidden className="shrink-0" style={{ height: barHeight }} />
+      <footer
+        ref={barRef}
+        className="fixed bottom-0 left-0 right-0 z-40 border-t border-border bg-background"
+      >
         {tickers}
       </footer>
     </>

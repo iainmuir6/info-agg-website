@@ -96,7 +96,7 @@ export default async function ProfilePage() {
   /* eslint-enable @typescript-eslint/no-explicit-any */
 
   return (
-    <div className="max-w-3xl mx-auto px-6 py-8">
+    <div className="max-w-3xl mx-auto px-3 sm:px-6 py-6 sm:py-8">
       <div className="mb-6">
         <h1 className="text-2xl font-black tracking-tighter" style={{ fontFamily: "Georgia, serif" }}>
           PROFILE
