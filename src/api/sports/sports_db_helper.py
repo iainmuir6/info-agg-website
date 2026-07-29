@@ -22,9 +22,9 @@ if _HERE not in sys.path:
     sys.path.insert(0, _HERE)
 
 try:
-    from .espn import SPORT_CONFIGS, fetch_espn_news, fetch_espn_scores
+    from .espn import SPORT_CONFIGS, fetch_espn_news, fetch_espn_scores, fetch_espn_standings
 except ImportError:
-    from espn import SPORT_CONFIGS, fetch_espn_news, fetch_espn_scores
+    from espn import SPORT_CONFIGS, fetch_espn_news, fetch_espn_scores, fetch_espn_standings
 
 
 def get_supabase_client() -> Client:
@@ -126,6 +126,8 @@ def _sports_score_records(league_id: str, games: List[Dict[str, Any]]) -> List[D
             'away_team': game.get('away_team'),
             'home_abbrev': game.get('home_abbrev'),
             'away_abbrev': game.get('away_abbrev'),
+            'home_logo': game.get('home_logo'),
+            'away_logo': game.get('away_logo'),
             'home_score': game.get('home_score'),
             'away_score': game.get('away_score'),
             'home_record': game.get('home_record'),
@@ -137,6 +139,7 @@ def _sports_score_records(league_id: str, games: List[Dict[str, Any]]) -> List[D
             'broadcast': game.get('broadcast'),
             'week': game.get('week'),
             'season': game.get('season'),
+            'season_type': game.get('season_type'),
         })
     return records
 
@@ -326,6 +329,81 @@ def sync_season_schedules(
             stats['scores_inserted'] += _upsert_sports_score_records(
                 supabase, league_records, errors=stats['errors']
             )
+
+    return stats
+
+
+def _standings_records(league_id: str, rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    records: List[Dict[str, Any]] = []
+    for row in rows:
+        team_abbrev = row.get('team_abbrev')
+        if not team_abbrev:
+            continue
+        records.append({
+            'league_id': league_id,
+            'team_name': row.get('team_name'),
+            'team_abbrev': team_abbrev,
+            'logo': row.get('logo'),
+            'conference': row.get('conference'),
+            'division': row.get('division'),
+            'wins': row.get('wins'),
+            'losses': row.get('losses'),
+            'ties': row.get('ties'),
+            'win_percent': row.get('win_percent'),
+            'games_behind': row.get('games_behind'),
+            'streak': row.get('streak'),
+            'playoff_seed': row.get('playoff_seed'),
+            'point_differential': row.get('point_differential'),
+            'points': row.get('points'),
+            'rank': row.get('rank'),
+            'season': row.get('season'),
+        })
+    return records
+
+
+def insert_standings(supabase: Client, league_id: str, rows: List[Dict[str, Any]]) -> int:
+    """Batch-upsert one league's standings, keyed on (league_id, team_abbrev, season)."""
+    records = _standings_records(league_id, rows)
+    if not records:
+        return 0
+    try:
+        response = supabase.table('sports_standings').upsert(
+            records, on_conflict='league_id,team_abbrev,season'
+        ).execute()
+        return len(response.data) if response.data else 0
+    except Exception as e:
+        print(f"Error batch-upserting standings: {e}")
+        return 0
+
+
+def sync_standings(supabase: Client) -> Dict[str, Any]:
+    """Fetch + upsert standings for every configured league. One ESPN call per
+    league (~9 calls/day) — run once daily, not on an intraday tier."""
+    stats: Dict[str, Any] = {
+        'leagues_processed': 0,
+        'rows_inserted': 0,
+        'errors': [],
+    }
+
+    try:
+        resp = supabase.table('leagues').select('id,sport,league').execute()
+        league_id_map = {(r['sport'], r['league']): r['id'] for r in (resp.data or [])}
+    except Exception as e:
+        stats['errors'].append(f"Failed to prefetch league IDs: {e}")
+        return stats
+
+    for sport, league in SPORT_CONFIGS:
+        league_id = league_id_map.get((sport, league))
+        if not league_id:
+            stats['errors'].append(f"League ID not found for {sport}/{league}")
+            continue
+        try:
+            rows = fetch_espn_standings(sport, league)
+            if rows:
+                stats['rows_inserted'] += insert_standings(supabase, league_id, rows)
+            stats['leagues_processed'] += 1
+        except Exception as e:
+            stats['errors'].append(f"Error fetching standings for {sport}/{league}: {e}")
 
     return stats
 

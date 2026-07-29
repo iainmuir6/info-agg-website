@@ -28,6 +28,8 @@
       "TLT",
       "HYG",
       "GLD",
+      "SLV",
+      "DBC",
       "UUP"
     ],
     "core_stocks": [
@@ -38,9 +40,12 @@
       "GOOGL",
       "META",
       "TSLA",
-      "BRK.B",
+      "BRK-B",
       "JPM",
-      "AVGO"
+      "AVGO",
+      "AMD",
+      "INTC",
+      "SPCX"
     ],
     "crypto": [
       "BTC",

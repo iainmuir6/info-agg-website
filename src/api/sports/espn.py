@@ -27,6 +27,7 @@ from etl_lib import get_http_session, MinInterval
 
 
 ESPN_BASE_URL = "https://site.api.espn.com/apis/site/v2/sports"
+ESPN_STANDINGS_BASE_URL = "https://site.api.espn.com/apis/v2/sports"
 
 # Enforce strict >=1s minimum spacing between repeated ESPN HTTP calls from
 # this module (sports ETL is sequential, but backfills are loop-driven).
@@ -34,6 +35,14 @@ ESPN_BASE_URL = "https://site.api.espn.com/apis/site/v2/sports"
 # concurrent callers are paced without being serialized.
 _ESPN_MIN_INTERVAL_S = 1.0
 _espn_pacer = MinInterval(_ESPN_MIN_INTERVAL_S)
+
+# Standings runs once/day (9 calls total, one per league) against an endpoint
+# with no documented rate limit — the 1s scoreboard/news pacer above would add
+# ~9s to the already-tight season-schedules daily run and risk the 60s ETL
+# budget (CLAUDE.md). A separate, lighter pacer keeps this call family fast
+# without loosening the shared pacer used by the higher-frequency calls.
+_ESPN_STANDINGS_MIN_INTERVAL_S = 0.2
+_espn_standings_pacer = MinInterval(_ESPN_STANDINGS_MIN_INTERVAL_S)
 
 
 def _espn_min_interval() -> None:
@@ -301,6 +310,9 @@ def fetch_espn_scores(
                     # the frontend prefers these over its lookup-table fallback.
                     'home_abbrev': home_competitor.get('team', {}).get('abbreviation'),
                     'away_abbrev': away_competitor.get('team', {}).get('abbreviation'),
+                    # Already present on the scoreboard payload — no extra call needed.
+                    'home_logo': home_competitor.get('team', {}).get('logo'),
+                    'away_logo': away_competitor.get('team', {}).get('logo'),
                     'home_score': home_competitor.get('score'),
                     'away_score': away_competitor.get('score'),
                     'home_record': home_competitor.get('records', [{}])[0].get('summary') if home_competitor.get('records') else None,
@@ -312,6 +324,9 @@ def fetch_espn_scores(
                     'broadcast': competition.get('broadcasts', [{}])[0].get('names', [None])[0] if competition.get('broadcasts') else None,
                     'week': event.get('week', {}).get('number') if event.get('week') else None,
                     'season': event.get('season', {}).get('year') if event.get('season') else None,
+                    # 1=preseason, 2=regular, 3=postseason — used to exclude
+                    # preseason games from team records without hiding them.
+                    'season_type': event.get('season', {}).get('type') if event.get('season') else None,
                 }
                 games.append(game_data)
 
@@ -323,6 +338,109 @@ def fetch_espn_scores(
     except (KeyError, IndexError) as e:
         print(f"Error parsing scores data for {sport}/{league}: {e}")
         return []
+
+
+def _standings_stat(stats: List[Dict[str, Any]], *names: str) -> Optional[Dict[str, Any]]:
+    """Find a stat entry by name (ESPN's `stats[].name`), case-insensitive."""
+    wanted = {n.lower() for n in names}
+    for s in stats:
+        if (s.get('name') or '').lower() in wanted:
+            return s
+    return None
+
+
+def _standings_entries(
+    entries: List[Dict[str, Any]], conference: Optional[str], division: Optional[str], season: Optional[int]
+) -> List[Dict[str, Any]]:
+    rows = []
+    for entry in entries:
+        team = entry.get('team', {}) or {}
+        stats = entry.get('stats', []) or []
+        wins = _standings_stat(stats, 'wins')
+        losses = _standings_stat(stats, 'losses')
+        ties = _standings_stat(stats, 'ties')
+        win_pct = _standings_stat(stats, 'winPercent')
+        games_behind = _standings_stat(stats, 'gamesBehind')
+        streak = _standings_stat(stats, 'streak')
+        playoff_seed = _standings_stat(stats, 'playoffSeed')
+        differential = _standings_stat(stats, 'differential', 'pointDifferential')
+        # NHL/soccer rank by league points + a explicit `rank`, not winPercent
+        # (soccer has no winPercent/playoffSeed stat at all).
+        points = _standings_stat(stats, 'points')
+        rank = _standings_stat(stats, 'rank')
+        logos = team.get('logos') or []
+
+        rows.append({
+            'team_name': team.get('displayName'),
+            'team_abbrev': team.get('abbreviation'),
+            'logo': logos[0].get('href') if logos else None,
+            'conference': conference,
+            'division': division,
+            'wins': int(wins['value']) if wins and wins.get('value') is not None else None,
+            'losses': int(losses['value']) if losses and losses.get('value') is not None else None,
+            'ties': int(ties['value']) if ties and ties.get('value') is not None else None,
+            'win_percent': win_pct.get('value') if win_pct else None,
+            'games_behind': games_behind.get('displayValue') if games_behind else None,
+            'streak': streak.get('displayValue') if streak else None,
+            'playoff_seed': int(playoff_seed['value']) if playoff_seed and playoff_seed.get('value') is not None else None,
+            'point_differential': differential.get('value') if differential else None,
+            'points': points.get('value') if points else None,
+            'rank': int(rank['value']) if rank and rank.get('value') is not None else None,
+            'season': season,
+        })
+    return rows
+
+
+def fetch_espn_standings(sport: str, league: str) -> List[Dict[str, Any]]:
+    """
+    Fetch current-season standings for a sport/league from ESPN.
+
+    Normalizes two response shapes into one flat list of team-row dicts:
+      - Conference leagues (NFL, NBA, ...): `children` = conferences, each
+        either with its own `children` (divisions) or a direct `standings`.
+      - Non-conference leagues (EPL, ...): a single top-level `standings`.
+
+    Returns:
+        List of dicts: team_name, team_abbrev, conference, division, wins,
+        losses, ties, win_percent, games_behind, streak, playoff_seed,
+        point_differential, season. `conference`/`division` are None when
+        the league has no such grouping.
+    """
+    url = f"{ESPN_STANDINGS_BASE_URL}/{sport}/{league}/standings"
+
+    try:
+        _espn_standings_pacer.wait()
+        response = get_http_session().get(url, timeout=10)
+        response.raise_for_status()
+        data = response.json()
+    except requests.exceptions.RequestException as e:
+        print(f"Error fetching standings for {sport}/{league}: {e}")
+        return []
+    except Exception as e:
+        print(f"Error parsing standings data for {sport}/{league}: {e}")
+        return []
+
+    season = data.get('season', {}).get('year')
+    groups = data.get('children') or []
+
+    if not groups:
+        entries = (data.get('standings') or {}).get('entries', [])
+        return _standings_entries(entries, conference=None, division=None, season=season)
+
+    rows: List[Dict[str, Any]] = []
+    for group in groups:
+        conference = group.get('name') or group.get('abbreviation')
+        divisions = group.get('children') or []
+        if divisions:
+            for division in divisions:
+                division_name = division.get('name') or division.get('abbreviation')
+                entries = (division.get('standings') or {}).get('entries', [])
+                rows.extend(_standings_entries(entries, conference=conference, division=division_name, season=season))
+        else:
+            entries = (group.get('standings') or {}).get('entries', [])
+            rows.extend(_standings_entries(entries, conference=conference, division=None, season=season))
+
+    return rows
 
 
 def fetch_all_espn_news(limit_per_sport: int = 10) -> Dict[str, List[Dict[str, Any]]]:
