@@ -1,4 +1,7 @@
 import { createClient } from "@/lib/supabase/server";
+import { getFavorites, gameIsFavorite, byDayThenFavorites, teamKey } from "@/lib/favorites";
+import { leadingDaySlate, easternDay, formatDayKey } from "@/lib/sports-status";
+import { FavoriteStar } from "@/components/favorite-star";
 import Link from "next/link";
 import { teamNickname } from "@/lib/sports-status";
 import { espnGameUrl } from "@/lib/leagues";
@@ -11,6 +14,8 @@ type Score = {
   away_team: string;
   home_abbrev: string | null;
   away_abbrev: string | null;
+  home_logo: string | null;
+  away_logo: string | null;
   event_id: string | null;
   home_score: number | null;
   away_score: number | null;
@@ -44,11 +49,14 @@ const SPORT_COLORS: Record<string, string> = {
 function getStatusBadge(status: string | null) {
   if (!status) return null;
   const s = status.toLowerCase();
-  if (s.includes("in") || s.includes("live") || s.includes("progress")) {
-    return { label: "LIVE", color: "hsl(0 72% 50%)" };
-  }
+  // Order matters, and the live test must NOT be a bare `includes("in")` —
+  // "final" contains "in", so every finished game was badged LIVE. Final is
+  // also checked first so a status like "Final/OT" can't fall through.
   if (s.includes("final")) {
     return { label: "FINAL", color: "hsl(var(--muted-foreground))" };
+  }
+  if (s.includes("progress") || s.includes("live")) {
+    return { label: "LIVE", color: "hsl(0 72% 50%)" };
   }
   if (s.includes("pre") || s.includes("scheduled")) {
     return { label: "UPCOMING", color: "hsl(220 90% 52%)" };
@@ -83,7 +91,7 @@ async function getSportsData(supabase: Awaited<ReturnType<typeof createClient>>)
     // which the in-season filter then rejects — leaving the page blank.
     supabase
       .from("sports_scores")
-      .select("id, league_id, home_team, away_team, home_abbrev, away_abbrev, event_id, home_score, away_score, home_record, away_record, status, status_detail, game_date, venue, broadcast")
+      .select("id, league_id, home_team, away_team, home_abbrev, away_abbrev, home_logo, away_logo, event_id, home_score, away_score, home_record, away_record, status, status_detail, game_date, venue, broadcast")
       .gte("game_date", new Date(Date.now() - 10 * 24 * 3600 * 1000).toISOString())
       .lte("game_date", new Date(Date.now() + 10 * 24 * 3600 * 1000).toISOString())
       .order("game_date", { ascending: false })
@@ -104,7 +112,11 @@ async function getSportsData(supabase: Awaited<ReturnType<typeof createClient>>)
 
 export default async function SportsPage() {
   const supabase = await createClient();
-  const { leagues, scores, news } = await getSportsData(supabase);
+  const { data: claimsData } = await supabase.auth.getClaims();
+  const [{ leagues, scores, news }, favorites] = await Promise.all([
+    getSportsData(supabase),
+    getFavorites(supabase, claimsData?.claims?.sub as string | undefined),
+  ]);
 
   // Group scores and news by league
   const scoresByLeague = scores.reduce<Record<number, Score[]>>((acc, s) => {
@@ -176,10 +188,35 @@ export default async function SportsPage() {
               const st = (s.status ?? "").toLowerCase();
               return st.includes("final") || st.includes("progress") || st.includes("live");
             };
-            const played = leagueScores.filter(isPlayed);
-            const scheduled = leagueScores
-              .filter((s) => !isPlayed(s))
-              .sort((a, b) => new Date(a.game_date ?? 0).getTime() - new Date(b.game_date ?? 0).getTime());
+            // Day is the primary sort; favorites only break ties within the
+            // same day. Sorting on the full timestamp instead left no ties for
+            // the favorite check to break, so favorites never surfaced.
+            const isFavTeam = (name: string) => favorites.teams.has(teamKey(league.league, name));
+            const isFavGame = (s: Score) => gameIsFavorite(favorites, league.league, s);
+            // One day's full slate per column, not an arbitrary count — MLB
+            // plays 16 games a day, so `slice(0, 6)` showed less than half of
+            // one day while also mixing in older days.
+            const played = byDayThenFavorites(
+              leadingDaySlate(leagueScores.filter(isPlayed), (s) => s.game_date, "desc"),
+              (s) => s.game_date,
+              isFavGame,
+              "desc",
+            );
+            // Today-onward only. The ±10-day window also contains games ESPN
+            // still reports as Scheduled days after the fact (postponements, or
+            // rows we never refreshed). Taking the earliest unplayed day made
+            // the Schedule column show a stale slate from over a week ago.
+            const todayKey = easternDay(new Date().toISOString());
+            const notYetPlayed = leagueScores.filter((s) => !isPlayed(s));
+            const upcomingOnly = notYetPlayed.filter((s) => easternDay(s.game_date) >= todayKey);
+            const scheduled = byDayThenFavorites(
+              leadingDaySlate(upcomingOnly, (s) => s.game_date, "asc"),
+              (s) => s.game_date,
+              isFavGame,
+              "asc",
+            );
+            const playedDay = formatDayKey(easternDay(played[0]?.game_date));
+            const scheduledDay = formatDayKey(easternDay(scheduled[0]?.game_date));
 
             return (
               <section key={league.id} className="bg-background">
@@ -206,9 +243,12 @@ export default async function SportsPage() {
                     <div className="bg-background p-4">
                       <p className="text-[10px] font-mono tracking-widest text-muted-foreground uppercase mb-3">
                         Scores
+                        <span className="normal-case tracking-normal text-muted-foreground/70">
+                          {playedDay ? ` · ${playedDay} · ${played.length} games` : ` · ${played.length} games`}
+                        </span>
                       </p>
                       <div className="space-y-2">
-                        {played.slice(0, 6).map((game) => {
+                        {played.map((game) => {
                           const badge = getStatusBadge(game.status);
                           return (
                             <div
@@ -220,10 +260,15 @@ export default async function SportsPage() {
                                 <div className="flex items-center gap-2 w-5/12">
                                   <Link
                                     href={`/${league.league}/${(game.away_abbrev ?? game.away_team).toUpperCase()}`}
-                                    className="text-muted-foreground truncate hover:text-foreground hover:underline"
+                                    className="flex items-center gap-1.5 min-w-0 text-muted-foreground truncate hover:text-foreground hover:underline"
                                   >
-                                    <span className="sm:hidden">{teamNickname(game.away_team)}</span>
-                                    <span className="hidden sm:inline">{game.away_team}</span>
+                                    {game.away_logo && (
+                                      // eslint-disable-next-line @next/next/no-img-element
+                                      <img src={game.away_logo} alt="" className="w-4 h-4 shrink-0 object-contain" />
+                                    )}
+                                    <span className="sm:hidden truncate">{teamNickname(game.away_team)}</span>
+                                    <span className="hidden sm:inline truncate">{game.away_team}</span>
+                                    <FavoriteStar show={isFavTeam(game.away_team)} />
                                   </Link>
                                 </div>
                                 {/* Scores */}
@@ -258,10 +303,15 @@ export default async function SportsPage() {
                                 <div className="flex items-center gap-2 w-5/12 justify-end">
                                   <Link
                                     href={`/${league.league}/${(game.home_abbrev ?? game.home_team).toUpperCase()}`}
-                                    className="text-muted-foreground truncate hover:text-foreground hover:underline"
+                                    className="flex items-center gap-1.5 min-w-0 text-muted-foreground truncate hover:text-foreground hover:underline"
                                   >
-                                    <span className="sm:hidden">{teamNickname(game.home_team)}</span>
-                                    <span className="hidden sm:inline">{game.home_team}</span>
+                                    <span className="sm:hidden truncate">{teamNickname(game.home_team)}</span>
+                                    <span className="hidden sm:inline truncate">{game.home_team}</span>
+                                    <FavoriteStar show={isFavTeam(game.home_team)} />
+                                    {game.home_logo && (
+                                      // eslint-disable-next-line @next/next/no-img-element
+                                      <img src={game.home_logo} alt="" className="w-4 h-4 shrink-0 object-contain" />
+                                    )}
                                   </Link>
                                 </div>
                               </div>
@@ -290,26 +340,39 @@ export default async function SportsPage() {
                     <div className="bg-background p-4">
                       <p className="text-[10px] font-mono tracking-widest text-muted-foreground uppercase mb-3">
                         Schedule
+                        <span className="normal-case tracking-normal text-muted-foreground/70">
+                          {scheduledDay ? ` · ${scheduledDay} · ${scheduled.length} games` : ` · ${scheduled.length} games`}
+                        </span>
                       </p>
                       <div className="space-y-2">
-                        {scheduled.slice(0, 6).map((game) => (
+                        {scheduled.map((game) => (
                           <div key={game.id} className="py-2 border-b border-border last:border-0">
                             <div className="flex items-center justify-between text-xs font-mono gap-2">
                               <div className="flex items-center gap-2 min-w-0 flex-1">
                                 <Link
                                   href={`/${league.league}/${(game.away_abbrev ?? game.away_team).toUpperCase()}`}
-                                  className="text-muted-foreground truncate hover:text-foreground hover:underline"
+                                  className="flex items-center gap-1 min-w-0 text-muted-foreground truncate hover:text-foreground hover:underline"
                                 >
-                                  <span className="sm:hidden">{teamNickname(game.away_team)}</span>
-                                  <span className="hidden sm:inline">{game.away_team}</span>
+                                  {game.away_logo && (
+                                    // eslint-disable-next-line @next/next/no-img-element
+                                    <img src={game.away_logo} alt="" className="w-4 h-4 shrink-0 object-contain" />
+                                  )}
+                                  <span className="sm:hidden truncate">{teamNickname(game.away_team)}</span>
+                                  <span className="hidden sm:inline truncate">{game.away_team}</span>
+                                  <FavoriteStar show={isFavTeam(game.away_team)} />
                                 </Link>
                                 <span className="text-muted-foreground/50 shrink-0">@</span>
                                 <Link
                                   href={`/${league.league}/${(game.home_abbrev ?? game.home_team).toUpperCase()}`}
-                                  className="text-muted-foreground truncate hover:text-foreground hover:underline"
+                                  className="flex items-center gap-1 min-w-0 text-muted-foreground truncate hover:text-foreground hover:underline"
                                 >
-                                  <span className="sm:hidden">{teamNickname(game.home_team)}</span>
-                                  <span className="hidden sm:inline">{game.home_team}</span>
+                                  <span className="sm:hidden truncate">{teamNickname(game.home_team)}</span>
+                                  <span className="hidden sm:inline truncate">{game.home_team}</span>
+                                  <FavoriteStar show={isFavTeam(game.home_team)} />
+                                  {game.home_logo && (
+                                    // eslint-disable-next-line @next/next/no-img-element
+                                    <img src={game.home_logo} alt="" className="w-4 h-4 shrink-0 object-contain" />
+                                  )}
                                 </Link>
                               </div>
                               <span className="text-[10px] text-muted-foreground shrink-0 whitespace-nowrap">

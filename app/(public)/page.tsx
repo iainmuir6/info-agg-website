@@ -3,7 +3,20 @@ import { createClient } from "@/lib/supabase/server";
 import Link from "next/link";
 import { DEFAULT_HOME_ORDER, type HomeSectionKey } from "@/lib/home-sections";
 import { TickerHoverChart } from "@/components/ticker-hover-chart";
-import { compactStatus } from "@/lib/sports-status";
+import { compactStatus, formatGameTime, isGameToday, formatGameDateShort, leadingDaySlate } from "@/lib/sports-status";
+import { latestSeasonOnly, topNPerGroup, type StandingRow, type StandingsGroup } from "@/lib/standings";
+import { StandingsExpander } from "@/components/standings-expander";
+import { SPOTIFY_HOME_PLAYLISTS } from "@/lib/top-podcasts";
+import { buildPodcastList, type FavoritedPodcastRow } from "@/lib/podcast-list";
+import { FavoritePodcastButton } from "@/components/favorite-podcast-button";
+import {
+  getFavorites,
+  gameIsFavorite,
+  favoritesFirst,
+  byDayThenFavorites,
+  NO_FAVORITES,
+  type Favorites,
+} from "@/lib/favorites";
 import { CollapsibleCard } from "@/components/collapsible-card";
 import { MasonryColumns } from "@/components/masonry-columns";
 
@@ -13,6 +26,7 @@ type QuoteRow = {
   ticker: string;
   name?: string | null;
   asset_type: string;
+  market_cap: number | null;
   quote: { current_price: number; percent_change: number } | null;
 };
 
@@ -47,6 +61,8 @@ type ScoreRowType = {
   away_team: string;
   home_abbrev: string | null;
   away_abbrev: string | null;
+  home_logo: string | null;
+  away_logo: string | null;
   home_score: number | null;
   away_score: number | null;
   status: string | null;
@@ -67,6 +83,7 @@ type LeagueSnapshot = {
   recentGames: ScoreRowType[];
   upcomingGames: ScoreRowType[];
   news: SportsNewsItem[];
+  standings: StandingsGroup[];
 };
 
 type EconRow = {
@@ -98,6 +115,36 @@ const ECON_CONFIG: Record<string, { label: string; fmt: (v: number) => string; g
   "30YearFixedRateMortgageAverage": { label: "30Y Mortgage", fmt: (v) => `${v.toFixed(2)}%`, group: "Macro" },
   initialClaims: { label: "Init. Claims", fmt: (v) => `${(v / 1000).toFixed(0)}K`, group: "Macro" },
 };
+
+// ETF sub-groups — mirrors src/api/markets/baskets.json's core_market/breadth/
+// sectors/risk baskets, which never reach the DB (only the coarse `asset_type`
+// does — see classify_tickers() in run_etl.py). Keep in sync manually if
+// baskets.json's ETF tickers change.
+const ETF_GROUP_BY_TICKER: Record<string, string> = {
+  // core_market + breadth: broad index & factor/style funds
+  VTI: "Macro/Market", SPY: "Macro/Market", QQQ: "Macro/Market", IWM: "Macro/Market", VXUS: "Macro/Market",
+  RSP: "Macro/Market", VUG: "Macro/Market", VTV: "Macro/Market",
+  // sectors: SPDR sector funds
+  XLC: "Sectors", XLY: "Sectors", XLP: "Sectors", XLE: "Sectors", XLF: "Sectors",
+  XLV: "Sectors", XLI: "Sectors", XLB: "Sectors", XLRE: "Sectors", XLK: "Sectors", XLU: "Sectors",
+  // risk: rates/credit/dollar vs. commodities — split so "Commodities" means what it says
+  TLT: "Rates & Currency", HYG: "Rates & Currency", UUP: "Rates & Currency",
+  GLD: "Commodities", SLV: "Commodities", DBC: "Commodities",
+};
+const ETF_GROUP_ORDER = ["Macro/Market", "Sectors", "Rates & Currency", "Commodities"];
+
+// Within "Macro/Market", surface the big three index funds first.
+const ETF_TICKER_PRIORITY: Record<string, number> = { VTI: 0, SPY: 1, QQQ: 2 };
+
+// Stocks panel — mega-cap tech first, in this exact order; everything else
+// falls in after, alphabetically.
+const STOCK_TICKER_PRIORITY: Record<string, number> = {
+  META: 0, NVDA: 1, GOOGL: 2, SPCX: 3, AAPL: 4, MSFT: 5, TSLA: 6, AMD: 7, INTC: 8,
+};
+
+// Hidden from the homepage panel only — still tracked/queryable everywhere
+// else (e.g. /markets). Remove a ticker here to bring it back.
+const HOME_HIDDEN_STOCKS = new Set(["AVGO"]);
 
 // ─── Team abbreviation lookup ─────────────────────────────────────────────────
 
@@ -276,20 +323,28 @@ async function getCoreAssetsByType(supabase: Awaited<ReturnType<typeof createCli
   try {
     const { data } = await supabase
       .from("stocks")
-      .select("ticker, name, asset_type, stock_quotes(current_price, percent_change, fetched_at)")
+      .select("ticker, name, asset_type, market_cap, stock_quotes(current_price, percent_change, quote_timestamp)")
       .eq("is_core", true)
       .eq("is_active", true);
 
     const withQuote = (data ?? [])
       .map((s: any) => {
+        // Sort by quote_timestamp (what trading day/moment the quote is
+        // FOR), not fetched_at (when we happened to pull it) — a historical
+        // backfill run after today's live quote stamps every backfilled row
+        // with a fresher fetched_at than the live quote, which would
+        // otherwise make an old closing price outrank the real current one.
         const quotes = (s.stock_quotes ?? []).sort(
           (a: any, b: any) =>
-            new Date(b.fetched_at).getTime() - new Date(a.fetched_at).getTime()
+            new Date(b.quote_timestamp).getTime() - new Date(a.quote_timestamp).getTime()
         );
         return {
           ticker: s.ticker as string,
           name: s.name as string | null,
           asset_type: (s.asset_type as string) ?? "stock",
+          // BIGINT comes back from PostgREST as a string to avoid precision
+          // loss above 2^53 — normalize to number for the weighted-avg math.
+          market_cap: s.market_cap != null ? Number(s.market_cap) : null,
           quote: quotes[0]
             ? { current_price: quotes[0].current_price, percent_change: quotes[0].percent_change }
             : null,
@@ -300,7 +355,15 @@ async function getCoreAssetsByType(supabase: Awaited<ReturnType<typeof createCli
     const byType = (type: string) =>
       withQuote
         .filter((r) => r.asset_type === type)
-        .sort((a, b) => a.ticker.localeCompare(b.ticker));
+        .filter((r) => !(type === "stock" && HOME_HIDDEN_STOCKS.has(r.ticker)))
+        .sort((a, b) => {
+          if (type === "stock") {
+            const pa = STOCK_TICKER_PRIORITY[a.ticker] ?? 99;
+            const pb = STOCK_TICKER_PRIORITY[b.ticker] ?? 99;
+            if (pa !== pb) return pa - pb;
+          }
+          return a.ticker.localeCompare(b.ticker);
+        });
 
     return {
       stocks: byType("stock"),
@@ -384,19 +447,6 @@ async function getAllNyt(
   }
 }
 
-async function getSpotifyReleases(supabase: Awaited<ReturnType<typeof createClient>>) {
-  try {
-    const { data } = await supabase
-      .from("spotify_releases")
-      .select("id, name, artists, album_type, release_date, external_url")
-      .order("release_date", { ascending: false })
-      .limit(10);
-    return data ?? [];
-  } catch {
-    return [];
-  }
-}
-
 async function getYouTubeVideos(supabase: Awaited<ReturnType<typeof createClient>>) {
   try {
     const { data } = await supabase
@@ -437,7 +487,11 @@ async function getLeagueSnapshot(
   supabase: Awaited<ReturnType<typeof createClient>>,
   sport: string,
   league: string,
-  scoreLimit = 6,
+  // Headroom for one full day's slate per side, not the number displayed. MLB
+  // plays ~16 games a day (more with doubleheaders), so the old limit of 6
+  // couldn't even load a single day: a favorite team's game sitting 8th most
+  // recent never reached the page, and no amount of sorting could surface it.
+  scoreLimit = 40,
   newsLimit = 4
 ): Promise<LeagueSnapshot> {
   try {
@@ -448,7 +502,7 @@ async function getLeagueSnapshot(
       .eq("league", league)
       .single();
 
-    if (!leagueRow) return { league: null, recentGames: [], upcomingGames: [], news: [] };
+    if (!leagueRow) return { league: null, recentGames: [], upcomingGames: [], news: [], standings: [] };
 
     // Two windowed queries rather than one "latest N by game_date".
     // Unwindowed, the newest rows are the furthest-FUTURE fixtures — once the
@@ -457,10 +511,13 @@ async function getLeagueSnapshot(
     // rejected every card. Anchoring each side on now() is immune to how much
     // future schedule the table holds.
     const SCORE_COLS =
-      "event_id, home_team, away_team, home_abbrev, away_abbrev, home_score, away_score, status, status_detail, game_date";
+      "event_id, home_team, away_team, home_abbrev, away_abbrev, home_logo, away_logo, home_score, away_score, status, status_detail, game_date";
     const nowIso = new Date().toISOString();
 
-    const [recentRes, upcomingRes, newsRes] = await Promise.all([
+    const STANDING_COLS =
+      "team_name, team_abbrev, logo, conference, division, wins, losses, ties, win_percent, games_behind, streak, playoff_seed, point_differential, points, rank, season";
+
+    const [recentRes, upcomingRes, newsRes, standingsRes] = await Promise.all([
       supabase
         .from("sports_scores")
         .select(SCORE_COLS)
@@ -481,31 +538,37 @@ async function getLeagueSnapshot(
         .eq("league_id", leagueRow.id)
         .order("published_at", { ascending: false })
         .limit(newsLimit),
+      supabase
+        .from("sports_standings")
+        .select(STANDING_COLS)
+        .eq("league_id", leagueRow.id),
     ]);
 
     // A live game has a start time in the past, so it lands in recentGames.
     const recentGames = (recentRes.data ?? []) as ScoreRowType[];
     const upcomingGames = (upcomingRes.data ?? []) as ScoreRowType[];
     const news = (newsRes.data ?? []) as SportsNewsItem[];
+    const standings = topNPerGroup(latestSeasonOnly((standingsRes.data ?? []) as StandingRow[]), 5);
 
     return {
       league: leagueRow as LeagueRow,
       recentGames: leagueRow.is_active ? recentGames : [],
       upcomingGames: leagueRow.is_active ? upcomingGames : [],
       news,
+      standings: leagueRow.is_active ? standings : [],
     };
   } catch {
-    return { league: null, recentGames: [], upcomingGames: [], news: [] };
+    return { league: null, recentGames: [], upcomingGames: [], news: [], standings: [] };
   }
 }
 
 // ─── Helper components ────────────────────────────────────────────────────────
 
-function ChangeTag({ pct }: { pct: number }) {
+function ChangeTag({ pct, large }: { pct: number; large?: boolean }) {
   const isPos = pct >= 0;
   return (
     <span
-      className="text-[10px] font-mono font-bold tabular-nums leading-none"
+      className={`font-mono font-bold tabular-nums leading-none ${large ? "text-[11px]" : "text-[10px]"}`}
       style={{ color: isPos ? "hsl(142 65% 42%)" : "hsl(0 72% 50%)" }}
     >
       {isPos ? "+" : ""}
@@ -656,29 +719,99 @@ function HubCap({ label }: { label: string }) {
   );
 }
 
-/** Ticker 3-column grid — used for stocks, etfs, forex, commodities, crypto quotes */
-function TickerGrid({ rows, href }: { rows: QuoteRow[]; href: string }) {
+/** Market-cap-weighted average %-change across a group of tickers — a proxy
+ *  for AUM-weighting since ETF net assets aren't tracked, just FMP's profile
+ *  market_cap. Returns null when nothing in the group has both a cap and a
+ *  quote, so callers can skip rendering the summary cell entirely. */
+function weightedAvgPercent(rows: QuoteRow[]): number | null {
+  const weighted = rows.filter((r) => r.market_cap != null && r.quote?.percent_change != null);
+  const totalWeight = weighted.reduce((sum, r) => sum + (r.market_cap ?? 0), 0);
+  if (totalWeight <= 0) return null;
+  const weightedSum = weighted.reduce(
+    (sum, r) => sum + (r.market_cap ?? 0) * Number(r.quote!.percent_change),
+    0,
+  );
+  return weightedSum / totalWeight;
+}
+
+/** Background for the weighted-avg summary cell: hue signals direction, and
+ *  lightness scales with magnitude (capped at +/-3% for full saturation) so
+ *  bigger moves read as visibly stronger color. White text stays legible
+ *  across the whole range since lightness never climbs above ~46%. */
+function weightedChangeColors(pct: number): { bg: string; text: string } {
+  // True diverging scale: red -> white -> green, not just two independent
+  // hues. Fix hue per sign and pull saturation/lightness toward white as
+  // magnitude shrinks. Full color hits at +/-2% (a market day rarely moves
+  // more than that), and a sqrt curve — rather than linear — front-loads the
+  // ramp so a modest 0.5% move already reads as clearly colored instead of
+  // barely-tinted.
+  const raw = Math.min(Math.abs(pct), 2) / 2;
+  const magnitude = Math.sqrt(raw);
+  const hue = pct >= 0 ? 142 : 0;
+  const maxSat = pct >= 0 ? 65 : 72;
+  const baseLightness = pct >= 0 ? 42 : 45;
+  const saturation = maxSat * magnitude;
+  const lightness = 100 - (100 - baseLightness) * magnitude;
+  // Near white, white text disappears — flip to dark text once the
+  // background gets light enough that white would lose contrast.
+  const text = lightness > 65 ? "hsl(0 0% 20%)" : "#fff";
+  return { bg: `hsl(${hue} ${saturation}% ${lightness}%)`, text };
+}
+
+/** Summary tile for a TickerGrid group — same cell footprint as a ticker
+ *  cell, but a solid color-scaled background instead of the usual badge. */
+function WeightedAvgCell({ label, pct }: { label: string; pct: number }) {
+  const { bg, text } = weightedChangeColors(pct);
   return (
-    <div className="grid grid-cols-3">
-      {rows.map((s) => {
+    <div
+      className="flex flex-col items-center justify-center gap-0.5 px-2 py-1 border-b border-r border-border"
+      style={{ backgroundColor: bg }}
+      title={`${label} — market-cap-weighted average change`}
+    >
+      <span className="text-[7px] font-mono uppercase tracking-wider leading-none" style={{ color: text, opacity: 0.8 }}>
+        Avg
+      </span>
+      <span className="text-[10px] font-mono font-black tabular-nums leading-none" style={{ color: text }}>
+        {pct >= 0 ? "+" : ""}{pct.toFixed(2)}%
+      </span>
+    </div>
+  );
+}
+
+/** Ticker 3-column grid — used for stocks, etfs, forex, commodities, crypto quotes */
+function TickerGrid({
+  rows, href, leadCell, columns = 3, large = false, favoriteTickers,
+}: {
+  rows: QuoteRow[]; href: string; leadCell?: React.ReactNode; columns?: 2 | 3; large?: boolean;
+  /** Favorited tickers float to the top and get the faint gold ring */
+  favoriteTickers?: Set<string>;
+}) {
+  const ordered = favoriteTickers?.size
+    ? favoritesFirst(rows, (s) => favoriteTickers.has(s.ticker.toUpperCase()))
+    : rows;
+  return (
+    <div className={columns === 2 ? "grid grid-cols-2" : "grid grid-cols-3"}>
+      {leadCell}
+      {ordered.map((s) => {
         const pct = parseFloat(String(s.quote?.percent_change ?? 0));
         const price = parseFloat(String(s.quote?.current_price ?? 0));
+        const favorite = !!favoriteTickers?.has(s.ticker.toUpperCase());
         return (
           <TickerHoverChart
             key={s.ticker}
             ticker={s.ticker}
             href={href.startsWith("/sports") ? href : `/markets/${s.ticker}`}
             wrapperClassName="block min-w-0"
-            className="flex items-center justify-between gap-1 px-2 py-1 border-b border-r border-border hover:bg-secondary/50 transition-colors group"
+            className={`flex items-center justify-between gap-1 border-b border-r border-border hover:bg-secondary/50 transition-colors group ${large ? "px-2.5 py-1.5" : "px-2 py-1"}${favorite ? " favorite-cell" : ""}`}
           >
-            <span className="text-[10px] font-mono font-black shrink-0 group-hover:underline">
+            <span className={`font-mono font-black shrink-0 group-hover:underline ${large ? "text-xs" : "text-[10px]"}`}>
               {s.ticker}
             </span>
             <span className="flex flex-col items-end shrink-0 min-w-0">
-              <span className="text-[9px] font-mono tabular-nums font-bold leading-none">
+              <span className={`font-mono tabular-nums font-bold leading-none ${large ? "text-[11px]" : "text-[9px]"}`}>
                 ${price.toFixed(2)}
               </span>
-              <ChangeTag pct={pct} />
+              <ChangeTag pct={pct} large={large} />
             </span>
           </TickerHoverChart>
         );
@@ -702,7 +835,16 @@ function abbrevTeam(name: string): string {
 
 /** One full-width score row: `AWY 3 – 7 HOM · status`. Winners bold, losers
  *  muted; scheduled games show tip-off time instead of dashes. */
-function ScoreCell({ game, leagueSlug }: { game: ScoreRowType; leagueSlug: string }) {
+function ScoreCell({
+  game,
+  leagueSlug,
+  favorite = false,
+}: {
+  game: ScoreRowType;
+  leagueSlug: string;
+  /** Either side is a favorite team — gets the faint gold ring */
+  favorite?: boolean;
+}) {
   const statusLow = (game.status ?? "").toLowerCase();
   const isFinal = statusLow.includes("final");
   const isLive = !isFinal && (statusLow.includes("progress") || statusLow.includes("live"));
@@ -721,14 +863,9 @@ function ScoreCell({ game, leagueSlug }: { game: ScoreRowType; leagueSlug: strin
   const scoreCls = (won: boolean) =>
     `font-bold tabular-nums ${isFinal && !won ? "text-muted-foreground" : ""}`;
 
-  const tipOff =
-    isScheduled && game.game_date
-      ? new Date(game.game_date).toLocaleTimeString("en-US", {
-          hour: "numeric",
-          minute: "2-digit",
-          timeZone: "America/New_York",
-        })
-      : null;
+  const tipOff = isScheduled && game.game_date ? formatGameTime(game.game_date) : null;
+  const showDate = isScheduled && game.game_date && !isGameToday(game.game_date);
+  const gameDate = showDate ? formatGameDateShort(game.game_date) : null;
 
   const liveStatus = compactStatus(game.status_detail);
 
@@ -744,7 +881,7 @@ function ScoreCell({ game, leagueSlug }: { game: ScoreRowType; leagueSlug: strin
        The two team columns are minmax(0,1fr): they absorb slack evenly and
        truncate under pressure instead of pushing the row past the card edge,
        which fixed ch widths did at narrow masonry column widths. */
-    <div className="tap-row relative grid items-center gap-x-2 md:gap-x-0.5 px-1.5 py-1.5 border-b border-border hover:bg-secondary/50 transition-colors text-[9px] font-mono leading-tight overflow-hidden [grid-template-columns:minmax(3.5ch,1fr)_auto_auto_auto_minmax(3.5ch,1fr)_1.9rem]">
+    <div className={`tap-row relative grid items-center gap-x-2 md:gap-x-0.5 px-1.5 py-1.5 border-b border-border hover:bg-secondary/50 transition-colors text-[9px] font-mono leading-tight overflow-hidden [grid-template-columns:minmax(3.5ch,1fr)_auto_auto_auto_minmax(3.5ch,1fr)_2.3rem]${favorite ? " favorite-cell" : ""}`}>
       {/* Stretched link: the row body opens the ESPN game page; team links sit above it */}
       {espnUrl && (
         <a
@@ -758,9 +895,13 @@ function ScoreCell({ game, leagueSlug }: { game: ScoreRowType; leagueSlug: strin
       <Link
         href={`/${leagueSlug}/${awayAbbr}`}
         title={game.away_team}
-        className={`relative z-10 ${teamCls(awayWon)} text-right truncate`}
+        className={`relative z-10 flex items-center justify-end gap-1 ${teamCls(awayWon)} text-right truncate`}
       >
-        {awayAbbr}
+        {game.away_logo && (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img src={game.away_logo} alt="" className="w-3 h-3 shrink-0 object-contain" />
+        )}
+        <span className="truncate">{awayAbbr}</span>
       </Link>
       <span className={`${scoreCls(awayWon)} text-right tabular-nums`}>
         {isScheduled ? "" : awayN ?? ""}
@@ -772,9 +913,13 @@ function ScoreCell({ game, leagueSlug }: { game: ScoreRowType; leagueSlug: strin
       <Link
         href={`/${leagueSlug}/${homeAbbr}`}
         title={game.home_team}
-        className={`relative z-10 ${teamCls(homeWon)} text-left truncate`}
+        className={`relative z-10 flex items-center justify-start gap-1 ${teamCls(homeWon)} text-left truncate`}
       >
-        {homeAbbr}
+        <span className="truncate">{homeAbbr}</span>
+        {game.home_logo && (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img src={game.home_logo} alt="" className="w-3 h-3 shrink-0 object-contain" />
+        )}
       </Link>
       {isLive ? (
         /* Two short lines instead of one truncated one: "1:21 - 1st Quarter"
@@ -789,8 +934,18 @@ function ScoreCell({ game, leagueSlug }: { game: ScoreRowType; leagueSlug: strin
             <span className="truncate max-w-full">{liveStatus.bottom}</span>
           )}
         </span>
+      ) : gameDate ? (
+        /* Not today — stack the date above the time instead of cramming
+           both into one line that would just truncate. */
+        <span
+          className="flex flex-col items-end justify-center leading-none text-[7px] text-muted-foreground uppercase"
+          title={`${gameDate} ${tipOff ?? ""}`.trim()}
+        >
+          <span className="truncate max-w-full">{gameDate}</span>
+          <span className="truncate max-w-full">{tipOff}</span>
+        </span>
       ) : (
-        <span className="text-[7px] leading-none text-muted-foreground uppercase text-right truncate">
+        <span className="text-[8px] leading-none text-muted-foreground uppercase text-right truncate">
           {isFinal ? "Final" : tipOff ?? "Sched"}
         </span>
       )}
@@ -836,7 +991,6 @@ export default async function CommandCenter() {
     cryptoHeadlines,
     marketNews,
     nytAll,
-    spotifyReleases,
     youtubeVideos,
     econIndicators,
     nba, mlb, nfl, nhl, ncaab, ncaaf, wnba,
@@ -845,7 +999,6 @@ export default async function CommandCenter() {
     getCryptoHeadlines(supabase),
     getMarketNews(supabase),
     getAllNyt(supabase),
-    getSpotifyReleases(supabase),
     getYouTubeVideos(supabase),
     getEconomicIndicators(supabase),
     getLeagueSnapshot(supabase, "basketball", "nba"),
@@ -905,6 +1058,21 @@ export default async function CommandCenter() {
     );
   }
 
+  // ── ETFs grouped ───────────────────────────────────────────────────────────
+  const etfsByGroup = assets.etfs.reduce<Record<string, QuoteRow[]>>((acc, row) => {
+    const group = ETF_GROUP_BY_TICKER[row.ticker] ?? "Other";
+    if (!acc[group]) acc[group] = [];
+    acc[group].push(row);
+    return acc;
+  }, {});
+  if (etfsByGroup["Macro/Market"]) {
+    etfsByGroup["Macro/Market"].sort((a, b) => {
+      const pa = ETF_TICKER_PRIORITY[a.ticker] ?? 99;
+      const pb = ETF_TICKER_PRIORITY[b.ticker] ?? 99;
+      return pa !== pb ? pa - pb : a.ticker.localeCompare(b.ticker);
+    });
+  }
+
   // ── Crypto combined ───────────────────────────────────────────────────────
   const hasCryptoQuotes = assets.crypto.length > 0;
   const hasCryptoHeadlines = cryptoHeadlines.length > 0;
@@ -921,16 +1089,26 @@ export default async function CommandCenter() {
 
   // ── Personalization: section order + hidden sections ─────────────────────
   const { data: pageClaims } = await supabase.auth.getClaims();
+  const signedIn = !!pageClaims?.claims;
   let userOrder: string[] | null = null;
   let hiddenSections: string[] = [];
+  let favoritePodcastRows: FavoritedPodcastRow[] = [];
+  let favorites: Favorites = NO_FAVORITES;
   if (pageClaims?.claims) {
-    const { data: prefs } = await supabase
-      .from("user_home_prefs")
-      .select("section_order, hidden_sections")
-      .eq("user_id", pageClaims.claims.sub as string)
-      .maybeSingle();
-    userOrder = prefs?.section_order ?? null;
-    hiddenSections = prefs?.hidden_sections ?? [];
+    const userId = pageClaims.claims.sub as string;
+    const [prefsRes, favoritePodcastsRes, favoritesRes] = await Promise.all([
+      supabase
+        .from("user_home_prefs")
+        .select("section_order, hidden_sections")
+        .eq("user_id", userId)
+        .maybeSingle(),
+      supabase.from("watchlist_podcasts").select("show_id, name, image_url").eq("user_id", userId),
+      getFavorites(supabase, userId),
+    ]);
+    userOrder = prefsRes.data?.section_order ?? null;
+    hiddenSections = prefsRes.data?.hidden_sections ?? [];
+    favoritePodcastRows = favoritePodcastsRes.data ?? [];
+    favorites = favoritesRes;
   }
 
   // ── Card registry: every card is tagged with a section key so user prefs
@@ -942,7 +1120,7 @@ export default async function CommandCenter() {
     cards.push({ section: "stocks", node: (
       <CollapsibleCard label="Stocks" accent="hsl(142 65% 42%)" href="/markets"
         count={assets.stocks.length} summary={`${assets.stocks.length} stocks`}>
-        <TickerGrid rows={assets.stocks} href="/markets" />
+        <TickerGrid rows={assets.stocks} href="/markets" columns={2} large favoriteTickers={favorites.tickers} />
       </CollapsibleCard>
     )});
   }
@@ -999,7 +1177,24 @@ export default async function CommandCenter() {
     });
     if (!inSeason) continue;
 
-    const games = [...snap.recentGames.slice(0, 4), ...snap.upcomingGames.slice(0, 2)];
+    // One day's full slate per side rather than a fixed 4 + 2. Day is the
+    // primary sort; favorites only break ties within that day, so a followed
+    // team leads its own date without displacing a more recent one.
+    const isFav = (g: ScoreRowType) => gameIsFavorite(favorites, snap.league!.league, g);
+    const games = [
+      ...byDayThenFavorites(
+        leadingDaySlate(snap.recentGames, (g) => g.game_date, "desc"),
+        (g) => g.game_date,
+        isFav,
+        "desc",
+      ),
+      ...byDayThenFavorites(
+        leadingDaySlate(snap.upcomingGames, (g) => g.game_date, "asc"),
+        (g) => g.game_date,
+        isFav,
+        "asc",
+      ),
+    ];
     const news = snap.news.slice(0, 3);
     const sportsSummary = [
       games.length > 0 && `${games.length} games`,
@@ -1016,12 +1211,16 @@ export default async function CommandCenter() {
           {games.length > 0 && (
             <div className="grid grid-cols-1 min-[380px]:grid-cols-2 min-[380px]:divide-x divide-border border-b border-border">
               {games.map((g, i) => (
-                <ScoreCell key={i} game={g} leagueSlug={snap.league!.league} />
+                <ScoreCell key={i} game={g} leagueSlug={snap.league!.league} favorite={isFav(g)} />
               ))}
             </div>
           )}
+          <StandingsExpander groups={snap.standings} leagueSlug={snap.league.league} />
           {news.length > 0 && (
-            <div>
+            /* Divider only when standings actually rendered above — the games
+               grid already carries its own `border-b`, so an unconditional one
+               would double up on leagues with no standings. */
+            <div className={snap.standings.length > 0 ? "border-t border-border" : undefined}>
               {news.map((n) => (
                 <a key={n.id} href={n.url} target="_blank" rel="noopener noreferrer"
                   className="tap-row flex items-center gap-1.5 min-h-[30px] px-2 py-0.5 border-b border-border last:border-0 text-[10px] leading-tight hover:bg-secondary/50 transition-colors group">
@@ -1063,10 +1262,32 @@ export default async function CommandCenter() {
   }
 
   if (assets.etfs.length > 0) {
+    const etfGroupNames = [
+      ...ETF_GROUP_ORDER.filter((g) => etfsByGroup[g]),
+      ...Object.keys(etfsByGroup).filter((g) => !ETF_GROUP_ORDER.includes(g)),
+    ];
     cards.push({ section: "etfs", node: (
       <CollapsibleCard label="ETFs" accent="hsl(142 65% 42%)" href="/markets"
         count={assets.etfs.length} summary={`${assets.etfs.length} ETFs`}>
-        <TickerGrid rows={assets.etfs} href="/markets" />
+        <div>
+          {etfGroupNames.map((group) => {
+            const showAvg = group === "Macro/Market" || group === "Sectors";
+            const avgPct = showAvg ? weightedAvgPercent(etfsByGroup[group]) : null;
+            return (
+              <div key={group}>
+                <p className="px-2 py-0.5 text-[8px] font-mono uppercase tracking-widest text-muted-foreground bg-secondary/40 border-b border-border">
+                  {group}
+                </p>
+                <TickerGrid
+                  rows={etfsByGroup[group]}
+                  href="/markets"
+                  favoriteTickers={favorites.tickers}
+                  leadCell={avgPct != null ? <WeightedAvgCell label={group} pct={avgPct} /> : undefined}
+                />
+              </div>
+            );
+          })}
+        </div>
       </CollapsibleCard>
     )});
   }
@@ -1188,7 +1409,7 @@ export default async function CommandCenter() {
         <div>
           {hasCryptoQuotes && (
             <div className="border-b border-border">
-              <TickerGrid rows={assets.crypto} href="/markets" />
+              <TickerGrid rows={assets.crypto} href="/markets" favoriteTickers={favorites.tickers} />
             </div>
           )}
           {hasCryptoHeadlines && (
@@ -1214,7 +1435,7 @@ export default async function CommandCenter() {
     cards.push({ section: "forex", node: (
       <CollapsibleCard label="FX" accent="hsl(142 65% 42%)" href="/markets"
         count={assets.forex.length} summary={`${assets.forex.length} pairs`}>
-        <TickerGrid rows={assets.forex} href="/markets" />
+        <TickerGrid rows={assets.forex} href="/markets" favoriteTickers={favorites.tickers} />
       </CollapsibleCard>
     )});
   }
@@ -1223,7 +1444,7 @@ export default async function CommandCenter() {
     cards.push({ section: "commodities", node: (
       <CollapsibleCard label="Commodities" accent="hsl(45 93% 47%)" href="/markets"
         count={assets.commodities.length} summary={`${assets.commodities.length} commodities`}>
-        <TickerGrid rows={assets.commodities} href="/markets" />
+        <TickerGrid rows={assets.commodities} href="/markets" favoriteTickers={favorites.tickers} />
       </CollapsibleCard>
     )});
   }
@@ -1257,33 +1478,50 @@ export default async function CommandCenter() {
     )});
   }
 
-  if (spotifyReleases.length > 0) {
+  // Standalone embeds — no CollapsibleCard chrome, just the players.
+  for (const p of SPOTIFY_HOME_PLAYLISTS) {
     cards.push({ section: "spotify", node: (
-      <CollapsibleCard label="Spotify" accent="hsl(340 78% 50%)" href="/media"
-        count={spotifyReleases.length} summary={`${spotifyReleases.length} releases`}>
-        <div>
-          {/* eslint-disable-next-line @typescript-eslint/no-explicit-any */}
-          {spotifyReleases.slice(0, 8).map((r: any) => (
-            <a key={r.id} href={r.external_url ?? "#"} target="_blank" rel="noopener noreferrer"
-              className="flex items-center gap-2 px-2 py-1 border-b border-border last:border-0 hover:bg-secondary/50 transition-colors group">
-              <span className="text-[10px] shrink-0" style={{ color: "hsl(340 78% 50%)" }}>♫</span>
-              <div className="min-w-0 flex-1">
-                <p className="text-[10px] font-bold line-clamp-1 group-hover:underline">{r.name}</p>
-                <p className="text-[8px] text-muted-foreground line-clamp-1">
-                  {(r.artists ?? []).join(", ")}
-                </p>
-              </div>
-              {r.album_type && (
-                <span className="text-[8px] font-mono text-muted-foreground uppercase shrink-0">
-                  {r.album_type}
-                </span>
-              )}
-            </a>
-          ))}
-        </div>
-      </CollapsibleCard>
+      <iframe
+        key={p.playlistId}
+        src={`https://open.spotify.com/embed/playlist/${p.playlistId}?utm_source=generator`}
+        width="100%"
+        height="152"
+        allow="autoplay; clipboard-write; encrypted-media; fullscreen; picture-in-picture"
+        loading="lazy"
+        className="border-0 block"
+        title={`Spotify playlist: ${p.name}`}
+      />
     )});
   }
+
+  const homePodcasts = buildPodcastList(favoritePodcastRows).slice(0, 10);
+  cards.push({ section: "podcasts", node: (
+    <CollapsibleCard label="Spotify — Top Podcasts" accent="hsl(340 78% 50%)" href="/media"
+      count={homePodcasts.length}>
+      <div>
+        {homePodcasts.map((p) => (
+          <a
+            key={p.showId}
+            href={`https://open.spotify.com/show/${p.showId}`}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="flex items-center gap-2 px-2 py-1.5 border-b border-border last:border-0 hover:bg-secondary/50 transition-colors group"
+          >
+            <span className="text-[10px] shrink-0" style={{ color: "hsl(340 78% 50%)" }}>🎙</span>
+            <span className="text-[10px] font-bold line-clamp-1 group-hover:underline flex-1 min-w-0">{p.name}</span>
+            <FavoritePodcastButton
+              showId={p.showId}
+              name={p.name}
+              imageUrl={p.imageUrl}
+              initialFavorited={p.favorited}
+              signedIn={signedIn}
+              className="shrink-0"
+            />
+          </a>
+        ))}
+      </div>
+    </CollapsibleCard>
+  )});
 
   // Apply user prefs: hide, then stable-sort by section position
   const orderList =

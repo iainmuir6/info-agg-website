@@ -1,3 +1,76 @@
+/** Game start time in Eastern, tight-packed with no space before AM/PM
+ *  ("7:30 PM" → "7:30PM") — saves width in narrow score-row cells. */
+export function formatGameTime(dateStr: string | null | undefined): string {
+  if (!dateStr) return "";
+  return new Date(dateStr)
+    .toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", timeZone: "America/New_York" })
+    .replace(" ", "");
+}
+
+/** True when a game's Eastern calendar date matches today's — compares by
+ *  the same locale/timezone rendering rather than raw Date subtraction, so
+ *  a 11pm ET game and a same-day midnight UTC read don't drift a day apart. */
+export function isGameToday(dateStr: string | null | undefined): boolean {
+  if (!dateStr) return true;
+  const asEasternDateString = (d: Date) =>
+    d.toLocaleDateString("en-US", { timeZone: "America/New_York" });
+  return asEasternDateString(new Date(dateStr)) === asEasternDateString(new Date());
+}
+
+/** Sortable Eastern calendar-day key ("2026-07-29") — en-CA gives ISO order,
+ *  and Eastern matches the timezone every game date is rendered in. */
+export function easternDay(dateStr: string | null | undefined): string {
+  if (!dateStr) return "";
+  const t = new Date(dateStr);
+  if (Number.isNaN(t.getTime())) return "";
+  return t.toLocaleDateString("en-CA", { timeZone: "America/New_York" });
+}
+
+/**
+ * Every game on the *leading* calendar day of a list — the most recent day that
+ * has results (`"desc"`), or the next day that has fixtures (`"asc"`).
+ *
+ * This replaces an arbitrary `slice(0, N)`. A fixed count silently hides part of
+ * a slate: MLB routinely plays 16 games a day, so "the 6 most recent" showed
+ * less than half of one day while also mixing in games from previous days. A
+ * day is the unit a reader actually thinks in, and it self-sizes per league.
+ *
+ * Undated rows are ignored when picking the day, and excluded from the result
+ * (they can't belong to a day). If nothing has a date, the input is returned
+ * unchanged rather than emptied.
+ */
+export function leadingDaySlate<T>(
+  items: T[],
+  getDate: (item: T) => string | null | undefined,
+  direction: "desc" | "asc",
+): T[] {
+  const days = items.map((i) => easternDay(getDate(i))).filter((d) => d !== "");
+  if (days.length === 0) return items;
+  const target = days.reduce((best, d) =>
+    direction === "desc" ? (d > best ? d : best) : (d < best ? d : best),
+  );
+  return items.filter((i) => easternDay(getDate(i)) === target);
+}
+
+/** Human label for a day key from `easternDay` ("2026-07-29" → "Jul 29"). */
+export function formatDayKey(dayKey: string): string {
+  if (!dayKey) return "";
+  // Parse as local noon so the key's own calendar date can't shift a day.
+  const [y, m, d] = dayKey.split("-").map(Number);
+  if (!y || !m || !d) return dayKey;
+  return new Date(y, m - 1, d, 12).toLocaleDateString("en-US", { month: "short", day: "numeric" });
+}
+
+/** Short Eastern calendar date for a game that isn't today ("8/7"). */
+export function formatGameDateShort(dateStr: string | null | undefined): string {
+  if (!dateStr) return "";
+  return new Date(dateStr).toLocaleDateString("en-US", {
+    month: "numeric",
+    day: "numeric",
+    timeZone: "America/New_York",
+  });
+}
+
 /** Compact a live game status so it fits a narrow status column.
  *
  *  ESPN's status_detail is verbose ("1:21 - 1st Quarter", "Top 1st"), and a

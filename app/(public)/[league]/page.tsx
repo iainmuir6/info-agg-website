@@ -1,8 +1,11 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
+import { getFavorites, gameIsFavorite, favoritesFirst, byDayThenFavorites, teamKey } from "@/lib/favorites";
+import { FavoriteStar } from "@/components/favorite-star";
 import { LEAGUES, leagueBySlug, espnGameUrl } from "@/lib/leagues";
-import { compactStatus } from "@/lib/sports-status";
+import { compactStatus, formatGameTime } from "@/lib/sports-status";
+import { latestSeasonOnly, groupStandings, type StandingRow } from "@/lib/standings";
 
 // Top-level league routes: /nba, /wnba, /mlb … Static routes (/news, /markets,
 // /economy …) take precedence over this dynamic segment; anything not in the
@@ -18,6 +21,8 @@ type Score = {
   away_team: string;
   home_abbrev: string | null;
   away_abbrev: string | null;
+  home_logo: string | null;
+  away_logo: string | null;
   home_score: number | null;
   away_score: number | null;
   status: string | null;
@@ -54,13 +59,16 @@ export default async function LeaguePage({
   if (!leagueRow) notFound();
 
   const SCORE_COLS =
-    "id, event_id, home_team, away_team, home_abbrev, away_abbrev, home_score, away_score, status, status_detail, game_date, venue, broadcast";
+    "id, event_id, home_team, away_team, home_abbrev, away_abbrev, home_logo, away_logo, home_score, away_score, status, status_detail, game_date, venue, broadcast";
   const nowIso = new Date().toISOString();
 
   // Played and upcoming are fetched separately and anchored on now(). A single
   // "latest 120 by game_date" returns only far-future fixtures once a full
   // season schedule is loaded, which starved the played side entirely.
-  const [playedRes, upcomingRes, newsRes] = await Promise.all([
+  const STANDING_COLS =
+    "team_name, team_abbrev, logo, conference, division, wins, losses, ties, win_percent, games_behind, streak, playoff_seed, point_differential, points, rank, season";
+
+  const [playedRes, upcomingRes, newsRes, standingsRes] = await Promise.all([
     supabase
       .from("sports_scores")
       .select(SCORE_COLS)
@@ -81,22 +89,41 @@ export default async function LeaguePage({
       .eq("league_id", leagueRow.id)
       .order("published_at", { ascending: false })
       .limit(20),
+    supabase
+      .from("sports_standings")
+      .select(STANDING_COLS)
+      .eq("league_id", leagueRow.id),
   ]);
 
   const played = (playedRes.data ?? []) as Score[];
   const upcoming = (upcomingRes.data ?? []) as Score[];
   const news = newsRes.data ?? [];
   const scores = [...played, ...upcoming];
+  const standingsGroups = groupStandings(latestSeasonOnly((standingsRes.data ?? []) as StandingRow[]));
 
   // Scores = games that have actually been played or are in progress.
   // A game whose start time has passed but that ESPN still reports as
   // Scheduled (a postponement, or a row we have not refreshed yet) is NOT a
   // result — it was previously shown under "Recent Results" with no score.
-  const finished = played.filter((s) => gameState(s.status) !== "scheduled");
+  const { data: claimsData } = await supabase.auth.getClaims();
+  const favorites = await getFavorites(supabase, claimsData?.claims?.sub as string | undefined);
+  const isFavTeam = (name: string) => favorites.teams.has(teamKey(meta.slug, name));
+
+  // Day is the primary sort; favorites only break ties within the same day.
+  const isFavGame = (g: Score) => gameIsFavorite(favorites, meta.slug, g);
+  const finished = byDayThenFavorites(
+    played.filter((s) => gameState(s.status) !== "scheduled"),
+    (s) => s.game_date,
+    isFavGame,
+    "desc",
+  );
   const unplayed = played.filter((s) => gameState(s.status) === "scheduled");
   // Anything past its start time but still unplayed belongs with the schedule.
-  const schedule = [...unplayed, ...upcoming].sort(
-    (a, b) => new Date(a.game_date ?? 0).getTime() - new Date(b.game_date ?? 0).getTime(),
+  const schedule = byDayThenFavorites(
+    [...unplayed, ...upcoming],
+    (s) => s.game_date,
+    isFavGame,
+    "asc",
   );
 
   // Teams seen in this league's games, for the directory
@@ -105,7 +132,10 @@ export default async function LeaguePage({
     if (s.home_team) teamMap.set(s.home_team, s.home_abbrev ?? s.home_team.slice(0, 3).toUpperCase());
     if (s.away_team) teamMap.set(s.away_team, s.away_abbrev ?? s.away_team.slice(0, 3).toUpperCase());
   }
-  const teams = [...teamMap.entries()].sort(([a], [b]) => a.localeCompare(b));
+  const teams = favoritesFirst(
+    [...teamMap.entries()].sort(([a], [b]) => a.localeCompare(b)),
+    ([name]) => isFavTeam(name),
+  );
 
   const accent = meta.accent;
 
@@ -119,13 +149,7 @@ export default async function LeaguePage({
     const when = g.game_date
       ? new Date(g.game_date).toLocaleDateString("en-US", { month: "short", day: "numeric" })
       : "";
-    const tip = g.game_date
-      ? new Date(g.game_date).toLocaleTimeString("en-US", {
-          hour: "numeric",
-          minute: "2-digit",
-          timeZone: "America/New_York",
-        })
-      : "";
+    const tip = formatGameTime(g.game_date);
     const liveStatus = compactStatus(g.status_detail);
 
     return (
@@ -140,8 +164,13 @@ export default async function LeaguePage({
         <div className="grid items-center gap-x-1 text-[11px] font-mono overflow-hidden [grid-template-columns:2.6rem_minmax(3.5ch,1fr)_auto_auto_auto_minmax(3.5ch,1fr)_2.2rem]">
           <span className="text-[9px] text-muted-foreground truncate">{when}</span>
           <Link href={`/${meta!.slug}/${away}`}
-            className={`relative z-10 font-black hover:underline text-right truncate ${state === "final" && !awayWon ? "text-muted-foreground" : ""}`}>
-            {away}
+            className={`relative z-10 flex items-center justify-end gap-1 font-black hover:underline text-right truncate ${state === "final" && !awayWon ? "text-muted-foreground" : ""}`}>
+            {g.away_logo && (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img src={g.away_logo} alt="" className="w-3.5 h-3.5 shrink-0 object-contain" />
+            )}
+            <span className="truncate">{away}</span>
+            <FavoriteStar show={isFavTeam(g.away_team)} />
           </Link>
           <span className={`text-right tabular-nums ${state === "final" && !awayWon ? "text-muted-foreground" : "font-bold"}`}>
             {state === "scheduled" ? "" : g.away_score ?? ""}
@@ -153,8 +182,13 @@ export default async function LeaguePage({
             {state === "scheduled" ? "" : g.home_score ?? ""}
           </span>
           <Link href={`/${meta!.slug}/${home}`}
-            className={`relative z-10 font-black hover:underline text-left truncate ${state === "final" && !homeWon ? "text-muted-foreground" : ""}`}>
-            {home}
+            className={`relative z-10 flex items-center justify-start gap-1 font-black hover:underline text-left truncate ${state === "final" && !homeWon ? "text-muted-foreground" : ""}`}>
+            <span className="truncate">{home}</span>
+            <FavoriteStar show={isFavTeam(g.home_team)} />
+            {g.home_logo && (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img src={g.home_logo} alt="" className="w-3.5 h-3.5 shrink-0 object-contain" />
+            )}
           </Link>
           {state === "live" ? (
             <span className="flex flex-col items-end leading-none text-[8px]"
@@ -199,6 +233,74 @@ export default async function LeaguePage({
         </p>
       </div>
 
+      {standingsGroups.length > 0 && (
+        <section>
+          <p className="text-[10px] font-mono tracking-widest text-muted-foreground uppercase mb-2">
+            Standings
+          </p>
+          <div
+            className={`grid grid-cols-1 gap-px bg-border border border-border ${
+              standingsGroups.length > 1 ? "md:grid-cols-2" : ""
+            }`}
+          >
+            {standingsGroups.map((group) => (
+              <div key={group.conference ?? "all"} className="bg-background">
+                {group.conference && (
+                  <p className="px-3 py-1.5 text-[9px] font-mono tracking-widest uppercase text-muted-foreground border-b border-border">
+                    {group.conference}
+                  </p>
+                )}
+                <table className="w-full text-[11px] font-mono">
+                  <thead>
+                    <tr className="text-muted-foreground text-[9px] uppercase">
+                      <th className="text-left font-normal px-3 py-1">Team</th>
+                      <th className="text-right font-normal px-1.5 py-1">W</th>
+                      <th className="text-right font-normal px-1.5 py-1">L</th>
+                      {group.teams.some((t) => t.ties != null) && (
+                        <th className="text-right font-normal px-1.5 py-1">T</th>
+                      )}
+                      <th className="text-right font-normal px-1.5 py-1">PCT</th>
+                      <th className="text-right font-normal px-3 py-1">GB</th>
+                      <th className="text-right font-normal px-3 py-1">Streak</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {group.teams.map((t) => (
+                      <tr key={t.team_abbrev} className="border-t border-border hover:bg-secondary/50">
+                        <td className="px-3 py-1.5 truncate">
+                          <Link href={`/${meta!.slug}/${t.team_abbrev}`} className="flex items-center gap-1.5 hover:underline">
+                            {t.logo && (
+                              // eslint-disable-next-line @next/next/no-img-element
+                              <img src={t.logo} alt="" className="w-4 h-4 shrink-0 object-contain" />
+                            )}
+                            <span className="truncate">{t.team_name ?? t.team_abbrev}</span>
+                            <FavoriteStar show={isFavTeam(t.team_name ?? "")} />
+                          </Link>
+                        </td>
+                        <td className="text-right px-1.5 py-1.5 tabular-nums">{t.wins ?? "–"}</td>
+                        <td className="text-right px-1.5 py-1.5 tabular-nums">{t.losses ?? "–"}</td>
+                        {group.teams.some((x) => x.ties != null) && (
+                          <td className="text-right px-1.5 py-1.5 tabular-nums">{t.ties ?? "–"}</td>
+                        )}
+                        <td className="text-right px-1.5 py-1.5 tabular-nums">
+                          {t.win_percent != null
+                            ? t.win_percent.toFixed(3).replace(/^0/, "")
+                            : t.points != null
+                              ? t.points
+                              : "–"}
+                        </td>
+                        <td className="text-right px-3 py-1.5 text-muted-foreground">{t.games_behind ?? "–"}</td>
+                        <td className="text-right px-3 py-1.5 text-muted-foreground">{t.streak ?? "–"}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
+
       {scores.length === 0 && news.length === 0 ? (
         <div className="border border-border p-12 text-center">
           <p className="text-xs font-mono text-muted-foreground tracking-wider">NO DATA FOR THIS LEAGUE YET</p>
@@ -239,7 +341,10 @@ export default async function LeaguePage({
                 {teams.map(([name, abbrev]) => (
                   <Link key={name} href={`/${meta.slug}/${abbrev}`}
                     className="bg-background px-3 py-2 hover:bg-secondary/50 transition-colors">
-                    <p className="text-[11px] font-mono font-bold">{abbrev}</p>
+                    <p className="text-[11px] font-mono font-bold flex items-center gap-1">
+                      {abbrev}
+                      <FavoriteStar show={isFavTeam(name)} />
+                    </p>
                     <p className="text-[9px] text-muted-foreground truncate">{name}</p>
                   </Link>
                 ))}
