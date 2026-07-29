@@ -8,6 +8,7 @@ interface CollapsibleCardProps {
   accent: string;
   href: string;
   count?: number;
+  /** Retained for call-site compatibility; the header shows only the count. */
   summary?: string;
   children: React.ReactNode;
   className?: string;
@@ -29,7 +30,6 @@ export function CollapsibleCard({
   accent,
   href,
   count,
-  summary,
   children,
   className,
   defaultOpen = true,
@@ -59,16 +59,11 @@ export function CollapsibleCard({
           >
             {label}
           </span>
-          {count != null && (
-            <span className="text-[9px] font-mono text-muted-foreground shrink-0">{count}</span>
-          )}
           <span className="text-[9px] font-mono text-muted-foreground shrink-0 ml-1 group-hover:text-foreground transition-colors">
             {open ? "▲" : "▼"}
           </span>
-          {!open && summary && (
-            <span className="text-[9px] font-mono text-muted-foreground truncate ml-1">
-              {summary}
-            </span>
+          {count != null && (
+            <span className="text-[9px] font-mono text-muted-foreground shrink-0">{count}</span>
           )}
         </button>
         {headerExtra && <span className="shrink-0 ml-2">{headerExtra}</span>}

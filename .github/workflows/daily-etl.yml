@@ -61,7 +61,7 @@ jobs:
       # The 10:43 UTC schedule is before US market open, so every prior
       # NY-calendar day is a completed trading day.
       - name: Run ETL pipeline with retention cleanup
-        run: python src/api/run_etl.py --triggered-by cron --cleanup --output etl-report.json
+        run: python src/api/run_etl.py --triggered-by cron --cleanup --season-schedules --output etl-report.json
         env:
           PYTHONPATH: src/api
 

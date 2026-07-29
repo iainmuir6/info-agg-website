@@ -1,5 +1,5 @@
 import { createClient } from "@/lib/supabase/server";
-import { SparklineChart } from "@/components/sparkline-chart";
+import { LineChart, type ChartPoint } from "@/components/line-chart";
 
 // ── Config ────────────────────────────────────────────────────────────────────
 
@@ -17,76 +17,22 @@ const TREASURY_TERMS: { key: string; label: string; years: number }[] = [
   { key: "treasury_30y", label: "30Y", years: 30 },
 ];
 
-const MACRO_CONFIG: Record<string, { label: string; fmt: (v: number) => string }> = {
-  federalFunds: { label: "Fed Funds Rate", fmt: (v) => `${v.toFixed(2)}%` },
-  realGDP: { label: "Real GDP", fmt: (v) => `$${(v / 1000).toFixed(1)}T` },
-  CPI: { label: "CPI", fmt: (v) => v.toFixed(1) },
-  unemploymentRate: { label: "Unemployment Rate", fmt: (v) => `${v.toFixed(1)}%` },
-  inflationRate: { label: "Inflation Rate", fmt: (v) => `${v.toFixed(2)}%` },
-  "30YearFixedRateMortgageAverage": { label: "30Y Mortgage Rate", fmt: (v) => `${v.toFixed(2)}%` },
-  initialClaims: { label: "Initial Jobless Claims", fmt: (v) => `${(v / 1000).toFixed(0)}K` },
+const MACRO_CONFIG: Record<string, {
+  label: string;
+  fmt: (v: number) => string;
+  unit?: string;
+  precision?: number;
+}> = {
+  federalFunds: { label: "Fed Funds Rate", fmt: (v) => `${v.toFixed(2)}%`, unit: "%", precision: 2 },
+  realGDP: { label: "Real GDP", fmt: (v) => `$${(v / 1000).toFixed(1)}T`, precision: 0 },
+  CPI: { label: "CPI", fmt: (v) => v.toFixed(1), precision: 1 },
+  unemploymentRate: { label: "Unemployment Rate", fmt: (v) => `${v.toFixed(1)}%`, unit: "%", precision: 1 },
+  inflationRate: { label: "Inflation Rate", fmt: (v) => `${v.toFixed(2)}%`, unit: "%", precision: 2 },
+  "30YearFixedRateMortgageAverage": { label: "30Y Mortgage Rate", fmt: (v) => `${v.toFixed(2)}%`, unit: "%", precision: 2 },
+  initialClaims: { label: "Initial Jobless Claims", fmt: (v) => `${(v / 1000).toFixed(0)}K`, precision: 0 },
 };
 
 type EconRow = { indicator_name: string; date: string; value: number };
-
-// ── Yield curve chart (pure SVG, server-rendered) ────────────────────────────
-
-function YieldCurveChart({ points }: { points: { label: string; value: number }[] }) {
-  if (points.length < 2) return null;
-  const W = 640;
-  const H = 220;
-  const PAD = { top: 16, right: 24, bottom: 28, left: 40 };
-  const w = W - PAD.left - PAD.right;
-  const h = H - PAD.top - PAD.bottom;
-
-  const values = points.map((p) => p.value);
-  const min = Math.floor(Math.min(...values) * 4) / 4 - 0.25;
-  const max = Math.ceil(Math.max(...values) * 4) / 4 + 0.25;
-
-  const x = (i: number) => PAD.left + (i / (points.length - 1)) * w;
-  const y = (v: number) => PAD.top + h - ((v - min) / (max - min)) * h;
-
-  const linePath = points
-    .map((p, i) => `${i === 0 ? "M" : "L"}${x(i).toFixed(1)},${y(p.value).toFixed(1)}`)
-    .join(" ");
-
-  // Horizontal gridlines every 0.5%
-  const gridVals: number[] = [];
-  for (let v = Math.ceil(min * 2) / 2; v <= max; v += 0.5) gridVals.push(v);
-
-  const accent = "hsl(142 65% 42%)";
-
-  return (
-    <svg viewBox={`0 0 ${W} ${H}`} style={{ width: "100%", height: "auto" }} role="img"
-      aria-label="US Treasury yield curve">
-      {gridVals.map((v) => (
-        <g key={v}>
-          <line x1={PAD.left} x2={W - PAD.right} y1={y(v)} y2={y(v)}
-            stroke="currentColor" strokeOpacity="0.1" strokeWidth="1" />
-          <text x={PAD.left - 6} y={y(v) + 3} textAnchor="end"
-            fontSize="9" fontFamily="monospace" fill="currentColor" fillOpacity="0.5">
-            {v.toFixed(1)}
-          </text>
-        </g>
-      ))}
-      <path d={linePath} fill="none" stroke={accent} strokeWidth="2"
-        strokeLinejoin="round" strokeLinecap="round" />
-      {points.map((p, i) => (
-        <g key={p.label}>
-          <circle cx={x(i)} cy={y(p.value)} r="3" fill={accent} />
-          <text x={x(i)} y={H - 10} textAnchor="middle"
-            fontSize="9" fontFamily="monospace" fill="currentColor" fillOpacity="0.6">
-            {p.label}
-          </text>
-          <text x={x(i)} y={y(p.value) - 8} textAnchor="middle"
-            fontSize="8" fontFamily="monospace" fill="currentColor" fillOpacity="0.8">
-            {p.value.toFixed(2)}
-          </text>
-        </g>
-      ))}
-    </svg>
-  );
-}
 
 // ── Page ─────────────────────────────────────────────────────────────────────
 
@@ -120,16 +66,19 @@ export default async function EconomyPage() {
   // 10Y-2Y spread history (recession watch)
   const tenY = byIndicator["treasury_10y"] ?? [];
   const twoYByDate = new Map((byIndicator["treasury_2y"] ?? []).map((r) => [r.date, r.value]));
-  const spreadSeries = tenY
-    .filter((r) => twoYByDate.has(r.date))
-    .map((r) => r.value - (twoYByDate.get(r.date) as number));
+  const spreadRows = tenY.filter((r) => twoYByDate.has(r.date));
+  const spreadPoints: ChartPoint[] = spreadRows.map((r) => ({
+    label: new Date(r.date).toLocaleDateString("en-US", { month: "short", day: "numeric" }),
+    value: r.value - (twoYByDate.get(r.date) as number),
+  }));
+  const spreadSeries = spreadPoints.map((p) => p.value);
   const latestSpread = spreadSeries.at(-1);
 
   const macroKeys = Object.keys(MACRO_CONFIG).filter((k) => (byIndicator[k] ?? []).length > 0);
   const hasData = curvePoints.length >= 2 || macroKeys.length > 0;
 
   return (
-    <div className="px-6 py-6 max-w-7xl mx-auto space-y-8">
+    <div className="px-6 py-6 space-y-8">
       {/* Page header */}
       <div>
         <div className="rule-double mb-3" />
@@ -174,7 +123,25 @@ export default async function EconomyPage() {
                 )}
               </div>
               <div className="p-4">
-                <YieldCurveChart points={curvePoints} />
+                <LineChart
+                  points={curvePoints.map((p) => ({ label: p.label, value: p.value }))}
+                  unit="%"
+                  precision={2}
+                  ariaLabel="US Treasury yield curve by maturity"
+                />
+              </div>
+              {/* Every maturity as a labeled column — maturity above value */}
+              <div className="grid grid-cols-4 sm:grid-cols-6 lg:grid-cols-11 border-t border-border">
+                {curvePoints.map((p) => (
+                  <div key={p.label} className="px-2 py-2 text-center border-r border-b border-border">
+                    <p className="text-[9px] font-mono uppercase tracking-wider text-muted-foreground leading-none">
+                      {p.label}
+                    </p>
+                    <p className="text-xs font-mono font-bold tabular-nums mt-1">
+                      {p.value.toFixed(2)}%
+                    </p>
+                  </div>
+                ))}
               </div>
             </div>
           )}
@@ -191,7 +158,15 @@ export default async function EconomyPage() {
                 </span>
               </div>
               <div className="p-4">
-                <SparklineChart data={spreadSeries} width={640} height={100} />
+                <LineChart
+                  points={spreadPoints}
+                  unit="%"
+                  precision={2}
+                  zeroBaseline
+                  height={180}
+                  color={latestSpread != null && latestSpread < 0 ? "hsl(0 72% 50%)" : "hsl(142 65% 42%)"}
+                  ariaLabel="10-year minus 2-year Treasury spread history"
+                />
               </div>
             </div>
           )}
@@ -202,12 +177,15 @@ export default async function EconomyPage() {
               <p className="text-[10px] font-mono tracking-widest text-muted-foreground uppercase mb-3">
                 Macro Indicators
               </p>
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-px bg-border border border-border">
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-px bg-border border border-border">
                 {macroKeys.map((key) => {
                   const cfg = MACRO_CONFIG[key];
                   const series = byIndicator[key];
                   const latest = series[series.length - 1];
-                  const history = series.slice(-40).map((r) => r.value);
+                  const history: ChartPoint[] = series.slice(-40).map((r) => ({
+                    label: new Date(r.date).toLocaleDateString("en-US", { month: "short", year: "2-digit" }),
+                    value: r.value,
+                  }));
                   return (
                     <div key={key} className="bg-background p-4">
                       <div className="flex items-baseline justify-between mb-1">
@@ -222,7 +200,13 @@ export default async function EconomyPage() {
                         {cfg.fmt(latest.value)}
                       </p>
                       {history.length >= 2 ? (
-                        <SparklineChart data={history} width={220} height={44} />
+                        <LineChart
+                          points={history}
+                          height={140}
+                          precision={cfg.precision ?? 2}
+                          unit={cfg.unit ?? ""}
+                          ariaLabel={`${cfg.label} history`}
+                        />
                       ) : (
                         <p className="text-[9px] font-mono text-muted-foreground">insufficient history</p>
                       )}

@@ -30,7 +30,7 @@ from etl_lib import (
     finish_etl_run,
     collect_domain_errors,
 )
-from sports.sports_db_helper import sync_all_sports_data
+from sports.sports_db_helper import sync_all_sports_data, sync_season_schedules
 from markets.markets_db_helper import (
     sync_stock_data,
     sync_market_news,
@@ -111,10 +111,20 @@ def get_supabase_client() -> Client:
     return create_client(supabase_url, supabase_key)
 
 
-def run_sports_etl(supabase: Client) -> Dict[str, Any]:
-    """Run sports ETL: ESPN news and scores (today's snapshot only)."""
+def run_sports_etl(supabase: Client, season_schedules: bool = False) -> Dict[str, Any]:
+    """Run sports ETL: ESPN news and scores (today's snapshot).
+
+    season_schedules=True additionally walks each in-season league's full
+    season so team pages show complete win/loss records (daily only —
+    it costs ~11 extra ESPN calls per in-season league).
+    """
     try:
         stats = sync_all_sports_data(supabase, news_limit_per_sport=20)
+        if season_schedules:
+            season_stats = sync_season_schedules(supabase)
+            stats['season_leagues'] = season_stats.get('leagues_processed', 0)
+            stats['season_scores'] = season_stats.get('scores_inserted', 0)
+            stats['errors'].extend(season_stats.get('errors', []))
         # Honest success: ESPN always has news, so writing nothing at all
         # means the fetch or the writes failed — not a quiet day.
         ok = (stats['news_inserted'] + stats['scores_inserted']) > 0
@@ -400,6 +410,7 @@ def run_full_etl(
     skip_sentiment: bool = False,
     triggered_by: str = 'manual',
     run_cleanup: bool = False,
+    season_schedules: bool = False,
 ) -> Dict[str, Any]:
     """
     Run the full ETL pipeline for all data sources.
@@ -435,7 +446,7 @@ def run_full_etl(
 
     domain_fns = {}
     if not skip_sports:
-        domain_fns['sports'] = lambda: run_sports_etl(get_supabase_client())
+        domain_fns['sports'] = lambda: run_sports_etl(get_supabase_client(), season_schedules=season_schedules)
     if not skip_markets:
         domain_fns['markets'] = lambda: run_markets_etl(
             get_supabase_client(),
@@ -612,6 +623,9 @@ def main():
                         help='Recorded in etl_runs (workflows pass cron/dispatch)')
     parser.add_argument('--cleanup', action='store_true',
                         help='Run info_agg.cleanup_daily() retention after the ETL completes')
+    parser.add_argument('--season-schedules', action='store_true',
+                        help='Also fetch full season schedules for in-season leagues '
+                             '(complete team records; daily run only)')
 
     args = parser.parse_args()
 
@@ -656,6 +670,7 @@ def main():
         skip_sentiment=args.skip_sentiment,
         triggered_by=args.triggered_by,
         run_cleanup=args.cleanup,
+        season_schedules=args.season_schedules,
     )
 
     if args.output:

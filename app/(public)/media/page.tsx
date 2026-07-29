@@ -73,7 +73,7 @@ export default async function MediaPage() {
   const hasData = hasSpotify || hasReddit;
 
   return (
-    <div className="px-6 py-6 max-w-7xl mx-auto space-y-8">
+    <div className="px-6 py-6 space-y-8">
       {/* Page header */}
       <div>
         <div className="rule-double mb-3" />

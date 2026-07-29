@@ -2,6 +2,7 @@ import { Fragment } from "react";
 import { createClient } from "@/lib/supabase/server";
 import Link from "next/link";
 import { DEFAULT_HOME_ORDER, type HomeSectionKey } from "@/lib/home-sections";
+import { TickerHoverChart } from "@/components/ticker-hover-chart";
 import { CollapsibleCard } from "@/components/collapsible-card";
 import { MasonryColumns } from "@/components/masonry-columns";
 
@@ -77,6 +78,11 @@ type EconRow = {
 
 // Friendly labels + formatting for economic indicators
 const ECON_CONFIG: Record<string, { label: string; fmt: (v: number) => string; group: string }> = {
+  treasury_1m:  { label: "1M",            fmt: (v) => `${v.toFixed(2)}%`,  group: "Treasuries" },
+  treasury_3m:  { label: "3M",            fmt: (v) => `${v.toFixed(2)}%`,  group: "Treasuries" },
+  treasury_6m:  { label: "6M",            fmt: (v) => `${v.toFixed(2)}%`,  group: "Treasuries" },
+  treasury_7y:  { label: "7Y",            fmt: (v) => `${v.toFixed(2)}%`,  group: "Treasuries" },
+  treasury_20y: { label: "20Y",           fmt: (v) => `${v.toFixed(2)}%`,  group: "Treasuries" },
   treasury_1y:  { label: "1Y",            fmt: (v) => `${v.toFixed(2)}%`,  group: "Yield Curve" },
   treasury_2y:  { label: "2Y",            fmt: (v) => `${v.toFixed(2)}%`,  group: "Yield Curve" },
   treasury_3y:  { label: "3Y",            fmt: (v) => `${v.toFixed(2)}%`,  group: "Yield Curve" },
@@ -644,21 +650,23 @@ function TickerGrid({ rows, href }: { rows: QuoteRow[]; href: string }) {
         const pct = parseFloat(String(s.quote?.percent_change ?? 0));
         const price = parseFloat(String(s.quote?.current_price ?? 0));
         return (
-          <Link
+          <TickerHoverChart
             key={s.ticker}
+            ticker={s.ticker}
             href={href.startsWith("/sports") ? href : `/markets/${s.ticker}`}
+            wrapperClassName="block min-w-0"
             className="flex items-center justify-between gap-1 px-2 py-1 border-b border-r border-border hover:bg-secondary/50 transition-colors group"
           >
             <span className="text-[10px] font-mono font-black shrink-0 group-hover:underline">
               {s.ticker}
             </span>
-            <div className="flex flex-col items-end shrink-0 min-w-0">
+            <span className="flex flex-col items-end shrink-0 min-w-0">
               <span className="text-[9px] font-mono tabular-nums font-bold leading-none">
                 ${price.toFixed(2)}
               </span>
               <ChangeTag pct={pct} />
-            </div>
-          </Link>
+            </span>
+          </TickerHoverChart>
         );
       })}
     </div>
@@ -716,7 +724,11 @@ function ScoreCell({ game, leagueSlug }: { game: ScoreRowType; leagueSlug: strin
     : null;
 
   return (
-    <div className="relative flex items-center gap-1.5 px-1.5 py-1 border-b border-border hover:bg-secondary/50 transition-colors text-[9px] font-mono leading-tight">
+    /* One grid across the whole row so the container allocates the width.
+       The two team columns are minmax(0,1fr): they absorb slack evenly and
+       truncate under pressure instead of pushing the row past the card edge,
+       which fixed ch widths did at narrow masonry column widths. */
+    <div className="relative grid items-center gap-x-1 px-2 py-1.5 border-b border-border hover:bg-secondary/50 transition-colors text-[9px] font-mono leading-tight overflow-hidden [grid-template-columns:minmax(0,1fr)_auto_auto_auto_minmax(0,1fr)_2.5rem]">
       {/* Stretched link: the row body opens the ESPN game page; team links sit above it */}
       {espnUrl && (
         <a
@@ -727,39 +739,36 @@ function ScoreCell({ game, leagueSlug }: { game: ScoreRowType; leagueSlug: strin
           className="absolute inset-0"
         />
       )}
-      <div className="grid shrink-0 items-center gap-x-1 [grid-template-columns:4ch_2.5ch_1ch_2.5ch_4ch]">
-        <Link
-          href={`/sports/${leagueSlug}/${encodeURIComponent(game.away_team)}`}
-          title={game.away_team}
-          className={`relative z-10 ${teamCls(awayWon)} text-left`}
-        >
-          {awayAbbr}
-        </Link>
-        <span className={`${scoreCls(awayWon)} text-right`}>
-          {isScheduled ? "" : awayN ?? ""}
-        </span>
-        <span className="text-muted-foreground/60 text-center">{isScheduled ? "@" : "–"}</span>
-        <span className={`${scoreCls(homeWon)} text-right`}>
-          {isScheduled ? "" : homeN ?? ""}
-        </span>
-        <Link
-          href={`/sports/${leagueSlug}/${encodeURIComponent(game.home_team)}`}
-          title={game.home_team}
-          className={`relative z-10 ${teamCls(homeWon)} text-left`}
-        >
-          {homeAbbr}
-        </Link>
-      </div>
-      <div className="flex-1 min-w-0" />
+      <Link
+        href={`/${leagueSlug}/${awayAbbr}`}
+        title={game.away_team}
+        className={`relative z-10 ${teamCls(awayWon)} text-right truncate`}
+      >
+        {awayAbbr}
+      </Link>
+      <span className={`${scoreCls(awayWon)} text-right tabular-nums`}>
+        {isScheduled ? "" : awayN ?? ""}
+      </span>
+      <span className="text-muted-foreground/60 text-center px-0.5">{isScheduled ? "@" : "–"}</span>
+      <span className={`${scoreCls(homeWon)} text-left tabular-nums`}>
+        {isScheduled ? "" : homeN ?? ""}
+      </span>
+      <Link
+        href={`/${leagueSlug}/${homeAbbr}`}
+        title={game.home_team}
+        className={`relative z-10 ${teamCls(homeWon)} text-left truncate`}
+      >
+        {homeAbbr}
+      </Link>
       {isLive ? (
-        <div className="flex items-center gap-1 shrink-0">
-          <div className="w-1.5 h-1.5 rounded-full animate-pulse-dot shrink-0" style={{ backgroundColor: "hsl(142 65% 42%)" }} />
-          <span className="text-[7px] leading-none" style={{ color: "hsl(142 65% 42%)" }}>
+        <span className="flex items-center gap-0.5 justify-end min-w-0">
+          <span className="w-1 h-1 rounded-full animate-pulse-dot shrink-0" style={{ backgroundColor: "hsl(142 65% 42%)" }} />
+          <span className="text-[7px] leading-none truncate" style={{ color: "hsl(142 65% 42%)" }}>
             {game.status_detail ?? "LIVE"}
           </span>
-        </div>
+        </span>
       ) : (
-        <span className="text-[7px] leading-none text-muted-foreground uppercase shrink-0">
+        <span className="text-[7px] leading-none text-muted-foreground uppercase text-right truncate">
           {isFinal ? "Final" : tipOff ?? "Sched"}
         </span>
       )}
@@ -781,7 +790,7 @@ function NytList({ articles, showSection }: { articles: NyTimesArticle[]; showSe
           href={a.url}
           target="_blank"
           rel="noopener noreferrer"
-          className="flex items-center gap-1.5 px-2 py-1 border-b border-border last:border-0 hover:bg-secondary/50 transition-colors group"
+          className="flex items-center gap-1.5 px-2 py-0.5 border-b border-border last:border-0 hover:bg-secondary/50 transition-colors group"
         >
           {showSection && a.section && <HubCap label={a.section} />}
           <p className="text-[10px] font-semibold leading-tight line-clamp-2 group-hover:underline">
@@ -843,6 +852,15 @@ export default async function CommandCenter() {
     .sort(([a], [b]) => (NYT_SECTION_ORDER[a] ?? 99) - (NYT_SECTION_ORDER[b] ?? 99))
     .slice(0, 12);
 
+  // Second NYT panel: the next-best stories the digest didn't surface —
+  // one story per section is a thin slice of a busy news day, so this shows
+  // the runner-up headlines from the highest-signal sections.
+  const digestUrls = new Set(nytDigest.map(([, a]) => a.url));
+  const NYT_DEEP_SECTIONS = new Set(["us", "world", "business", "technology", "politics", "science", "opinion"]);
+  const nytMore = nytAll
+    .filter((a) => !digestUrls.has(a.url) && NYT_DEEP_SECTIONS.has((a.section ?? "").toLowerCase()))
+    .slice(0, 10);
+
   // ── Economic indicators grouped ───────────────────────────────────────────
   const econByGroup = econIndicators.reduce<Record<string, EconRow[]>>((acc, row) => {
     const cfg = ECON_CONFIG[row.indicator_name];
@@ -851,7 +869,12 @@ export default async function CommandCenter() {
     acc[group].push(row);
     return acc;
   }, {});
-  const TREASURY_ORDER = ["treasury_1y","treasury_2y","treasury_3y","treasury_5y","treasury_10y","treasury_30y"];
+  const TREASURY_ORDER = ["treasury_1m","treasury_3m","treasury_6m","treasury_1y","treasury_2y","treasury_3y","treasury_5y","treasury_7y","treasury_10y","treasury_20y","treasury_30y"];
+  if (econByGroup["Treasuries"]) {
+    econByGroup["Treasuries"].sort(
+      (a, b) => TREASURY_ORDER.indexOf(a.indicator_name) - TREASURY_ORDER.indexOf(b.indicator_name),
+    );
+  }
   if (econByGroup["Yield Curve"]) {
     econByGroup["Yield Curve"].sort(
       (a, b) => TREASURY_ORDER.indexOf(a.indicator_name) - TREASURY_ORDER.indexOf(b.indicator_name)
@@ -907,11 +930,30 @@ export default async function CommandCenter() {
         <div>
           {nytDigest.map(([sectionKey, article]) => (
             <a key={article.id} href={article.url} target="_blank" rel="noopener noreferrer"
-              className="flex items-center gap-1.5 px-2 py-1 border-b border-border last:border-0 hover:bg-secondary/50 transition-colors group">
+              className="flex items-center gap-1.5 px-2 py-0.5 border-b border-border last:border-0 hover:bg-secondary/50 transition-colors group">
               <HubCap label={sectionKey} />
               <p className="text-[10px] font-semibold leading-tight line-clamp-1 group-hover:underline">
                 {article.title}
               </p>
+            </a>
+          ))}
+        </div>
+      </CollapsibleCard>
+    )});
+  }
+
+  if (nytMore.length > 0) {
+    cards.push({ section: "nyt_more", node: (
+      <CollapsibleCard label="NYT — More Headlines" accent="hsl(220 90% 52%)" href="/news"
+        count={nytMore.length}>
+        <div>
+          {nytMore.map((article) => (
+            <a key={article.id} href={article.url} target="_blank" rel="noopener noreferrer"
+              className="flex items-center gap-1.5 px-2 py-0.5 border-b border-border last:border-0 hover:bg-secondary/50 transition-colors group">
+              {article.section && <HubCap label={article.section} />}
+              <span className="min-w-0 text-[10px] font-semibold leading-tight line-clamp-2 group-hover:underline">
+                {article.title}
+              </span>
             </a>
           ))}
         </div>
@@ -943,13 +985,9 @@ export default async function CommandCenter() {
     cards.push({ section: "sports", node: (
       <CollapsibleCard key={key}
         label={SPORTS_LABEL[key] ?? snap.league.display_name}
-        accent="hsl(25 95% 50%)" href="/sports"
+        accent="hsl(25 95% 50%)" href={`/${snap.league.league}`}
         count={games.length || undefined} summary={sportsSummary}
-        headerExtra={
-          <span className="text-[7px] font-mono leading-none px-1 py-0.5 rounded bg-secondary text-muted-foreground">
-            ESPN
-          </span>
-        }>
+      >
         <div>
           {games.length > 0 && (
             <div className="grid grid-cols-1 min-[380px]:grid-cols-2 min-[380px]:divide-x divide-border border-b border-border">
@@ -981,7 +1019,7 @@ export default async function CommandCenter() {
           {/* eslint-disable-next-line @typescript-eslint/no-explicit-any */}
           {marketNews.map((item: any) => (
             <a key={item.id} href={item.url} target="_blank" rel="noopener noreferrer"
-              className="flex items-center gap-1.5 px-2 py-1 border-b border-border last:border-0 hover:bg-secondary/50 transition-colors group">
+              className="flex items-center gap-1.5 px-2 py-0.5 border-b border-border last:border-0 hover:bg-secondary/50 transition-colors group">
               {/* Two stacked hub caps: category on top, source below */}
               <div className="flex flex-col gap-0.5 shrink-0 items-center">
                 {item.category && <HubCap label={item.category} />}
@@ -1060,17 +1098,22 @@ export default async function CommandCenter() {
               </div>
             </div>
           )}
+          {/* Remaining treasury maturities use the same column treatment as the
+              yield curve: maturity label above the rate, one column each. */}
           {otherRows.map(([group, rows]) => (
             <div key={group}>
               <p className="px-2 py-0.5 text-[8px] font-mono uppercase tracking-widest text-muted-foreground bg-secondary/40 border-b border-border">
                 {group}
               </p>
-              <div className="grid grid-cols-2">
+              <div className="flex divide-x divide-border border-b border-border">
                 {rows.map((row) => (
-                  <div key={row.indicator_name}
-                    className="flex items-center justify-between gap-1 px-2 py-1 border-b border-r border-border min-w-0">
-                    <span className="text-[9px] font-mono text-muted-foreground truncate">{row.indicator_name}</span>
-                    <span className="text-[9px] font-mono font-bold tabular-nums shrink-0">{row.value.toFixed(2)}</span>
+                  <div key={row.indicator_name} className="flex-1 px-1 py-1 text-center min-w-0">
+                    <p className="text-[8px] font-mono text-muted-foreground leading-none truncate">
+                      {ECON_CONFIG[row.indicator_name]?.label ?? row.indicator_name}
+                    </p>
+                    <p className="text-[10px] font-mono font-bold tabular-nums leading-tight mt-0.5">
+                      {row.value.toFixed(2)}
+                    </p>
                   </div>
                 ))}
               </div>
@@ -1088,19 +1131,19 @@ export default async function CommandCenter() {
         <div>
           {companyNews.map((item) => (
             <a key={item.id} href={item.url} target="_blank" rel="noopener noreferrer"
-              className="flex items-center gap-1.5 px-2 py-1 border-b border-border last:border-0 hover:bg-secondary/50 transition-colors group">
+              className="flex items-center gap-1.5 px-2 py-0.5 border-b border-border last:border-0 hover:bg-secondary/50 transition-colors group">
               {item.source && <HubCap label={item.source} />}
               <div className="min-w-0">
-                <p className="text-[10px] font-medium leading-tight line-clamp-1 group-hover:underline">
+                <p className="text-[10px] font-medium leading-tight line-clamp-2 group-hover:underline">
                   {item.headline}
                 </p>
                 {(item.related_tickers ?? []).length > 0 && (
                   <div className="flex items-center gap-1 flex-wrap mt-0.5">
                     {(item.related_tickers ?? []).slice(0, 3).map((t) => (
-                      <Link key={t} href={`/markets/${t}`}
+                      <TickerHoverChart key={t} ticker={t} href={`/markets/${t}`}
                         className="text-[8px] font-mono px-0.5 bg-secondary leading-none hover:bg-border">
                         {t}
-                      </Link>
+                      </TickerHoverChart>
                     ))}
                   </div>
                 )}
@@ -1128,7 +1171,7 @@ export default async function CommandCenter() {
               {/* eslint-disable-next-line @typescript-eslint/no-explicit-any */}
               {cryptoHeadlines.map((item: any) => (
                 <a key={item.id} href={item.url} target="_blank" rel="noopener noreferrer"
-                  className="flex items-center gap-1.5 px-2 py-1 border-b border-border last:border-0 hover:bg-secondary/50 transition-colors group">
+                  className="flex items-center gap-1.5 px-2 py-0.5 border-b border-border last:border-0 hover:bg-secondary/50 transition-colors group">
                   {item.source && <HubCap label={item.source} />}
                   <p className="text-[10px] font-medium leading-tight line-clamp-1 group-hover:underline">
                     {item.headline}
