@@ -1,4 +1,6 @@
 import { createClient } from "@/lib/supabase/server";
+import { getFavorites, favoritesFirst } from "@/lib/favorites";
+import { FavoriteStar } from "@/components/favorite-star";
 import Link from "next/link";
 import { TickerHoverChart } from "@/components/ticker-hover-chart";
 
@@ -18,6 +20,7 @@ type StockWithQuote = {
     open_price: number;
     previous_close: number;
     fetched_at: string;
+    quote_timestamp: string;
   }[];
 };
 
@@ -35,17 +38,30 @@ type MarketNews = {
 
 async function getMarketsData(supabase: Awaited<ReturnType<typeof createClient>>) {
   const [stocksRes, newsRes] = await Promise.all([
+    // `!inner` + a per-embed `limit(1)` are both load-bearing, not tidiness.
+    // PostgREST caps a response at 1000 rows, and this table has 3,258 active
+    // stocks with 5,821 quote rows between them. Selecting every active stock
+    // and embedding its FULL quote history blew both caps at once: the stock
+    // list was truncated at the 1000th ticker alphabetically, and the embedded
+    // quotes ran out after ~36 stocks (A→ECL). Everything past that silently
+    // rendered under "Awaiting quote" despite having quotes — and any ticker
+    // past the 1000th (e.g. SPCX, 2,696th) never reached the page at all.
+    //
+    // Driving off the quoted set instead returns all 152 stocks that actually
+    // have a quote, one row each, comfortably inside the cap.
     supabase
       .from("stocks")
       .select(`
         id, ticker, name, exchange, industry, logo_url,
-        stock_quotes (
+        stock_quotes!inner (
           current_price, change_amount, percent_change,
-          high_price, low_price, open_price, previous_close, fetched_at
+          high_price, low_price, open_price, previous_close, fetched_at, quote_timestamp
         )
       `)
       .eq("is_active", true)
-      .order("ticker"),
+      .order("ticker")
+      .order("quote_timestamp", { ascending: false, referencedTable: "stock_quotes" })
+      .limit(1, { referencedTable: "stock_quotes" }),
     supabase
       .from("market_news")
       .select("id, category, headline, summary, url, image_url, source, published_at, related_tickers")
@@ -53,11 +69,14 @@ async function getMarketsData(supabase: Awaited<ReturnType<typeof createClient>>
       .limit(30),
   ]);
 
-  // For each stock, get the most recent quote
+  // For each stock, get the most recent quote — by quote_timestamp (the
+  // trading day/moment it's FOR), not fetched_at (when we pulled it); a
+  // historical backfill run after today's live quote would otherwise
+  // outrank it since every backfilled row gets a fresh fetched_at.
   const stocks = (stocksRes.data ?? []).map((s: any) => ({
     ...s,
     quote: s.stock_quotes?.sort(
-      (a: any, b: any) => new Date(b.fetched_at).getTime() - new Date(a.fetched_at).getTime()
+      (a: any, b: any) => new Date(b.quote_timestamp).getTime() - new Date(a.quote_timestamp).getTime()
     )[0] ?? null,
   }));
 
@@ -82,9 +101,18 @@ function formatMarketCap(n: number | null | undefined) {
 
 export default async function MarketsPage() {
   const supabase = await createClient();
-  const { stocks, news } = await getMarketsData(supabase);
+  const { data: claimsData } = await supabase.auth.getClaims();
+  const [{ stocks, news }, favorites] = await Promise.all([
+    getMarketsData(supabase),
+    getFavorites(supabase, claimsData?.claims?.sub as string | undefined),
+  ]);
 
-  const stocksWithQuotes = stocks.filter((s: any) => s.quote);
+  // Favorites float to the top of the table, keeping the ticker sort within
+  // each band.
+  const stocksWithQuotes = favoritesFirst(
+    stocks.filter((s: any) => s.quote),
+    (s: any) => favorites.tickers.has(String(s.ticker).toUpperCase()),
+  );
   const latestFetchedAt = stocksWithQuotes.reduce(
     (max: string | null, s: any) =>
       !max || (s.quote.fetched_at && s.quote.fetched_at > max) ? s.quote.fetched_at : max,
@@ -176,20 +204,22 @@ export default async function MarketsPage() {
                 const pct = parseFloat(q.percent_change ?? 0);
                 const isPos = pct >= 0;
                 const changeColor = isPos ? "hsl(142 65% 42%)" : "hsl(0 72% 50%)";
+                const fav = favorites.tickers.has(String(stock.ticker).toUpperCase());
 
                 return (
                   <Link
                     key={stock.id}
                     href={`/markets/${stock.ticker}`}
-                    className="block bg-background hover:bg-secondary transition-colors animate-fade-in-up"
+                    className={`block bg-background hover:bg-secondary transition-colors animate-fade-in-up${fav ? " favorite-ring" : ""}`}
                     style={{ animationDelay: `${i * 0.03}s` }}
                   >
                     {/* Desktop row */}
                     <div className="hidden md:grid grid-cols-[120px_1fr_100px_80px_80px_80px_80px_80px] gap-0">
-                      <div className="px-4 py-3 flex items-center">
+                      <div className="px-4 py-3 flex items-center gap-1.5">
                         <span className="text-sm font-mono font-black tracking-tight hover:underline">
                           {stock.ticker}
                         </span>
+                        <FavoriteStar show={fav} />
                       </div>
                       <div className="px-4 py-3 flex items-center min-w-0">
                         <span className="text-xs text-muted-foreground truncate">
@@ -234,7 +264,10 @@ export default async function MarketsPage() {
                     {/* Mobile row */}
                     <div className="md:hidden px-4 py-3 flex items-center justify-between">
                       <div>
-                        <span className="text-sm font-mono font-black">{stock.ticker}</span>
+                        <span className="flex items-center gap-1.5">
+                          <span className="text-sm font-mono font-black">{stock.ticker}</span>
+                          <FavoriteStar show={fav} />
+                        </span>
                         <p className="text-[10px] text-muted-foreground">{stock.name}</p>
                       </div>
                       <div className="text-right">
