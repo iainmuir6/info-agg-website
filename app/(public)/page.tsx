@@ -3,6 +3,7 @@ import { createClient } from "@/lib/supabase/server";
 import Link from "next/link";
 import { DEFAULT_HOME_ORDER, type HomeSectionKey } from "@/lib/home-sections";
 import { TickerHoverChart } from "@/components/ticker-hover-chart";
+import { compactStatus } from "@/lib/sports-status";
 import { CollapsibleCard } from "@/components/collapsible-card";
 import { MasonryColumns } from "@/components/masonry-columns";
 
@@ -716,6 +717,8 @@ function ScoreCell({ game, leagueSlug }: { game: ScoreRowType; leagueSlug: strin
         })
       : null;
 
+  const liveStatus = compactStatus(game.status_detail);
+
   // ESPN gamecast URL — soccer leagues (dotted slugs like eng.1) use /soccer/match/
   const espnUrl = game.event_id
     ? leagueSlug.includes(".")
@@ -728,7 +731,7 @@ function ScoreCell({ game, leagueSlug }: { game: ScoreRowType; leagueSlug: strin
        The two team columns are minmax(0,1fr): they absorb slack evenly and
        truncate under pressure instead of pushing the row past the card edge,
        which fixed ch widths did at narrow masonry column widths. */
-    <div className="relative grid items-center gap-x-1 px-2 py-1.5 border-b border-border hover:bg-secondary/50 transition-colors text-[9px] font-mono leading-tight overflow-hidden [grid-template-columns:minmax(0,1fr)_auto_auto_auto_minmax(0,1fr)_2.5rem]">
+    <div className="relative grid items-center gap-x-1 px-2 py-1.5 border-b border-border hover:bg-secondary/50 transition-colors text-[9px] font-mono leading-tight overflow-hidden [grid-template-columns:minmax(0,1fr)_auto_auto_auto_minmax(0,1fr)_2.75rem]">
       {/* Stretched link: the row body opens the ESPN game page; team links sit above it */}
       {espnUrl && (
         <a
@@ -761,11 +764,17 @@ function ScoreCell({ game, leagueSlug }: { game: ScoreRowType; leagueSlug: strin
         {homeAbbr}
       </Link>
       {isLive ? (
-        <span className="flex items-center gap-0.5 justify-end min-w-0">
-          <span className="w-1 h-1 rounded-full animate-pulse-dot shrink-0" style={{ backgroundColor: "hsl(142 65% 42%)" }} />
-          <span className="text-[7px] leading-none truncate" style={{ color: "hsl(142 65% 42%)" }}>
-            {game.status_detail ?? "LIVE"}
-          </span>
+        /* Two short lines instead of one truncated one: "1:21 - 1st Quarter"
+           reads as 1:21 / 1st rather than being clipped to "1:21 -". */
+        <span
+          className="flex flex-col items-end justify-center leading-none text-[7px]"
+          style={{ color: "hsl(142 65% 42%)" }}
+          title={game.status_detail ?? "Live"}
+        >
+          <span className="truncate max-w-full">{liveStatus.top}</span>
+          {liveStatus.bottom && (
+            <span className="truncate max-w-full">{liveStatus.bottom}</span>
+          )}
         </span>
       ) : (
         <span className="text-[7px] leading-none text-muted-foreground uppercase text-right truncate">

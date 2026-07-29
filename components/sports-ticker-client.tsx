@@ -4,6 +4,9 @@ import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { createClient } from "@/lib/supabase/client";
 import { TickerShell } from "@/components/ticker-shell";
+import { compactStatus } from "@/lib/sports-status";
+
+const POLL_INTERVAL_MS = 60_000;
 
 export type SportsTickerItem = {
   id: string;
@@ -17,43 +20,6 @@ export type SportsTickerItem = {
   /** Status split across two lines so a long detail fits the ticker height. */
   detail: { top: string; bottom: string };
 };
-
-/** Compact a live status so it fits the ticker without being clipped.
- *  "4:45 - 3rd Quarter" → 4:45 / 3rd   ·   "Top 1st" → ▲ / 1st */
-export function compactStatus(detail: string): { top: string; bottom: string } {
-  const s = (detail ?? "").trim();
-  if (!s) return { top: "LIVE", bottom: "" };
-
-  const half = s.match(/^(Top|Bot(?:tom)?)\s+(.*)$/i);
-  if (half) {
-    return { top: /^top$/i.test(half[1]) ? "▲" : "▼", bottom: half[2] };
-  }
-
-  // "12:34 - 3rd Quarter" / "12:34 - 3rd"
-  const clocked = s.match(/^([\d:]+)\s*-\s*(.*)$/);
-  if (clocked) {
-    return { top: clocked[1], bottom: shortPeriod(clocked[2]) };
-  }
-
-  // "End of 3rd Quarter" → End / 3rd
-  const endOf = s.match(/^End\s+of\s+(.*)$/i);
-  if (endOf) return { top: "End", bottom: shortPeriod(endOf[1]) };
-
-  const words = s.split(/\s+/);
-  if (words.length === 1) return { top: shortPeriod(s), bottom: "" };
-  return { top: words[0], bottom: shortPeriod(words.slice(1).join(" ")) };
-}
-
-function shortPeriod(p: string): string {
-  return p
-    .replace(/\bQuarter\b/i, "")
-    .replace(/\bPeriod\b/i, "")
-    .replace(/\bInning\b/i, "")
-    .replace(/\bHalf\b/i, "H")
-    .trim();
-}
-
-const POLL_INTERVAL_MS = 60_000;
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 export function normalizeSportsRows(rows: any[]): SportsTickerItem[] {
