@@ -3,6 +3,7 @@ import { unstable_cache } from "next/cache";
 import { ThemeSwitcher } from "@/components/theme-switcher";
 import { createClient, createStaticClient } from "@/lib/supabase/server";
 import { FooterTickers } from "@/components/footer-tickers";
+import { FooterGate } from "@/components/footer-gate";
 import { HeaderDate } from "@/components/header-date";
 import {
   normalizeSportsRows,
@@ -24,12 +25,12 @@ const getTickerItems = unstable_cache(
       const [equitiesRes, etfsRes] = await Promise.all([
         supabase
           .from("stocks")
-          .select(`ticker, stock_quotes(current_price, percent_change, fetched_at)`)
+          .select(`ticker, stock_quotes(current_price, percent_change, quote_timestamp)`)
           .in("ticker", TICKER_MAG7)
           .eq("is_active", true),
         supabase
           .from("stocks")
-          .select(`ticker, stock_quotes(current_price, percent_change, fetched_at)`)
+          .select(`ticker, stock_quotes(current_price, percent_change, quote_timestamp)`)
           .in("ticker", TICKER_ETFS)
           .eq("is_active", true),
       ]);
@@ -194,7 +195,9 @@ export default async function PublicLayout({ children }: { children: React.React
 
       <main className="flex-1">{children}</main>
 
-      <FooterTickers quotes={await getTickerItems()} games={await getSportsTickerItems()} />
+      <FooterGate>
+        <FooterTickers quotes={await getTickerItems()} games={await getSportsTickerItems()} />
+      </FooterGate>
     </div>
   );
 }

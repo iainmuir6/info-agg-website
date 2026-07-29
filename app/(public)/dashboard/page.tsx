@@ -25,8 +25,7 @@ async function getDomainStats(): Promise<DomainStat[]> {
     marketsLastFetch,
     newsCount,
     newsLastFetch,
-    spotifyCount,
-    redditCount,
+    youtubeCount,
     mediaLastFetch,
   ] = await Promise.all([
     supabase.from("sports_news").select("*",      { count: "exact", head: true }),
@@ -41,9 +40,8 @@ async function getDomainStats(): Promise<DomainStat[]> {
     supabase.from("news_articles").select("*",    { count: "exact", head: true }),
     supabase.from("news_articles").select("created_at").order("created_at", { ascending: false }).limit(1),
 
-    supabase.from("spotify_releases").select("*", { count: "exact", head: true }),
-    supabase.from("reddit_posts").select("*",     { count: "exact", head: true }),
-    supabase.from("spotify_releases").select("created_at").order("created_at", { ascending: false }).limit(1),
+    supabase.from("youtube_videos").select("*",   { count: "exact", head: true }),
+    supabase.from("youtube_videos").select("fetched_at").order("fetched_at", { ascending: false }).limit(1),
   ]);
 
   return [
@@ -78,10 +76,9 @@ async function getDomainStats(): Promise<DomainStat[]> {
       domain: "Media",
       accent: "hsl(340 78% 50%)",
       rows: [
-        { label: "Spotify releases", count: spotifyCount.count },
-        { label: "Reddit posts",     count: redditCount.count },
+        { label: "YouTube videos", count: youtubeCount.count },
       ],
-      lastFetch: mediaLastFetch.data?.[0]?.created_at ?? null,
+      lastFetch: mediaLastFetch.data?.[0]?.fetched_at ?? null,
     },
   ];
 }

@@ -4,7 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { createClient } from "@/lib/supabase/client";
 import { TickerShell } from "@/components/ticker-shell";
-import { compactStatus } from "@/lib/sports-status";
+import { compactStatus, formatGameTime } from "@/lib/sports-status";
 
 const POLL_INTERVAL_MS = 60_000;
 
@@ -27,13 +27,7 @@ export function normalizeSportsRows(rows: any[]): SportsTickerItem[] {
     const status = (r.status ?? "").toLowerCase();
     const isFinal = status.includes("final");
     const isLive = !isFinal && (status.includes("progress") || status.includes("live"));
-    const tip = r.game_date
-      ? new Date(r.game_date).toLocaleTimeString("en-US", {
-          hour: "numeric",
-          minute: "2-digit",
-          timeZone: "America/New_York",
-        })
-      : "";
+    const tip = formatGameTime(r.game_date);
     const slug = r.leagues?.league ?? "";
     return {
       id: r.id,

@@ -22,7 +22,7 @@ export function normalizeTickerRows(rows: any[], order: string[]): TickerItem[] 
   return (rows ?? [])
     .map((s: any) => {
       const quotes = (s.stock_quotes ?? []).sort(
-        (a: any, b: any) => new Date(b.fetched_at).getTime() - new Date(a.fetched_at).getTime()
+        (a: any, b: any) => new Date(b.quote_timestamp).getTime() - new Date(a.quote_timestamp).getTime()
       );
       const latest = quotes[0];
       if (!latest) return null;
@@ -47,12 +47,12 @@ export function NewsTickerClient({ items: initialItems }: { items: TickerItem[] 
       const [equitiesRes, etfsRes] = await Promise.all([
         supabase
           .from("stocks")
-          .select("ticker, stock_quotes(current_price, percent_change, fetched_at)")
+          .select("ticker, stock_quotes(current_price, percent_change, quote_timestamp)")
           .in("ticker", TICKER_MAG7)
           .eq("is_active", true),
         supabase
           .from("stocks")
-          .select("ticker, stock_quotes(current_price, percent_change, fetched_at)")
+          .select("ticker, stock_quotes(current_price, percent_change, quote_timestamp)")
           .in("ticker", TICKER_ETFS)
           .eq("is_active", true),
       ]);
