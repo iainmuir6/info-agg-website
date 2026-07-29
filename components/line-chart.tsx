@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 export type ChartPoint = {
   /** X-axis label (date string, maturity, etc.) */
@@ -21,6 +21,11 @@ type Props = {
   /** Y axis starts at zero instead of hugging the data range */
   zeroBaseline?: boolean;
   ariaLabel?: string;
+  /** Stretch to fill the parent's height instead of a fixed height. The
+   *  viewBox is set to the container's actual measured pixel size (rather
+   *  than a fixed W/H forced to scale non-uniformly via preserveAspectRatio),
+   *  so line width/text/etc. stay proportional at any container size. */
+  fill?: boolean;
 };
 
 /**
@@ -37,12 +42,29 @@ export function LineChart({
   area = true,
   zeroBaseline = false,
   ariaLabel = "Line chart",
+  fill = false,
 }: Props) {
   const [hover, setHover] = useState<number | null>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
+  const [measured, setMeasured] = useState({ width: 720, height });
 
-  const W = 720;
-  const H = height;
+  useEffect(() => {
+    if (!fill || !containerRef.current) return;
+    const el = containerRef.current;
+    const ro = new ResizeObserver(([entry]) => {
+      const { width, height: h } = entry.contentRect;
+      if (width > 0 && h > 0) setMeasured({ width, height: h });
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [fill]);
+
   const PAD = { top: 14, right: 16, bottom: 30, left: 46 };
+  // Floors so a container that is briefly zero/tiny (measured mid-layout, or
+  // squeezed on a short viewport) can't produce a negative plot area, which
+  // renders as an inverted / invisible chart.
+  const W = fill ? Math.max(measured.width, PAD.left + PAD.right + 40) : 720;
+  const H = fill ? Math.max(measured.height, PAD.top + PAD.bottom + 40) : height;
   const w = W - PAD.left - PAD.right;
   const h = H - PAD.top - PAD.bottom;
 
@@ -99,10 +121,10 @@ export function LineChart({
   }
 
   return (
-    <div className="relative">
+    <div ref={containerRef} className={fill ? "relative h-full" : "relative"}>
       <svg
         viewBox={`0 0 ${W} ${H}`}
-        style={{ width: "100%", height: "auto", touchAction: "pan-y" }}
+        style={{ width: "100%", height: fill ? "100%" : "auto", touchAction: "pan-y" }}
         role="img"
         aria-label={ariaLabel}
         onPointerMove={handleMove}

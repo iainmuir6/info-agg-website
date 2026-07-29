@@ -1,7 +1,9 @@
 import { createClient } from "@/lib/supabase/server";
 import { notFound } from "next/navigation";
 import Link from "next/link";
-import { LineChart, type ChartPoint } from "@/components/line-chart";
+import { StockChartPanel } from "@/components/stock-chart-panel";
+import { ViewportFillRow } from "@/components/viewport-fill-row";
+import { FavoriteStockButton } from "@/components/favorite-stock-button";
 
 type QuoteHistory = {
   current_price: number;
@@ -11,7 +13,7 @@ type QuoteHistory = {
   low_price: number | null;
   open_price: number | null;
   previous_close: number | null;
-  fetched_at: string;
+  quote_timestamp: string;
 };
 
 function fmt(n: number | null | undefined, digits = 2) {
@@ -24,7 +26,6 @@ function fmtDate(s: string | null) {
   return new Date(s).toLocaleString("en-US", {
     month: "short",
     day: "numeric",
-    year: "numeric",
     hour: "numeric",
     minute: "2-digit",
     timeZone: "America/New_York",
@@ -34,6 +35,25 @@ function fmtDate(s: string | null) {
 
 function fmtDateShort(s: string) {
   return new Date(s).toLocaleDateString("en-US", { month: "short", day: "numeric" });
+}
+
+/** Keep only the latest quote per Eastern calendar day — the intraday tier
+ *  refreshes core tickers multiple times a day, so the raw row set can have
+ *  several entries for today (and any other actively-refreshed day). Without
+ *  this, both the chart and the table showed repeat/near-duplicate points for
+ *  the same day instead of one clean point per trading day. */
+function latestPerDay(quotes: QuoteHistory[]): QuoteHistory[] {
+  const byDay = new Map<string, QuoteHistory>();
+  for (const q of quotes) {
+    const day = new Date(q.quote_timestamp).toLocaleDateString("en-US", { timeZone: "America/New_York" });
+    const existing = byDay.get(day);
+    if (!existing || new Date(q.quote_timestamp).getTime() > new Date(existing.quote_timestamp).getTime()) {
+      byDay.set(day, q);
+    }
+  }
+  return Array.from(byDay.values()).sort(
+    (a, b) => new Date(a.quote_timestamp).getTime() - new Date(b.quote_timestamp).getTime()
+  );
 }
 
 export default async function StockDetailPage({
@@ -54,54 +74,57 @@ export default async function StockDetailPage({
 
   if (!stock) notFound();
 
-  // Fetch historical quotes (ascending for chart) and company news in parallel
-  const [quotesRes, newsRes] = await Promise.all([
+  // Fetch historical quotes and company news in parallel. Quotes are fetched
+  // newest-first + capped, then reversed — ordering ascending with a LIMIT
+  // instead returns the OLDEST rows once a ticker has more than 90 quotes,
+  // which silently dropped the most recent ~1-2 weeks for every stock with a
+  // full history (not just newly-backfilled ones).
+  // Favoriting is signed-in only; the button renders nothing otherwise.
+  const { data: claimsData } = await supabase.auth.getClaims();
+  const signedIn = !!claimsData?.claims;
+
+  const [quotesRes, newsRes, favoriteRes] = await Promise.all([
     supabase
       .from("stock_quotes")
       .select(
-        "current_price, change_amount, percent_change, high_price, low_price, open_price, previous_close, fetched_at"
+        "current_price, change_amount, percent_change, high_price, low_price, open_price, previous_close, quote_timestamp"
       )
       .eq("stock_id", stock.id)
-      .order("fetched_at", { ascending: true })
-      .limit(90),
+      .order("quote_timestamp", { ascending: false })
+      .limit(120),
     supabase
       .from("company_news")
       .select("id, headline, url, source, published_at, related_tickers, summary")
       .overlaps("related_tickers", [ticker])
       .order("published_at", { ascending: false })
       .limit(20),
+    signedIn
+      ? supabase.from("watchlist_stocks").select("id").eq("stock_id", stock.id).maybeSingle()
+      : Promise.resolve({ data: null }),
   ]);
 
-  const quotes = (quotesRes.data ?? []) as QuoteHistory[];
+  const quotes = latestPerDay(((quotesRes.data ?? []) as QuoteHistory[]).slice().reverse());
   const news = newsRes.data ?? [];
+  const favorited = !!favoriteRes?.data;
 
   // Latest quote is the most recent (last in ascending array)
   const latest = quotes[quotes.length - 1] ?? null;
-  const sparkData = quotes.map((q) => parseFloat(String(q.current_price)));
-  const chartPoints: ChartPoint[] = quotes.map((q) => ({
-    label: new Date(q.fetched_at).toLocaleDateString("en-US", {
-      month: "short",
-      day: "numeric",
-    }),
-    value: parseFloat(String(q.current_price)),
-  }));
 
   const pct = latest ? parseFloat(String(latest.percent_change)) : 0;
   const isPos = pct >= 0;
   const changeColor = isPos ? "hsl(142 65% 42%)" : "hsl(0 72% 50%)";
 
-  // Compute 30-day high/low from history
-  const recentQuotes = quotes.slice(-30);
-  const hiLo30 =
-    recentQuotes.length > 0
-      ? {
-          high: Math.max(...recentQuotes.map((q) => parseFloat(String(q.high_price ?? q.current_price)))),
-          low: Math.min(...recentQuotes.map((q) => parseFloat(String(q.low_price ?? q.current_price)))),
-        }
-      : null;
+  const ohlcStats = latest
+    ? [
+        { label: "Open", value: `$${fmt(latest.open_price)}` },
+        { label: "High", value: `$${fmt(latest.high_price)}` },
+        { label: "Low", value: `$${fmt(latest.low_price)}` },
+        { label: "Prev Close", value: `$${fmt(latest.previous_close)}` },
+      ]
+    : [];
 
   return (
-    <div className="px-3 sm:px-6 py-4 sm:py-6 space-y-6">
+    <div className="px-3 sm:px-6 py-3 sm:py-4 space-y-3">
       {/* Back navigation */}
       <div className="flex items-center gap-2">
         <Link
@@ -114,193 +137,183 @@ export default async function StockDetailPage({
         <span className="text-[10px] font-mono tracking-wider uppercase">{ticker}</span>
       </div>
 
-      {/* ── Header ─────────────────────────────────────────────────────── */}
+      {/* ── Header — ticker/name (left), OHLC (centered), price (right); on
+             narrow screens the metrics drop to their own evenly spaced row
+             below the ticker/price line ────────────────────────────────── */}
       <div>
-        <div className="rule-double mb-4" />
-        <div className="flex items-start justify-between gap-4 flex-wrap">
-          <div>
-            <h1
-              className="text-3xl font-black tracking-tight leading-none"
-              style={{ fontFamily: "Georgia, serif" }}
-            >
-              <span style={{ color: "hsl(142 65% 42%)" }}>◆</span> {ticker}
-            </h1>
-            {stock.name && (
-              <p className="text-sm text-muted-foreground mt-1">{stock.name}</p>
-            )}
-            <div className="flex items-center gap-3 mt-1.5 flex-wrap">
+        <div className="rule-double mb-2" />
+        <div className="flex items-start justify-between gap-4 flex-wrap sm:grid sm:grid-cols-[1fr_auto_1fr] sm:items-center">
+          <div className="min-w-0 order-1 sm:order-none">
+            <div className="flex items-center gap-2.5">
+              <h1 className="text-xl font-black tracking-tight leading-none" style={{ fontFamily: "Georgia, serif" }}>
+                <span style={{ color: "hsl(142 65% 42%)" }}>◆</span> {ticker}
+              </h1>
+              <FavoriteStockButton
+                stockId={stock.id}
+                ticker={ticker}
+                initialFavorited={favorited}
+                signedIn={signedIn}
+              />
+            </div>
+            <div className="flex items-center gap-2 mt-1 flex-wrap">
+              {stock.name && (
+                <span className="text-xs text-muted-foreground truncate">{stock.name}</span>
+              )}
               {stock.exchange && (
-                <span className="text-[10px] font-mono text-muted-foreground tracking-wider uppercase">
+                <span className="text-[9px] font-mono text-muted-foreground tracking-wider uppercase">
                   {stock.exchange}
                 </span>
               )}
-              {stock.industry && (
-                <span className="text-[10px] font-mono text-muted-foreground tracking-wider">
-                  {stock.industry}
-                </span>
-              )}
               {stock.asset_type && (
-                <span className="text-[10px] font-mono px-1.5 py-0.5 bg-secondary uppercase tracking-wider">
+                <span className="text-[9px] font-mono px-1 py-0.5 bg-secondary uppercase tracking-wider">
                   {stock.asset_type}
                 </span>
               )}
             </div>
           </div>
 
-          {latest ? (
-            <div className="text-left">
-              <p className="text-3xl font-mono font-black tabular-nums">
+          {ohlcStats.length > 0 && (
+            <div className="order-3 sm:order-none basis-full sm:basis-auto grid grid-cols-4 gap-4 sm:gap-10 sm:justify-self-center">
+              {ohlcStats.map(({ label, value }) => (
+                <div key={label} className="min-w-0 text-center sm:text-left">
+                  <p className="text-[8px] font-mono tracking-widest text-muted-foreground uppercase truncate">
+                    {label}
+                  </p>
+                  <p className="text-xs font-mono font-bold tabular-nums truncate">{value}</p>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {latest && (
+            <div className="text-right shrink-0 order-2 sm:order-none sm:justify-self-end">
+              <p className="text-xl font-mono font-black tabular-nums leading-none">
                 ${fmt(latest.current_price)}
               </p>
-              <p
-                className="text-lg font-mono font-bold tabular-nums"
-                style={{ color: changeColor }}
-              >
+              <p className="text-xs font-mono font-bold tabular-nums mt-0.5" style={{ color: changeColor }}>
                 {isPos ? "+" : ""}
                 {fmt(latest.change_amount)} ({isPos ? "+" : ""}
                 {pct.toFixed(2)}%)
               </p>
-              <p className="text-[10px] font-mono text-muted-foreground mt-1">
-                As of {fmtDate(latest.fetched_at)}
+              <p className="text-[9px] font-mono text-muted-foreground mt-0.5">
+                As of {fmtDate(latest.quote_timestamp)}
               </p>
             </div>
-          ) : (
-            <p className="text-xs font-mono text-muted-foreground">No quote data</p>
           )}
+
+          {!latest && <p className="text-xs font-mono text-muted-foreground order-2 sm:order-none">No quote data</p>}
         </div>
       </div>
 
-      {/* ── OHLC Stats ─────────────────────────────────────────────────── */}
-      {latest && (
-        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-6 gap-px bg-border">
-          {[
-            { label: "Open", value: `$${fmt(latest.open_price)}` },
-            { label: "High", value: `$${fmt(latest.high_price)}` },
-            { label: "Low", value: `$${fmt(latest.low_price)}` },
-            { label: "Prev Close", value: `$${fmt(latest.previous_close)}` },
-            hiLo30
-              ? { label: "30D High", value: `$${fmt(hiLo30.high)}` }
-              : { label: "30D High", value: "—" },
-            hiLo30
-              ? { label: "30D Low", value: `$${fmt(hiLo30.low)}` }
-              : { label: "30D Low", value: "—" },
-          ].map(({ label, value }) => (
-            <div key={label} className="bg-background px-3 sm:px-4 py-2.5 sm:py-3 min-w-0">
-              <p className="text-[9px] font-mono tracking-widest text-muted-foreground uppercase mb-1 truncate">
-                {label}
+      {/* ── Chart + quote history, side by side — both are height-bounded so
+             the ~100-row table always scrolls inside its panel instead of
+             running off the page.
+
+             The `lg:h-[calc(...)]` is the layout that ships in the HTML: it is
+             correct before any JS runs, so the first paint is already the right
+             size. ViewportFillRow then refines it to the exact measured
+             remainder (the header/title block above vary by breakpoint and
+             content, so the calc can only ever be close). Below `lg` the
+             columns stack and each panel takes a fixed height instead —
+             filling the viewport there would strand the second panel. ── */}
+      <ViewportFillRow className="grid grid-cols-1 lg:grid-cols-2 gap-4 items-stretch lg:h-[calc(100dvh-15rem)] lg:min-h-[320px] lg:max-h-[720px]">
+        {/* Price trend chart — 1W/1M/2M range tabs */}
+        <div className="min-w-0 flex flex-col min-h-0 h-[300px] sm:h-[340px] lg:h-auto">
+          <p className="text-[9px] font-mono tracking-widest text-muted-foreground uppercase mb-1.5 shrink-0">
+            Price History
+          </p>
+          {quotes.length >= 2 ? (
+            <div className="flex-1 min-h-0">
+              <StockChartPanel quotes={quotes} fill />
+            </div>
+          ) : (
+            <div className="border border-border px-4 py-4 flex-1 min-h-0 flex items-center justify-center text-center">
+              <p className="text-[10px] font-mono text-muted-foreground">
+                Not enough history to display chart — run ETL to accumulate data
               </p>
-              <p className="text-sm font-mono font-bold tabular-nums truncate">{value}</p>
             </div>
-          ))}
+          )}
         </div>
-      )}
 
-      {/* ── Price trend chart ───────────────────────────────────────────── */}
-      {sparkData.length >= 2 ? (
-        <div className="border border-border bg-card">
-          <div className="px-4 py-2.5 border-b border-border flex items-center justify-between">
-            <span className="text-[9px] font-mono uppercase tracking-widest text-muted-foreground">
-              Price History ({quotes.length} data points)
-            </span>
-            <span className="text-[9px] font-mono text-muted-foreground">
-              {fmtDateShort(quotes[0].fetched_at)} – {fmtDateShort(quotes[quotes.length - 1].fetched_at)}
-            </span>
-          </div>
-          <div className="px-2 sm:px-4 py-3 sm:py-4">
-            <LineChart
-              points={chartPoints}
-              precision={2}
-              height={260}
-              ariaLabel={`${stock.ticker} price history`}
-            />
-          </div>
-        </div>
-      ) : (
-        <div className="border border-border bg-card px-4 py-6 text-center">
-          <p className="text-[10px] font-mono text-muted-foreground">
-            Not enough history to display chart — run ETL to accumulate data
-          </p>
-        </div>
-      )}
-
-      {/* ── Quote history table ─────────────────────────────────────────── */}
-      {quotes.length > 0 && (
-        <div>
-          <p className="text-[10px] font-mono tracking-widest text-muted-foreground uppercase mb-3">
-            Quote History — {quotes.length} entries
-          </p>
-          <div className="border border-border">
-            <div>
-            <div className="grid grid-cols-6 gap-px bg-border">
-              {["Date", "Price", "Chg%", "High", "Low", "Open"].map((h) => (
-                <div key={h} className="bg-secondary px-1 py-1.5 text-center">
-                  <span className="text-[9px] font-mono uppercase tracking-widest text-muted-foreground">
-                    {h}
-                  </span>
+        {/* Quote history table */}
+        {quotes.length > 0 && (
+          <div className="min-w-0 flex flex-col min-h-0 h-[360px] sm:h-[420px] lg:h-auto">
+            <p className="text-[9px] font-mono tracking-widest text-muted-foreground uppercase mb-1.5 shrink-0">
+              Quote History — {quotes.length} entries
+            </p>
+            <div className="border border-border flex flex-col flex-1 min-h-0">
+              <div className="grid grid-cols-6 gap-px bg-border shrink-0">
+                {["Date", "Price", "Chg%", "High", "Low", "Open"].map((h) => (
+                  <div key={h} className="bg-secondary px-1 py-1 text-center">
+                    <span className="text-[8px] font-mono uppercase tracking-widest text-muted-foreground">
+                      {h}
+                    </span>
+                  </div>
+                ))}
+              </div>
+              {/* One row per day (deduped above) + scroll — every entry is
+                  reachable, not just the first page of them. */}
+              <div className="flex-1 min-h-0 overflow-y-auto">
+                <div className="space-y-px bg-border">
+                  {[...quotes].reverse().map((q, i) => {
+                    const p = parseFloat(String(q.percent_change));
+                    const isP = p >= 0;
+                    return (
+                      <div
+                        key={i}
+                        className="grid grid-cols-6 gap-px bg-background hover:bg-secondary transition-colors"
+                      >
+                        <div className="px-1 py-1 text-center">
+                          <span className="text-[9px] font-mono whitespace-nowrap">
+                            {fmtDateShort(q.quote_timestamp)}
+                          </span>
+                        </div>
+                        <div className="px-1 py-1 text-center">
+                          <span className="text-[9px] font-mono font-bold tabular-nums">
+                            ${fmt(q.current_price)}
+                          </span>
+                        </div>
+                        <div className="px-1 py-1 text-center">
+                          <span
+                            className="text-[9px] font-mono tabular-nums"
+                            style={{ color: isP ? "hsl(142 65% 42%)" : "hsl(0 72% 50%)" }}
+                          >
+                            {isP ? "+" : ""}{p.toFixed(2)}%
+                          </span>
+                        </div>
+                        <div className="px-1 py-1 text-center">
+                          <span className="text-[9px] font-mono text-muted-foreground tabular-nums">
+                            ${fmt(q.high_price)}
+                          </span>
+                        </div>
+                        <div className="px-1 py-1 text-center">
+                          <span className="text-[9px] font-mono text-muted-foreground tabular-nums">
+                            ${fmt(q.low_price)}
+                          </span>
+                        </div>
+                        <div className="px-1 py-1 text-center">
+                          <span className="text-[9px] font-mono text-muted-foreground tabular-nums">
+                            ${fmt(q.open_price)}
+                          </span>
+                        </div>
+                      </div>
+                    );
+                  })}
                 </div>
-              ))}
-            </div>
-            <div>
-              <div className="space-y-px bg-border">
-                {[...quotes].reverse().slice(0, 15).map((q, i) => {
-                  const p = parseFloat(String(q.percent_change));
-                  const isP = p >= 0;
-                  return (
-                    <div
-                      key={i}
-                      className="grid grid-cols-6 gap-px bg-background hover:bg-secondary transition-colors"
-                    >
-                      <div className="px-1 py-2 text-center">
-                        <span className="text-[10px] font-mono whitespace-nowrap">
-                          {fmtDateShort(q.fetched_at)}
-                        </span>
-                      </div>
-                      <div className="px-1 py-2 text-center">
-                        <span className="text-[10px] font-mono font-bold tabular-nums">
-                          ${fmt(q.current_price)}
-                        </span>
-                      </div>
-                      <div className="px-1 py-2 text-center">
-                        <span
-                          className="text-[10px] font-mono tabular-nums"
-                          style={{ color: isP ? "hsl(142 65% 42%)" : "hsl(0 72% 50%)" }}
-                        >
-                          {isP ? "+" : ""}{p.toFixed(2)}%
-                        </span>
-                      </div>
-                      <div className="px-1 py-2 text-center">
-                        <span className="text-[10px] font-mono text-muted-foreground tabular-nums">
-                          ${fmt(q.high_price)}
-                        </span>
-                      </div>
-                      <div className="px-1 py-2 text-center">
-                        <span className="text-[10px] font-mono text-muted-foreground tabular-nums">
-                          ${fmt(q.low_price)}
-                        </span>
-                      </div>
-                      <div className="px-1 py-2 text-center">
-                        <span className="text-[10px] font-mono text-muted-foreground tabular-nums">
-                          ${fmt(q.open_price)}
-                        </span>
-                      </div>
-                    </div>
-                  );
-                })}
               </div>
             </div>
-            </div>
           </div>
-        </div>
-      )}
+        )}
+      </ViewportFillRow>
 
       {/* ── Related News ───────────────────────────────────────────────── */}
       {news.length > 0 && (
         <div>
-          <p className="text-[10px] font-mono tracking-widest text-muted-foreground uppercase mb-3">
+          <p className="text-[9px] font-mono tracking-widest text-muted-foreground uppercase mb-1.5">
             Related News — {news.length} articles
           </p>
           <div className="space-y-px bg-border">
-            {news.map((article: any) => (
+            {news.slice(0, 8).map((article: any) => (
               <a
                 key={article.id}
                 href={article.url}
@@ -308,51 +321,30 @@ export default async function StockDetailPage({
                 rel="noopener noreferrer"
                 className="bg-background flex gap-0 hover:bg-secondary transition-colors group"
               >
-                <div className="w-16 shrink-0 border-r border-border flex items-center justify-center">
+                <div className="w-10 shrink-0 border-r border-border flex items-center justify-center">
                   <span
-                    className="text-xs font-mono"
+                    className="text-[10px] font-mono"
                     style={{ color: "hsl(142 65% 42%)" }}
                   >
                     ◆
                   </span>
                 </div>
-                <div className="flex-1 px-4 py-3 min-w-0">
-                  <div className="flex items-center gap-2 mb-1">
+                <div className="flex-1 px-2.5 py-1.5 min-w-0">
+                  <div className="flex items-center gap-2 mb-0.5">
                     {article.source && (
-                      <span className="text-[10px] font-mono text-muted-foreground">
+                      <span className="text-[9px] font-mono text-muted-foreground">
                         {article.source}
                       </span>
                     )}
                     {article.published_at && (
-                      <span className="text-[10px] font-mono text-muted-foreground ml-auto">
+                      <span className="text-[9px] font-mono text-muted-foreground ml-auto">
                         {fmtDate(article.published_at)}
                       </span>
                     )}
                   </div>
-                  <p className="text-xs font-bold leading-snug line-clamp-2 group-hover:underline">
+                  <p className="text-[11px] font-bold leading-snug line-clamp-1 group-hover:underline">
                     {article.headline}
                   </p>
-                  {article.summary && (
-                    <p className="text-[10px] text-muted-foreground line-clamp-1 mt-0.5">
-                      {article.summary}
-                    </p>
-                  )}
-                  {article.related_tickers && article.related_tickers.length > 1 && (
-                    <div className="flex gap-1 mt-1.5 flex-wrap">
-                      {(article.related_tickers as string[])
-                        .filter((t) => t !== ticker)
-                        .slice(0, 4)
-                        .map((t) => (
-                          <Link
-                            key={t}
-                            href={`/markets/${t}`}
-                            className="text-[9px] font-mono px-1 bg-secondary hover:bg-border"
-                          >
-                            {t}
-                          </Link>
-                        ))}
-                    </div>
-                  )}
                 </div>
               </a>
             ))}
