@@ -3,6 +3,7 @@ import { unstable_cache } from "next/cache";
 import { ThemeSwitcher } from "@/components/theme-switcher";
 import { createClient, createStaticClient } from "@/lib/supabase/server";
 import { FooterTickers } from "@/components/footer-tickers";
+import { HeaderDate } from "@/components/header-date";
 import {
   normalizeSportsRows,
   type SportsTickerItem,
@@ -109,13 +110,15 @@ const NAV_LINKS = [
 ];
 
 export default async function PublicLayout({ children }: { children: React.ReactNode }) {
-  const now = new Date();
-  const dateStr = now
+  // Server renders Eastern time (it has no visitor timezone); HeaderDate
+  // swaps in the reader's own timezone on the client.
+  const dateStr = new Date()
     .toLocaleDateString("en-US", {
       weekday: "long",
       year: "numeric",
       month: "long",
       day: "numeric",
+      timeZone: "America/New_York",
     })
     .toUpperCase();
 
@@ -137,9 +140,7 @@ export default async function PublicLayout({ children }: { children: React.React
             >
               INFO HUB
             </span>
-            <span className="text-[10px] font-mono tracking-widest text-muted-foreground uppercase">
-              {dateStr}
-            </span>
+            <HeaderDate initial={dateStr} />
           </Link>
 
           <div className="flex items-center gap-4">

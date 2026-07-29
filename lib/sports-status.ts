@@ -43,3 +43,29 @@ function shortPeriod(p: string): string {
     .replace(/\bHalf\b/i, "H")
     .trim();
 }
+
+
+/** Multi-word nicknames that must not be reduced to their last word. */
+const TWO_WORD_NICKNAMES = new Set([
+  "red sox", "white sox", "blue jays", "maple leafs", "trail blazers",
+  "golden knights", "red wings", "blue jackets", "sun devils", "golden bears",
+  "crimson tide", "tar heels", "fighting irish", "nittany lions", "buffalo bills",
+]);
+
+/**
+ * Strip the city from a full team name: "Dallas Wings" → "Wings",
+ * "Boston Red Sox" → "Red Sox". Used where horizontal space is tight
+ * (mobile score rows) and the city adds no information.
+ */
+export function teamNickname(fullName: string): string {
+  const name = (fullName ?? "").trim();
+  if (!name) return "";
+  const words = name.split(/\s+/);
+  if (words.length <= 1) return name;
+
+  const lastTwo = words.slice(-2).join(" ").toLowerCase();
+  if (words.length > 2 && TWO_WORD_NICKNAMES.has(lastTwo)) {
+    return words.slice(-2).join(" ");
+  }
+  return words[words.length - 1];
+}

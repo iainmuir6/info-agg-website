@@ -1,5 +1,7 @@
 import { createClient } from "@/lib/supabase/server";
 import Link from "next/link";
+import { teamNickname } from "@/lib/sports-status";
+import { espnGameUrl } from "@/lib/leagues";
 
 type League = { id: number; sport: string; league: string; display_name: string };
 type Score = {
@@ -209,26 +211,46 @@ export default async function SportsPage() {
                                     href={`/${league.league}/${(game.away_abbrev ?? game.away_team).toUpperCase()}`}
                                     className="text-muted-foreground truncate hover:text-foreground hover:underline"
                                   >
-                                    {game.away_team}
+                                    <span className="sm:hidden">{teamNickname(game.away_team)}</span>
+                                    <span className="hidden sm:inline">{game.away_team}</span>
                                   </Link>
                                 </div>
                                 {/* Scores */}
-                                <div className="flex items-center gap-2 justify-center">
-                                  <span className="font-bold text-sm tabular-nums">
-                                    {game.away_score ?? "—"}
-                                  </span>
-                                  <span className="text-muted-foreground text-[10px]">–</span>
-                                  <span className="font-bold text-sm tabular-nums">
-                                    {game.home_score ?? "—"}
-                                  </span>
-                                </div>
+                                {game.event_id ? (
+                                  <a
+                                    href={espnGameUrl(league.league, game.event_id)}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    title="Open game on ESPN"
+                                    className="flex items-center gap-2 justify-center hover:underline"
+                                  >
+                                    <span className="font-bold text-sm tabular-nums">
+                                      {game.away_score ?? "—"}
+                                    </span>
+                                    <span className="text-muted-foreground text-[10px]">–</span>
+                                    <span className="font-bold text-sm tabular-nums">
+                                      {game.home_score ?? "—"}
+                                    </span>
+                                  </a>
+                                ) : (
+                                  <div className="flex items-center gap-2 justify-center">
+                                    <span className="font-bold text-sm tabular-nums">
+                                      {game.away_score ?? "—"}
+                                    </span>
+                                    <span className="text-muted-foreground text-[10px]">–</span>
+                                    <span className="font-bold text-sm tabular-nums">
+                                      {game.home_score ?? "—"}
+                                    </span>
+                                  </div>
+                                )}
                                 {/* Home */}
                                 <div className="flex items-center gap-2 w-5/12 justify-end">
                                   <Link
                                     href={`/${league.league}/${(game.home_abbrev ?? game.home_team).toUpperCase()}`}
                                     className="text-muted-foreground truncate hover:text-foreground hover:underline"
                                   >
-                                    {game.home_team}
+                                    <span className="sm:hidden">{teamNickname(game.home_team)}</span>
+                                    <span className="hidden sm:inline">{game.home_team}</span>
                                   </Link>
                                 </div>
                               </div>

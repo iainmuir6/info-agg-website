@@ -21,10 +21,14 @@ function fmt(n: number | null | undefined, digits = 2) {
 
 function fmtDate(s: string | null) {
   if (!s) return "";
-  return new Date(s).toLocaleDateString("en-US", {
+  return new Date(s).toLocaleString("en-US", {
     month: "short",
     day: "numeric",
     year: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+    timeZone: "America/New_York",
+    timeZoneName: "short",
   });
 }
 
@@ -144,7 +148,7 @@ export default async function StockDetailPage({
           </div>
 
           {latest ? (
-            <div className="text-right">
+            <div className="text-left">
               <p className="text-3xl font-mono font-black tabular-nums">
                 ${fmt(latest.current_price)}
               </p>
@@ -225,11 +229,11 @@ export default async function StockDetailPage({
           <p className="text-[10px] font-mono tracking-widest text-muted-foreground uppercase mb-3">
             Quote History — {quotes.length} entries
           </p>
-          <div className="border border-border overflow-x-auto">
-            <div className="min-w-[520px]">
-            <div className="grid grid-cols-[1fr_80px_80px_80px_80px_80px] gap-px bg-border">
+          <div className="border border-border">
+            <div>
+            <div className="grid grid-cols-6 gap-px bg-border">
               {["Date", "Price", "Chg%", "High", "Low", "Open"].map((h) => (
-                <div key={h} className="bg-secondary px-3 py-1.5">
+                <div key={h} className="bg-secondary px-1 py-1.5 text-center">
                   <span className="text-[9px] font-mono uppercase tracking-widest text-muted-foreground">
                     {h}
                   </span>
@@ -244,19 +248,19 @@ export default async function StockDetailPage({
                   return (
                     <div
                       key={i}
-                      className="grid grid-cols-[1fr_80px_80px_80px_80px_80px] gap-px bg-background hover:bg-secondary transition-colors"
+                      className="grid grid-cols-6 gap-px bg-background hover:bg-secondary transition-colors"
                     >
-                      <div className="px-3 py-2">
+                      <div className="px-1 py-2 text-center">
                         <span className="text-[10px] font-mono whitespace-nowrap">
                           {fmtDateShort(q.fetched_at)}
                         </span>
                       </div>
-                      <div className="px-3 py-2 text-right">
+                      <div className="px-1 py-2 text-center">
                         <span className="text-[10px] font-mono font-bold tabular-nums">
                           ${fmt(q.current_price)}
                         </span>
                       </div>
-                      <div className="px-3 py-2 text-right">
+                      <div className="px-1 py-2 text-center">
                         <span
                           className="text-[10px] font-mono tabular-nums"
                           style={{ color: isP ? "hsl(142 65% 42%)" : "hsl(0 72% 50%)" }}
@@ -264,17 +268,17 @@ export default async function StockDetailPage({
                           {isP ? "+" : ""}{p.toFixed(2)}%
                         </span>
                       </div>
-                      <div className="px-3 py-2 text-right">
+                      <div className="px-1 py-2 text-center">
                         <span className="text-[10px] font-mono text-muted-foreground tabular-nums">
                           ${fmt(q.high_price)}
                         </span>
                       </div>
-                      <div className="px-3 py-2 text-right">
+                      <div className="px-1 py-2 text-center">
                         <span className="text-[10px] font-mono text-muted-foreground tabular-nums">
                           ${fmt(q.low_price)}
                         </span>
                       </div>
-                      <div className="px-3 py-2 text-right">
+                      <div className="px-1 py-2 text-center">
                         <span className="text-[10px] font-mono text-muted-foreground tabular-nums">
                           ${fmt(q.open_price)}
                         </span>
