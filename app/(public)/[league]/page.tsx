@@ -53,13 +53,28 @@ export default async function LeaguePage({
 
   if (!leagueRow) notFound();
 
-  const [scoresRes, newsRes] = await Promise.all([
+  const SCORE_COLS =
+    "id, event_id, home_team, away_team, home_abbrev, away_abbrev, home_score, away_score, status, status_detail, game_date, venue, broadcast";
+  const nowIso = new Date().toISOString();
+
+  // Played and upcoming are fetched separately and anchored on now(). A single
+  // "latest 120 by game_date" returns only far-future fixtures once a full
+  // season schedule is loaded, which starved the played side entirely.
+  const [playedRes, upcomingRes, newsRes] = await Promise.all([
     supabase
       .from("sports_scores")
-      .select("id, event_id, home_team, away_team, home_abbrev, away_abbrev, home_score, away_score, status, status_detail, game_date, venue, broadcast")
+      .select(SCORE_COLS)
       .eq("league_id", leagueRow.id)
+      .lte("game_date", nowIso)
       .order("game_date", { ascending: false })
-      .limit(120),
+      .limit(24),
+    supabase
+      .from("sports_scores")
+      .select(SCORE_COLS)
+      .eq("league_id", leagueRow.id)
+      .gt("game_date", nowIso)
+      .order("game_date", { ascending: true })
+      .limit(24),
     supabase
       .from("sports_news")
       .select("id, title, description, url, image_url, published_at")
@@ -68,17 +83,21 @@ export default async function LeaguePage({
       .limit(20),
   ]);
 
-  const scores = (scoresRes.data ?? []) as Score[];
+  const played = (playedRes.data ?? []) as Score[];
+  const upcoming = (upcomingRes.data ?? []) as Score[];
   const news = newsRes.data ?? [];
+  const scores = [...played, ...upcoming];
 
-  const now = Date.now();
-  const past = scores
-    .filter((s) => gameState(s.status) !== "scheduled" || new Date(s.game_date ?? 0).getTime() < now)
-    .slice(0, 24);
-  const upcoming = scores
-    .filter((s) => gameState(s.status) === "scheduled" && new Date(s.game_date ?? 0).getTime() >= now)
-    .sort((a, b) => new Date(a.game_date ?? 0).getTime() - new Date(b.game_date ?? 0).getTime())
-    .slice(0, 12);
+  // Scores = games that have actually been played or are in progress.
+  // A game whose start time has passed but that ESPN still reports as
+  // Scheduled (a postponement, or a row we have not refreshed yet) is NOT a
+  // result — it was previously shown under "Recent Results" with no score.
+  const finished = played.filter((s) => gameState(s.status) !== "scheduled");
+  const unplayed = played.filter((s) => gameState(s.status) === "scheduled");
+  // Anything past its start time but still unplayed belongs with the schedule.
+  const schedule = [...unplayed, ...upcoming].sort(
+    (a, b) => new Date(a.game_date ?? 0).getTime() - new Date(b.game_date ?? 0).getTime(),
+  );
 
   // Teams seen in this league's games, for the directory
   const teamMap = new Map<string, string>(); // name → abbrev
@@ -189,24 +208,24 @@ export default async function LeaguePage({
         </div>
       ) : (
         <>
-          {upcoming.length > 0 && (
+          {finished.length > 0 && (
             <section>
               <p className="text-[10px] font-mono tracking-widest text-muted-foreground uppercase mb-2">
-                Upcoming
+                Scores <span className="normal-case tracking-normal text-muted-foreground/60">· {finished.length}</span>
               </p>
               <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-px bg-border border border-border">
-                {upcoming.map((g) => <GameCell key={g.id} g={g} />)}
+                {finished.map((g) => <GameCell key={g.id} g={g} />)}
               </div>
             </section>
           )}
 
-          {past.length > 0 && (
+          {schedule.length > 0 && (
             <section>
               <p className="text-[10px] font-mono tracking-widest text-muted-foreground uppercase mb-2">
-                Recent Results
+                Schedule <span className="normal-case tracking-normal text-muted-foreground/60">· {schedule.length}</span>
               </p>
               <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-px bg-border border border-border">
-                {past.map((g) => <GameCell key={g.id} g={g} />)}
+                {schedule.map((g) => <GameCell key={g.id} g={g} />)}
               </div>
             </section>
           )}

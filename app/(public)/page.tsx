@@ -450,13 +450,31 @@ async function getLeagueSnapshot(
 
     if (!leagueRow) return { league: null, recentGames: [], upcomingGames: [], news: [] };
 
-    const [scoresRes, newsRes] = await Promise.all([
+    // Two windowed queries rather than one "latest N by game_date".
+    // Unwindowed, the newest rows are the furthest-FUTURE fixtures — once the
+    // season backfill loaded full schedules, every league's top rows were
+    // weeks out, so recentGames came back empty and the in-season check
+    // rejected every card. Anchoring each side on now() is immune to how much
+    // future schedule the table holds.
+    const SCORE_COLS =
+      "event_id, home_team, away_team, home_abbrev, away_abbrev, home_score, away_score, status, status_detail, game_date";
+    const nowIso = new Date().toISOString();
+
+    const [recentRes, upcomingRes, newsRes] = await Promise.all([
       supabase
         .from("sports_scores")
-        .select("event_id, home_team, away_team, home_abbrev, away_abbrev, home_score, away_score, status, status_detail, game_date")
+        .select(SCORE_COLS)
         .eq("league_id", leagueRow.id)
+        .lte("game_date", nowIso)
         .order("game_date", { ascending: false })
-        .limit(scoreLimit * 2),
+        .limit(scoreLimit),
+      supabase
+        .from("sports_scores")
+        .select(SCORE_COLS)
+        .eq("league_id", leagueRow.id)
+        .gt("game_date", nowIso)
+        .order("game_date", { ascending: true })
+        .limit(scoreLimit),
       supabase
         .from("sports_news")
         .select("id, title, url, published_at, source")
@@ -465,27 +483,9 @@ async function getLeagueSnapshot(
         .limit(newsLimit),
     ]);
 
-    const scores = (scoresRes.data ?? []) as ScoreRowType[];
-    const now = new Date();
-
-    const isRecent = (g: ScoreRowType) => {
-      const s = (g.status ?? "").toLowerCase();
-      if (s.includes("final") || s.includes("post")) return true;
-      if (s.includes("progress") || s.includes("live")) return true;
-      const dt = g.game_date ? new Date(g.game_date) : null;
-      return !!dt && dt < now;
-    };
-
-    const recentGames = scores
-      .filter(isRecent)
-      .sort((a, b) => new Date(b.game_date ?? "").getTime() - new Date(a.game_date ?? "").getTime())
-      .slice(0, scoreLimit);
-
-    const upcomingGames = scores
-      .filter((g) => !isRecent(g))
-      .sort((a, b) => new Date(a.game_date ?? "").getTime() - new Date(b.game_date ?? "").getTime())
-      .slice(0, scoreLimit);
-
+    // A live game has a start time in the past, so it lands in recentGames.
+    const recentGames = (recentRes.data ?? []) as ScoreRowType[];
+    const upcomingGames = (upcomingRes.data ?? []) as ScoreRowType[];
     const news = (newsRes.data ?? []) as SportsNewsItem[];
 
     return {

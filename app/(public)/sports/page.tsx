@@ -170,6 +170,17 @@ export default async function SportsPage() {
 
             const color = SPORT_COLORS[league.sport] ?? "hsl(25 95% 50%)";
 
+            // Same split as the league pages: a game whose start time has
+            // passed but that is still reported Scheduled is not a result.
+            const isPlayed = (s: Score) => {
+              const st = (s.status ?? "").toLowerCase();
+              return st.includes("final") || st.includes("progress") || st.includes("live");
+            };
+            const played = leagueScores.filter(isPlayed);
+            const scheduled = leagueScores
+              .filter((s) => !isPlayed(s))
+              .sort((a, b) => new Date(a.game_date ?? 0).getTime() - new Date(b.game_date ?? 0).getTime());
+
             return (
               <section key={league.id} className="bg-background">
                 {/* League header */}
@@ -189,15 +200,15 @@ export default async function SportsPage() {
                   </span>
                 </div>
 
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-px bg-border">
+                <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-px bg-border">
                   {/* Scores column */}
-                  {leagueScores.length > 0 && (
+                  {played.length > 0 && (
                     <div className="bg-background p-4">
                       <p className="text-[10px] font-mono tracking-widest text-muted-foreground uppercase mb-3">
                         Scores
                       </p>
                       <div className="space-y-2">
-                        {leagueScores.slice(0, 6).map((game) => {
+                        {played.slice(0, 6).map((game) => {
                           const badge = getStatusBadge(game.status);
                           return (
                             <div
@@ -270,6 +281,51 @@ export default async function SportsPage() {
                             </div>
                           );
                         })}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Schedule column — upcoming and not-yet-played games */}
+                  {scheduled.length > 0 && (
+                    <div className="bg-background p-4">
+                      <p className="text-[10px] font-mono tracking-widest text-muted-foreground uppercase mb-3">
+                        Schedule
+                      </p>
+                      <div className="space-y-2">
+                        {scheduled.slice(0, 6).map((game) => (
+                          <div key={game.id} className="py-2 border-b border-border last:border-0">
+                            <div className="flex items-center justify-between text-xs font-mono gap-2">
+                              <div className="flex items-center gap-2 min-w-0 flex-1">
+                                <Link
+                                  href={`/${league.league}/${(game.away_abbrev ?? game.away_team).toUpperCase()}`}
+                                  className="text-muted-foreground truncate hover:text-foreground hover:underline"
+                                >
+                                  <span className="sm:hidden">{teamNickname(game.away_team)}</span>
+                                  <span className="hidden sm:inline">{game.away_team}</span>
+                                </Link>
+                                <span className="text-muted-foreground/50 shrink-0">@</span>
+                                <Link
+                                  href={`/${league.league}/${(game.home_abbrev ?? game.home_team).toUpperCase()}`}
+                                  className="text-muted-foreground truncate hover:text-foreground hover:underline"
+                                >
+                                  <span className="sm:hidden">{teamNickname(game.home_team)}</span>
+                                  <span className="hidden sm:inline">{game.home_team}</span>
+                                </Link>
+                              </div>
+                              <span className="text-[10px] text-muted-foreground shrink-0 whitespace-nowrap">
+                                {game.game_date
+                                  ? new Date(game.game_date).toLocaleString("en-US", {
+                                      month: "short",
+                                      day: "numeric",
+                                      hour: "numeric",
+                                      minute: "2-digit",
+                                      timeZone: "America/New_York",
+                                    })
+                                  : ""}
+                              </span>
+                            </div>
+                          </div>
+                        ))}
                       </div>
                     </div>
                   )}
