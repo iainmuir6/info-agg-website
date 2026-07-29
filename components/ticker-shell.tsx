@@ -23,7 +23,7 @@ export function TickerShell({
           {label}
         </span>
       </div>
-      <div className="flex-1 overflow-hidden relative flex items-center">{children}</div>
+      <div className="flex-1 overflow-hidden relative flex items-center h-full">{children}</div>
     </div>
   );
 }

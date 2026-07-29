@@ -94,7 +94,7 @@ export function SportsTickerClient({ items: initialItems }: { items: SportsTicke
   return (
     <TickerShell label="Sports" className="bg-secondary/20">
       <div
-        className="animate-ticker flex items-center"
+        className="animate-ticker flex items-center h-full"
         style={{ animationDuration: `${Math.max(40, items.length * 5)}s` }}
       >
         {looped.map((g, i) => (

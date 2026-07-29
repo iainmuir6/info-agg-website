@@ -97,7 +97,7 @@ export default async function StockDetailPage({
       : null;
 
   return (
-    <div className="px-6 py-6 space-y-6">
+    <div className="px-3 sm:px-6 py-4 sm:py-6 space-y-6">
       {/* Back navigation */}
       <div className="flex items-center gap-2">
         <Link
@@ -168,7 +168,7 @@ export default async function StockDetailPage({
 
       {/* ── OHLC Stats ─────────────────────────────────────────────────── */}
       {latest && (
-        <div className="grid grid-cols-3 md:grid-cols-6 gap-px bg-border">
+        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-6 gap-px bg-border">
           {[
             { label: "Open", value: `$${fmt(latest.open_price)}` },
             { label: "High", value: `$${fmt(latest.high_price)}` },
@@ -181,11 +181,11 @@ export default async function StockDetailPage({
               ? { label: "30D Low", value: `$${fmt(hiLo30.low)}` }
               : { label: "30D Low", value: "—" },
           ].map(({ label, value }) => (
-            <div key={label} className="bg-background px-4 py-3">
-              <p className="text-[9px] font-mono tracking-widest text-muted-foreground uppercase mb-1">
+            <div key={label} className="bg-background px-3 sm:px-4 py-2.5 sm:py-3 min-w-0">
+              <p className="text-[9px] font-mono tracking-widest text-muted-foreground uppercase mb-1 truncate">
                 {label}
               </p>
-              <p className="text-sm font-mono font-bold tabular-nums">{value}</p>
+              <p className="text-sm font-mono font-bold tabular-nums truncate">{value}</p>
             </div>
           ))}
         </div>
@@ -202,25 +202,13 @@ export default async function StockDetailPage({
               {fmtDateShort(quotes[0].fetched_at)} – {fmtDateShort(quotes[quotes.length - 1].fetched_at)}
             </span>
           </div>
-          <div className="px-4 py-4">
+          <div className="px-2 sm:px-4 py-3 sm:py-4">
             <LineChart
               points={chartPoints}
               precision={2}
               height={260}
               ariaLabel={`${stock.ticker} price history`}
             />
-            {/* Date labels */}
-            <div className="flex justify-between mt-1">
-              <span className="text-[9px] font-mono text-muted-foreground">
-                {fmtDateShort(quotes[0].fetched_at)}
-              </span>
-              <span className="text-[9px] font-mono text-muted-foreground">
-                {fmtDateShort(quotes[Math.floor(quotes.length / 2)].fetched_at)}
-              </span>
-              <span className="text-[9px] font-mono text-muted-foreground">
-                {fmtDateShort(quotes[quotes.length - 1].fetched_at)}
-              </span>
-            </div>
           </div>
         </div>
       ) : (
@@ -237,7 +225,8 @@ export default async function StockDetailPage({
           <p className="text-[10px] font-mono tracking-widest text-muted-foreground uppercase mb-3">
             Quote History — {quotes.length} entries
           </p>
-          <div className="border border-border overflow-hidden">
+          <div className="border border-border overflow-x-auto">
+            <div className="min-w-[520px]">
             <div className="grid grid-cols-[1fr_80px_80px_80px_80px_80px] gap-px bg-border">
               {["Date", "Price", "Chg%", "High", "Low", "Open"].map((h) => (
                 <div key={h} className="bg-secondary px-3 py-1.5">
@@ -258,7 +247,9 @@ export default async function StockDetailPage({
                       className="grid grid-cols-[1fr_80px_80px_80px_80px_80px] gap-px bg-background hover:bg-secondary transition-colors"
                     >
                       <div className="px-3 py-2">
-                        <span className="text-[10px] font-mono">{fmtDateShort(q.fetched_at)}</span>
+                        <span className="text-[10px] font-mono whitespace-nowrap">
+                          {fmtDateShort(q.fetched_at)}
+                        </span>
                       </div>
                       <div className="px-3 py-2 text-right">
                         <span className="text-[10px] font-mono font-bold tabular-nums">
@@ -292,6 +283,7 @@ export default async function StockDetailPage({
                   );
                 })}
               </div>
+            </div>
             </div>
           </div>
         </div>

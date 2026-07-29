@@ -88,7 +88,7 @@ export function NewsTickerClient({ items: initialItems }: { items: TickerItem[] 
   return (
     <TickerShell label="Markets" className="border-b border-border bg-secondary/30">
       <div
-        className="animate-ticker flex items-center gap-0"
+        className="animate-ticker flex items-center h-full gap-0"
         style={{ animationDuration: `${Math.max(30, items.length * 4)}s` }}
       >
         {looped.map((item, i) => {
@@ -96,7 +96,7 @@ export function NewsTickerClient({ items: initialItems }: { items: TickerItem[] 
           return (
             <span
               key={i}
-              className="inline-flex items-center gap-2 px-3 sm:px-4 shrink-0 transition-opacity duration-500"
+              className="inline-flex items-center leading-none gap-2 px-3 sm:px-4 shrink-0 transition-opacity duration-500"
               aria-hidden={i >= items.length}
             >
               <TickerHoverChart ticker={item.label} href={`/markets/${item.label}`}
