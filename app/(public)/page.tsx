@@ -397,6 +397,19 @@ async function getSpotifyReleases(supabase: Awaited<ReturnType<typeof createClie
   }
 }
 
+async function getYouTubeVideos(supabase: Awaited<ReturnType<typeof createClient>>) {
+  try {
+    const { data } = await supabase
+      .from("youtube_videos")
+      .select("id, video_id, title, channel_title, view_count")
+      .order("view_count", { ascending: false })
+      .limit(10);
+    return data ?? [];
+  } catch {
+    return [];
+  }
+}
+
 async function getEconomicIndicators(
   supabase: Awaited<ReturnType<typeof createClient>>
 ): Promise<EconRow[]> {
@@ -824,6 +837,7 @@ export default async function CommandCenter() {
     marketNews,
     nytAll,
     spotifyReleases,
+    youtubeVideos,
     econIndicators,
     nba, mlb, nfl, nhl, ncaab, ncaaf, wnba,
   ] = await Promise.all([
@@ -832,6 +846,7 @@ export default async function CommandCenter() {
     getMarketNews(supabase),
     getAllNyt(supabase),
     getSpotifyReleases(supabase),
+    getYouTubeVideos(supabase),
     getEconomicIndicators(supabase),
     getLeagueSnapshot(supabase, "basketball", "nba"),
     getLeagueSnapshot(supabase, "baseball", "mlb"),
@@ -1209,6 +1224,35 @@ export default async function CommandCenter() {
       <CollapsibleCard label="Commodities" accent="hsl(45 93% 47%)" href="/markets"
         count={assets.commodities.length} summary={`${assets.commodities.length} commodities`}>
         <TickerGrid rows={assets.commodities} href="/markets" />
+      </CollapsibleCard>
+    )});
+  }
+
+  if (youtubeVideos.length > 0) {
+    cards.push({ section: "youtube", node: (
+      <CollapsibleCard label="YouTube" accent="hsl(0 72% 50%)" href="/media"
+        count={youtubeVideos.length}>
+        <div>
+          {/* eslint-disable-next-line @typescript-eslint/no-explicit-any */}
+          {youtubeVideos.slice(0, 8).map((v: any) => (
+            <a key={v.id} href={`https://www.youtube.com/watch?v=${v.video_id}`}
+              target="_blank" rel="noopener noreferrer"
+              className="tap-row flex items-center gap-2 px-2 py-1 border-b border-border last:border-0 hover:bg-secondary/50 transition-colors group">
+              <span className="text-[10px] shrink-0" style={{ color: "hsl(0 72% 50%)" }}>▶</span>
+              <div className="min-w-0 flex-1">
+                <p className="text-[10px] font-bold line-clamp-1 group-hover:underline">{v.title}</p>
+                <p className="text-[8px] text-muted-foreground line-clamp-1">{v.channel_title}</p>
+              </div>
+              {v.view_count != null && (
+                <span className="text-[8px] font-mono text-muted-foreground shrink-0 tabular-nums">
+                  {v.view_count >= 1_000_000
+                    ? `${(v.view_count / 1_000_000).toFixed(1)}M`
+                    : `${Math.round(v.view_count / 1000)}K`}
+                </span>
+              )}
+            </a>
+          ))}
+        </div>
       </CollapsibleCard>
     )});
   }

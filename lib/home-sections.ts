@@ -14,7 +14,8 @@ export type HomeSectionKey =
   | "nyt"
   | "nyt_more"
   | "sports"
-  | "spotify";
+  | "spotify"
+  | "youtube";
 
 export const HOME_SECTIONS: { key: HomeSectionKey; label: string }[] = [
   { key: "stocks", label: "Stocks" },
@@ -29,6 +30,7 @@ export const HOME_SECTIONS: { key: HomeSectionKey; label: string }[] = [
   { key: "forex", label: "Forex" },
   { key: "commodities", label: "Commodities" },
   { key: "spotify", label: "Spotify" },
+  { key: "youtube", label: "YouTube" },
 ];
 
 // Deliberately interleaved: markets / news / sports alternate instead of

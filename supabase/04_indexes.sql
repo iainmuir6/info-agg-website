@@ -132,3 +132,10 @@ CREATE INDEX IF NOT EXISTS idx_stock_quotes_quote_timestamp
 
 CREATE INDEX IF NOT EXISTS idx_etl_runs_started_at
     ON info_agg.etl_runs (started_at DESC);
+
+
+-- ── MEDIA — youtube_videos ──────────────────────────────────
+CREATE INDEX IF NOT EXISTS idx_youtube_videos_fetched
+    ON info_agg.youtube_videos (fetched_at DESC);
+CREATE INDEX IF NOT EXISTS idx_youtube_videos_views
+    ON info_agg.youtube_videos (view_count DESC);

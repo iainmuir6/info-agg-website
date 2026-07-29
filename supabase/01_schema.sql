@@ -133,11 +133,20 @@ BEGIN
     v_report := v_report || jsonb_build_object('sports_scores', v_count);
 
     -- ── spotify_releases ──
+    -- Keyed on fetched_at, NOT release_date: Spotify's new-releases feed
+    -- includes back-catalog and reissues whose release dates are already
+    -- older than the window, so pruning by release_date emptied the whole
+    -- table at once (lifetime stats showed 50 inserts / 50 deletes / 0 live).
     DELETE FROM info_agg.spotify_releases
-    WHERE coalesce(release_date, fetched_at::date)
-          < (now() - make_interval(days => p_releases_days))::date;
+    WHERE fetched_at < now() - make_interval(days => p_releases_days);
     GET DIAGNOSTICS v_count = ROW_COUNT;
     v_report := v_report || jsonb_build_object('spotify_releases', v_count);
+
+    -- ── youtube_videos ──
+    DELETE FROM info_agg.youtube_videos
+    WHERE fetched_at < now() - make_interval(days => p_releases_days);
+    GET DIAGNOSTICS v_count = ROW_COUNT;
+    v_report := v_report || jsonb_build_object('youtube_videos', v_count);
 
     -- ── etl_runs ──
     DELETE FROM info_agg.etl_runs

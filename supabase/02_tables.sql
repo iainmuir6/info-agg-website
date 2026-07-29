@@ -252,6 +252,29 @@ CREATE TABLE IF NOT EXISTS info_agg.spotify_releases (
 
 
 -- ============================================================
+-- MEDIA — youtube_videos
+-- ============================================================
+CREATE TABLE IF NOT EXISTS info_agg.youtube_videos (
+    id             UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    video_id       TEXT    NOT NULL,
+    title          TEXT    NOT NULL,
+    channel_title  TEXT,
+    channel_id     TEXT,
+    description    TEXT,
+    category_id    TEXT,
+    thumbnail_url  TEXT,
+    published_at   TIMESTAMP WITH TIME ZONE,
+    view_count     BIGINT,
+    like_count     BIGINT,
+    comment_count  BIGINT,
+    duration       TEXT,              -- ISO-8601, e.g. PT12M34S
+    region_code    TEXT    NOT NULL DEFAULT 'US',
+    fetched_at     TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+    UNIQUE (video_id, region_code)
+);
+
+
+-- ============================================================
 -- MEDIA — reddit_posts
 -- ============================================================
 CREATE TABLE IF NOT EXISTS info_agg.reddit_posts (

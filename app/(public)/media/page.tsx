@@ -31,8 +31,20 @@ type RedditPost = {
   posted_at: string | null;
 };
 
+type YouTubeVideo = {
+  id: string;
+  video_id: string;
+  title: string;
+  channel_title: string | null;
+  thumbnail_url: string | null;
+  published_at: string | null;
+  view_count: number | null;
+  like_count: number | null;
+  duration: string | null;
+};
+
 async function getMediaData(supabase: Awaited<ReturnType<typeof createClient>>) {
-  const [releasesRes, postsRes] = await Promise.all([
+  const [releasesRes, postsRes, videosRes] = await Promise.all([
     supabase
       .from("spotify_releases")
       .select("id, spotify_id, name, artists, album_type, release_date, image_url, external_url, total_tracks, fetched_at")
@@ -43,12 +55,37 @@ async function getMediaData(supabase: Awaited<ReturnType<typeof createClient>>) 
       .select("id, post_id, subreddit, title, author, score, upvote_ratio, num_comments, url, permalink, selftext, thumbnail_url, is_self, flair, posted_at")
       .order("score", { ascending: false })
       .limit(50),
+    supabase
+      .from("youtube_videos")
+      .select("id, video_id, title, channel_title, thumbnail_url, published_at, view_count, like_count, duration")
+      .order("view_count", { ascending: false })
+      .limit(30),
   ]);
 
   return {
     releases: (releasesRes.data ?? []) as SpotifyRelease[],
     posts: (postsRes.data ?? []) as RedditPost[],
+    videos: (videosRes.data ?? []) as YouTubeVideo[],
   };
+}
+
+/** 1234567 → 1.2M */
+function formatCount(n: number | null) {
+  if (n == null) return null;
+  if (n >= 1_000_000_000) return `${(n / 1_000_000_000).toFixed(1)}B`;
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
+  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`;
+  return n.toString();
+}
+
+/** ISO-8601 duration (PT1H2M3S) → 1:02:03 */
+function formatDuration(iso: string | null) {
+  if (!iso) return null;
+  const m = iso.match(/^PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?$/);
+  if (!m) return null;
+  const [h, mi, s] = [m[1] ? +m[1] : 0, m[2] ? +m[2] : 0, m[3] ? +m[3] : 0];
+  const pad = (n: number) => n.toString().padStart(2, "0");
+  return h > 0 ? `${h}:${pad(mi)}:${pad(s)}` : `${mi}:${pad(s)}`;
 }
 
 function formatScore(score: number) {
@@ -63,14 +100,15 @@ function getAlbumTypeLabel(type: string | null) {
 
 export default async function MediaPage() {
   const supabase = await createClient();
-  const { releases, posts } = await getMediaData(supabase);
+  const { releases, posts, videos } = await getMediaData(supabase);
 
   // Group reddit posts by subreddit
   const subreddits = [...new Set(posts.map((p) => p.subreddit))].sort();
 
   const hasSpotify = releases.length > 0;
   const hasReddit = posts.length > 0;
-  const hasData = hasSpotify || hasReddit;
+  const hasYouTube = videos.length > 0;
+  const hasData = hasSpotify || hasReddit || hasYouTube;
 
   return (
     <div className="px-3 sm:px-6 py-4 sm:py-6 space-y-8">
@@ -104,6 +142,67 @@ export default async function MediaPage() {
         </div>
       ) : (
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-px bg-border">
+          {/* YouTube Trending */}
+          {hasYouTube && (
+            <div className="bg-background">
+              <div
+                className="flex items-center gap-3 px-5 py-3 border-b border-border"
+                style={{ borderLeftWidth: "3px", borderLeftColor: "hsl(0 72% 50%)" }}
+              >
+                <span
+                  className="text-xs font-mono font-bold tracking-widest uppercase"
+                  style={{ color: "hsl(0 72% 50%)" }}
+                >
+                  ▶ YouTube — Trending
+                </span>
+                <span className="text-[10px] font-mono text-muted-foreground">
+                  {videos.length} videos
+                </span>
+              </div>
+              <div className="divide-y divide-border">
+                {videos.map((v) => {
+                  const views = formatCount(v.view_count);
+                  const dur = formatDuration(v.duration);
+                  return (
+                    <a
+                      key={v.id}
+                      href={`https://www.youtube.com/watch?v=${v.video_id}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="tap-row flex items-center gap-3 px-4 py-2.5 hover:bg-secondary transition-colors group"
+                    >
+                      {v.thumbnail_url && (
+                        <div className="relative w-20 h-12 shrink-0 overflow-hidden bg-secondary">
+                          {/* eslint-disable-next-line @next/next/no-img-element */}
+                          <img
+                            src={v.thumbnail_url}
+                            alt=""
+                            className="w-full h-full object-cover"
+                            loading="lazy"
+                          />
+                          {dur && (
+                            <span className="absolute bottom-0 right-0 bg-black/80 text-white text-[8px] font-mono px-1 leading-tight">
+                              {dur}
+                            </span>
+                          )}
+                        </div>
+                      )}
+                      <div className="min-w-0 flex-1">
+                        <p className="text-xs font-semibold leading-snug line-clamp-2 group-hover:underline">
+                          {v.title}
+                        </p>
+                        <p className="text-[10px] font-mono text-muted-foreground mt-1 truncate">
+                          {v.channel_title}
+                          {views && <span> · {views} views</span>}
+                        </p>
+                      </div>
+                    </a>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
           {/* Spotify New Releases */}
           <div className="bg-background">
             <div

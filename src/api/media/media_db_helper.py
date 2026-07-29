@@ -26,6 +26,11 @@ except ImportError:
     from spotify import fetch_spotify_new_releases, get_spotify_access_token
 
 try:
+    from .youtube import fetch_youtube_trending
+except ImportError:
+    from youtube import fetch_youtube_trending
+
+try:
     from .reddit import fetch_reddit_hot, RedditRateLimited
 except ImportError:
     from reddit import fetch_reddit_hot, RedditRateLimited
@@ -200,6 +205,67 @@ def sync_spotify_data(supabase: Client) -> Dict[str, Any]:
     time.sleep(1.1)
     # Phase 2: TBD
 
+    return stats
+
+
+def insert_youtube_videos(supabase: Client, videos: List[Dict[str, Any]]) -> int:
+    """Batch-upsert trending videos, keyed on (video_id, region_code)."""
+    if not videos:
+        return 0
+
+    records: List[Dict[str, Any]] = []
+    seen: set = set()
+    for v in videos:
+        video_id = v.get('video_id')
+        if not video_id:
+            continue
+        key = (video_id, v.get('region_code', 'US'))
+        if key in seen:
+            continue
+        seen.add(key)
+        records.append({
+            'video_id': video_id,
+            'title': v.get('title'),
+            'channel_title': v.get('channel_title'),
+            'channel_id': v.get('channel_id'),
+            'description': v.get('description'),
+            'category_id': v.get('category_id'),
+            'thumbnail_url': v.get('thumbnail_url'),
+            'published_at': v.get('published_at'),
+            'view_count': v.get('view_count'),
+            'like_count': v.get('like_count'),
+            'comment_count': v.get('comment_count'),
+            'duration': v.get('duration'),
+            'region_code': v.get('region_code', 'US'),
+            # Refreshed on every run so retention (which keys off fetched_at)
+            # keeps rows that are still trending.
+            'fetched_at': datetime.now(timezone.utc).isoformat(),
+        })
+
+    if not records:
+        return 0
+
+    try:
+        response = supabase.table('youtube_videos').upsert(
+            records, on_conflict='video_id,region_code'
+        ).execute()
+        return len(response.data) if response.data else 0
+    except Exception as e:
+        print(f"Error batch-upserting YouTube videos: {e}")
+        return 0
+
+
+def sync_youtube_data(supabase: Client, region_code: str = 'US', limit: int = 25) -> Dict[str, Any]:
+    """Sync YouTube trending videos to the database."""
+    stats: Dict[str, Any] = {'videos_inserted': 0, 'errors': []}
+    try:
+        videos = fetch_youtube_trending(region_code=region_code, limit=limit)
+        if videos is None:
+            stats['errors'].append('YouTube fetch returned nothing (missing key or API error)')
+            return stats
+        stats['videos_inserted'] = insert_youtube_videos(supabase, videos)
+    except Exception as e:
+        stats['errors'].append(f"Error syncing YouTube data: {e}")
     return stats
 
 

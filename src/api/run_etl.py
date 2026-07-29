@@ -41,7 +41,7 @@ from markets.markets_db_helper import (
     upsert_daily_stock_quotes_batch,
 )
 from news.news_db_helper import sync_nyt_data
-from media.media_db_helper import sync_spotify_data, sync_reddit_data
+from media.media_db_helper import sync_spotify_data, sync_reddit_data, sync_youtube_data
 
 load_dotenv()
 
@@ -318,18 +318,27 @@ def run_media_etl(
 
     try:
         spotify_stats = sync_spotify_data(supabase)
+        youtube_stats = sync_youtube_data(supabase)
         reddit_stats = sync_reddit_data(supabase, subreddits=subreddits)
 
         stats = {
             'spotify_releases': spotify_stats.get('releases_inserted', 0),
+            'youtube_videos': youtube_stats.get('videos_inserted', 0),
             'reddit_posts': reddit_stats.get('posts_inserted', 0),
-            'errors': spotify_stats.get('errors', []) + reddit_stats.get('errors', []),
+            'errors': (
+                spotify_stats.get('errors', [])
+                + youtube_stats.get('errors', [])
+                + reddit_stats.get('errors', [])
+            ),
         }
-        # Reddit is 403-prone; the domain is healthy if either source wrote.
-        ok = (stats['spotify_releases'] + stats['reddit_posts']) > 0
+        # Reddit blocks datacenter IPs without OAuth credentials, so it is not
+        # required for the domain to be healthy — any source writing counts.
+        ok = (
+            stats['spotify_releases'] + stats['youtube_videos'] + stats['reddit_posts']
+        ) > 0
         result: Dict[str, Any] = {'success': ok, 'stats': stats}
         if not ok:
-            result['error'] = 'media wrote 0 rows from both sources'
+            result['error'] = 'media wrote 0 rows from any source'
         return result
     except Exception as e:
         return {'success': False, 'error': str(e)}
@@ -559,6 +568,7 @@ def run_full_etl(
                     f"articles={s.get('articles_inserted',0)}")
         if domain == 'media':
             return (f"spotify={s.get('spotify_releases',0)}  "
+                    f"youtube={s.get('youtube_videos',0)}  "
                     f"reddit={s.get('reddit_posts',0)}")
         return ''
 

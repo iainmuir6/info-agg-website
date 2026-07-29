@@ -44,6 +44,7 @@ jobs:
       SPOTIFY_CLIENT_SECRET:           ${{ secrets.SPOTIFY_CLIENT_SECRET }}
       REDDIT_CLIENT_ID:                ${{ secrets.REDDIT_CLIENT_ID }}
       REDDIT_CLIENT_SECRET:            ${{ secrets.REDDIT_CLIENT_SECRET }}
+      YOUTUBE_API_KEY:                 ${{ secrets.YOUTUBE_API_KEY }}
 
     steps:
       - name: Checkout repository

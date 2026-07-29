@@ -115,6 +115,13 @@ CREATE POLICY "news_articles: anon read"
 
 -- ── MEDIA ───────────────────────────────────────────────────
 
+ALTER TABLE info_agg.youtube_videos ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "youtube_videos: anon read"
+    ON info_agg.youtube_videos FOR SELECT
+    TO anon, authenticated
+    USING (true);
+
 ALTER TABLE info_agg.spotify_releases ENABLE ROW LEVEL SECURITY;
 ALTER TABLE info_agg.reddit_posts     ENABLE ROW LEVEL SECURITY;
 
