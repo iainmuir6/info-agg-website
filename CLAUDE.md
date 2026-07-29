@@ -53,6 +53,7 @@ See [`src/api/RATE_LIMITS.md`](src/api/RATE_LIMITS.md) for per-API limits, daily
 
 **Supabase Auth → URL configuration:** Add redirect URLs for the auth callback route, e.g. `http://localhost:3000/auth/callback` and `${NEXT_PUBLIC_SITE_URL}/auth/callback`.
 - API keys for fetchers: `NYT_API_KEY_1`, `NYT_API_KEY_2`, `FINNHUB_API_KEY_1`, `FINNHUB_API_KEY_2`, `FMP_API_KEY`, `ALPHA_VANTAGE_API_KEY` (+ `_1/_2`), `SPOTIFY_CLIENT_ID`, `SPOTIFY_CLIENT_SECRET`
+- `REDDIT_CLIENT_ID`, `REDDIT_CLIENT_SECRET` — optional but **required in CI**. Reddit blocks its public `*.json` endpoints from datacenter IPs, so scheduled runs get 403 and write zero posts; with these set the fetcher uses `oauth.reddit.com` instead. Create a "script" app at https://www.reddit.com/prefs/apps. Optional `REDDIT_USER_AGENT` overrides the default UA.
 
 ## Architecture
 

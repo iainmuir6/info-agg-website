@@ -3,7 +3,8 @@
 # Author: IM
 # Company: Scouts Consulting Group
 # Date: 2026-03-09
-# Description: Fetches hot posts from the Reddit API (unauthenticated)
+# Description: Fetches hot posts from the Reddit API (OAuth when credentials
+#              are present, falling back to the public JSON endpoint)
 
 from typing import List, Optional, Dict, Any
 from datetime import datetime
@@ -20,6 +21,55 @@ if _PARENT not in sys.path:
 from etl_lib import get_http_session
 
 REDDIT_BASE_URL = "https://www.reddit.com"
+REDDIT_OAUTH_URL = "https://oauth.reddit.com"
+REDDIT_TOKEN_URL = "https://www.reddit.com/api/v1/access_token"
+
+# Reddit blocks the public *.json endpoints from datacenter IPs, which is
+# where CI runs — every scheduled run logged "Reddit 403/429" and wrote zero
+# posts. An OAuth app token is accepted from those IPs, so use it whenever
+# credentials are configured and keep the anonymous path for local runs.
+USER_AGENT = os.getenv(
+    'REDDIT_USER_AGENT',
+    'python:com.iainmuir.infoagg:v1.1 (by /u/ValuableJuice8310)',
+)
+
+_ACCESS_TOKEN: Optional[str] = None
+_TOKEN_FAILED: bool = False
+
+
+def get_reddit_access_token() -> Optional[str]:
+    """Client-credentials token, cached for the life of the process.
+
+    Returns None when credentials are absent or the exchange fails, in which
+    case callers fall back to the public endpoint.
+    """
+    global _ACCESS_TOKEN, _TOKEN_FAILED
+    if _ACCESS_TOKEN or _TOKEN_FAILED:
+        return _ACCESS_TOKEN
+
+    client_id = os.getenv('REDDIT_CLIENT_ID')
+    client_secret = os.getenv('REDDIT_CLIENT_SECRET')
+    if not client_id or not client_secret:
+        _TOKEN_FAILED = True
+        return None
+
+    try:
+        response = requests.post(
+            REDDIT_TOKEN_URL,
+            auth=(client_id, client_secret),
+            data={'grant_type': 'client_credentials'},
+            headers={'User-Agent': USER_AGENT},
+            timeout=10,
+        )
+        response.raise_for_status()
+        _ACCESS_TOKEN = response.json().get('access_token')
+        if not _ACCESS_TOKEN:
+            _TOKEN_FAILED = True
+        return _ACCESS_TOKEN
+    except Exception as e:
+        print(f"Reddit OAuth token request failed: {e}")
+        _TOKEN_FAILED = True
+        return None
 
 
 class RedditRateLimited(RuntimeError):
@@ -40,8 +90,13 @@ def fetch_reddit_hot(subreddit: str = 'all', limit: int = 25) -> Optional[List[D
     Returns:
         List of post dicts, or None on error
     """
-    url = f"{REDDIT_BASE_URL}/r/{subreddit}/hot.json"
-    headers = {'User-Agent': 'python:com.iainmuir.infoagg:v1.0 (by /u/ValuableJuice8310)'}
+    token = get_reddit_access_token()
+    if token:
+        url = f"{REDDIT_OAUTH_URL}/r/{subreddit}/hot"
+        headers = {'User-Agent': USER_AGENT, 'Authorization': f'bearer {token}'}
+    else:
+        url = f"{REDDIT_BASE_URL}/r/{subreddit}/hot.json"
+        headers = {'User-Agent': USER_AGENT}
     params = {'limit': min(limit, 100)}
     global _REDDIT_DISABLED_DUE_TO_429
 

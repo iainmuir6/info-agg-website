@@ -99,8 +99,15 @@ export function NewsTickerClient({ items: initialItems }: { items: TickerItem[] 
               className="inline-flex items-center leading-none gap-2 px-3 sm:px-4 shrink-0 transition-opacity duration-500"
               aria-hidden={i >= items.length}
             >
-              <TickerHoverChart ticker={item.label} href={`/markets/${item.label}`}
-                className="text-[10px] sm:text-xs font-mono font-bold hover:underline">
+              {/* The wrapper carries the same size/leading as the sibling
+                  spans so every item shares one line-box height and they sit
+                  on a common centre line. */}
+              <TickerHoverChart
+                ticker={item.label}
+                href={`/markets/${item.label}`}
+                wrapperClassName="relative inline-flex items-center text-[10px] sm:text-xs leading-none"
+                className="font-mono font-bold hover:underline"
+              >
                 {item.label}
               </TickerHoverChart>
               <span className="text-[10px] sm:text-xs font-mono text-muted-foreground tabular-nums">{item.value}</span>

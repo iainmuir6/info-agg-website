@@ -213,7 +213,12 @@ export function TickerHoverChart({
   return (
     <span
       ref={anchorRef}
-      className={`tap-row ${wrapperClassName ?? "relative inline-block"}`}
+      // inline-flex + items-center, not inline-block: the wrapper has no
+      // font-size of its own, so it inherits the container's larger one and
+      // its line box is taller than the text inside. With inline-block that
+      // text sits on the taller strut's baseline and renders visibly lower
+      // than sibling items that carry the small size directly.
+      className={`tap-row ${wrapperClassName ?? "relative inline-flex items-center"}`}
       onMouseEnter={show}
       onMouseLeave={hide}
       onFocus={() => {
