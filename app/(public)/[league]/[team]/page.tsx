@@ -2,7 +2,9 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { leagueBySlug, espnGameUrl, espnTeamUrl } from "@/lib/leagues";
+import { formatGameTime } from "@/lib/sports-status";
 import { FavoriteTeamButton } from "@/components/favorite-team-button";
+import { GameResultsChart, type GameResultBar } from "@/components/game-results-chart";
 
 type Score = {
   id: string;
@@ -11,6 +13,8 @@ type Score = {
   away_team: string;
   home_abbrev: string | null;
   away_abbrev: string | null;
+  home_logo: string | null;
+  away_logo: string | null;
   home_score: number | null;
   away_score: number | null;
   status: string | null;
@@ -18,6 +22,7 @@ type Score = {
   game_date: string | null;
   venue: string | null;
   broadcast: string | null;
+  season_type: number | null;
 };
 
 function gameState(status: string | null) {
@@ -51,7 +56,7 @@ export default async function TeamPage({
   const slug = raw.toUpperCase();
 
   const COLUMNS =
-    "id, event_id, home_team, away_team, home_abbrev, away_abbrev, home_score, away_score, status, status_detail, game_date, venue, broadcast";
+    "id, event_id, home_team, away_team, home_abbrev, away_abbrev, home_logo, away_logo, home_score, away_score, status, status_detail, game_date, venue, broadcast, season_type";
 
   // Filter by team in the query rather than pulling the league's most recent
   // games and filtering here — a busy league (MLB) would otherwise fill the
@@ -95,11 +100,13 @@ export default async function TeamPage({
   const teamName = isHomeSample ? sample.home_team : sample.away_team;
   const teamAbbrev = (isHomeSample ? sample.home_abbrev : sample.away_abbrev)?.toUpperCase() ?? slug;
 
-  // Record from completed games
+  // Record from completed games — preseason games (season_type === 1) are
+  // excluded from the tally but still shown in Recent Results, flagged.
   let wins = 0;
   let losses = 0;
   for (const g of games) {
     if (gameState(g.status) !== "final") continue;
+    if (g.season_type === 1) continue;
     const home = matches(g, "home");
     const own = home ? g.home_score : g.away_score;
     const opp = home ? g.away_score : g.home_score;
@@ -110,6 +117,28 @@ export default async function TeamPage({
 
   const now = Date.now();
   const results = games.filter((g) => gameState(g.status) === "final").slice(0, 30);
+
+  // Margin-of-victory strip: every completed game oldest-first, not just the 30
+  // in Recent Results. Preseason is excluded to match the W–L record above.
+  const resultBars: GameResultBar[] = games
+    .filter((g) => gameState(g.status) === "final" && g.season_type !== 1)
+    .map((g) => {
+      const home = matches(g, "home");
+      const own = home ? g.home_score : g.away_score;
+      const opp = home ? g.away_score : g.home_score;
+      if (own == null || opp == null) return null;
+      return {
+        id: g.id,
+        date: g.game_date,
+        isHome: home,
+        own: Number(own),
+        opp: Number(opp),
+        oppAbbrev: ((home ? g.away_abbrev : g.home_abbrev) ?? (home ? g.away_team : g.home_team).slice(0, 3)).toUpperCase(),
+        url: g.event_id ? espnGameUrl(meta.slug, g.event_id) : null,
+      };
+    })
+    .filter((b): b is GameResultBar => b !== null)
+    .reverse();
   const upcoming = games
     .filter((g) => gameState(g.status) !== "final" && new Date(g.game_date ?? 0).getTime() >= now)
     .sort((a, b) => new Date(a.game_date ?? 0).getTime() - new Date(b.game_date ?? 0).getTime())
@@ -135,6 +164,8 @@ export default async function TeamPage({
     const own = home ? g.home_score : g.away_score;
     const opp = home ? g.away_score : g.home_score;
     const oppAbbrev = ((home ? g.away_abbrev : g.home_abbrev) ?? (home ? g.away_team : g.home_team).slice(0, 3)).toUpperCase();
+    const oppLogo = home ? g.away_logo : g.home_logo;
+    const isPreseason = g.season_type === 1;
     const state = gameState(g.status);
     const won = state === "final" && own != null && opp != null && own > opp;
     const lost = state === "final" && own != null && opp != null && own < opp;
@@ -142,11 +173,7 @@ export default async function TeamPage({
     const when = g.game_date
       ? new Date(g.game_date).toLocaleDateString("en-US", { month: "short", day: "numeric" })
       : "";
-    const tip = g.game_date
-      ? new Date(g.game_date).toLocaleTimeString("en-US", {
-          hour: "numeric", minute: "2-digit", timeZone: "America/New_York",
-        })
-      : "";
+    const tip = formatGameTime(g.game_date);
 
     return (
       <div className="tap-row relative bg-background px-2 py-2 hover:bg-secondary/50 transition-colors">
@@ -158,7 +185,14 @@ export default async function TeamPage({
             the opponent column has to be able to shrink instead of pushing
             the score out of the cell. */}
         <div className="grid items-center gap-x-1 text-[11px] font-mono overflow-hidden [grid-template-columns:2.6rem_0.8rem_1.3rem_minmax(3.5ch,1fr)_auto]">
-          <span className="text-[9px] text-muted-foreground truncate">{when}</span>
+          <span className="text-[9px] text-muted-foreground truncate flex items-center gap-1">
+            {when}
+            {isPreseason && (
+              <span className="text-[7px] font-bold px-0.5 border border-muted-foreground/40 text-muted-foreground/70 leading-tight">
+                PRE
+              </span>
+            )}
+          </span>
           {state === "final" ? (
             <span className="font-black"
               style={{ color: won ? "hsl(142 65% 42%)" : lost ? "hsl(0 72% 50%)" : undefined }}>
@@ -169,8 +203,12 @@ export default async function TeamPage({
           )}
           <span className="text-[9px] text-muted-foreground">{home ? "vs" : "@"}</span>
           <Link href={`/${meta!.slug}/${oppAbbrev}`}
-            className="relative z-10 font-bold hover:underline truncate">
-            {oppAbbrev}
+            className="relative z-10 flex items-center gap-1 font-bold hover:underline truncate">
+            {oppLogo && (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img src={oppLogo} alt="" className="w-3.5 h-3.5 shrink-0 object-contain" />
+            )}
+            <span className="truncate">{oppAbbrev}</span>
           </Link>
           <span className="tabular-nums font-bold text-right whitespace-nowrap">
             {state === "final" ? `${own ?? "–"}–${opp ?? "–"}` : tip}
@@ -232,27 +270,33 @@ export default async function TeamPage({
         </div>
       </div>
 
-      {upcoming.length > 0 && (
-        <section>
-          <p className="text-[10px] font-mono tracking-widest text-muted-foreground uppercase mb-2">
-            Upcoming
-          </p>
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-px bg-border border border-border">
-            {upcoming.map((g) => <ResultCell key={g.id} g={g} />)}
-          </div>
-        </section>
-      )}
+      <GameResultsChart games={resultBars} />
 
-      {results.length > 0 && (
-        <section>
-          <p className="text-[10px] font-mono tracking-widest text-muted-foreground uppercase mb-2">
-            Recent Results — {results.length} games
-          </p>
-          {/* Grid keeps a full schedule compact instead of one row per game */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-5 gap-px bg-border border border-border">
-            {results.map((g) => <ResultCell key={g.id} g={g} />)}
-          </div>
-        </section>
+      {(upcoming.length > 0 || results.length > 0) && (
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+          {results.length > 0 && (
+            <section className="min-w-0">
+              <p className="text-[10px] font-mono tracking-widest text-muted-foreground uppercase mb-2">
+                Recent Results — {results.length} games
+              </p>
+              {/* Grid keeps a full schedule compact instead of one row per game */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-px bg-border border border-border">
+                {results.map((g) => <ResultCell key={g.id} g={g} />)}
+              </div>
+            </section>
+          )}
+
+          {upcoming.length > 0 && (
+            <section className="min-w-0">
+              <p className="text-[10px] font-mono tracking-widest text-muted-foreground uppercase mb-2">
+                Upcoming
+              </p>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-px bg-border border border-border">
+                {upcoming.map((g) => <ResultCell key={g.id} g={g} />)}
+              </div>
+            </section>
+          )}
+        </div>
       )}
     </div>
   );
