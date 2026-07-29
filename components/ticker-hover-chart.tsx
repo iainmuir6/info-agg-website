@@ -16,7 +16,9 @@ type Cached = {
 const cache = new Map<string, Cached>();
 
 const CARD_W = 260;
-const CARD_H = 190;
+/** Only used to decide which side has room; the popup is anchored with a
+ *  transform so its real height doesn't need to be known. */
+const EST_H = 190;
 
 /**
  * Wraps a ticker. On hover (or keyboard focus) it fetches recent quote history
@@ -41,23 +43,27 @@ export function TickerHoverChart({
   wrapperClassName?: string;
 }) {
   const [open, setOpen] = useState(false);
-  const [pos, setPos] = useState<{ left: number; top: number } | null>(null);
+  const [pos, setPos] = useState<{ left: number; top: number; above: boolean } | null>(null);
   const [data, setData] = useState<Cached | null>(cache.get(ticker) ?? null);
   const [loading, setLoading] = useState(false);
   const anchorRef = useRef<HTMLSpanElement>(null);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const closeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const place = useCallback(() => {
     const el = anchorRef.current;
     if (!el) return;
     const r = el.getBoundingClientRect();
-    // Prefer above the trigger; flip below when there isn't room.
-    const top = r.top >= CARD_H + 8 ? r.top - CARD_H - 8 : r.bottom + 8;
+    // Flush against the hovered cell — no gap, so the cursor can travel from
+    // the row onto the popup without crossing dead space and dismissing it.
+    // Anchoring with translateY(-100%) when above means the popup's actual
+    // height never has to be measured.
+    const above = r.top >= EST_H;
     const left = Math.min(
       Math.max(8, r.left + r.width / 2 - CARD_W / 2),
       window.innerWidth - CARD_W - 8,
     );
-    setPos({ left, top });
+    setPos({ left, top: above ? r.top : r.bottom, above });
   }, []);
 
   const load = useCallback(async () => {
@@ -105,6 +111,7 @@ export function TickerHoverChart({
   }, [ticker]);
 
   function show() {
+    cancelClose();
     // Short delay so sweeping the cursor across a row doesn't fire a fetch.
     timer.current = setTimeout(() => {
       place();
@@ -113,9 +120,15 @@ export function TickerHoverChart({
     }, 160);
   }
 
+  // Close on a short delay so moving the cursor from the row onto the popup
+  // keeps it open; entering the popup cancels the pending close.
   function hide() {
     if (timer.current) clearTimeout(timer.current);
-    setOpen(false);
+    closeTimer.current = setTimeout(() => setOpen(false), 120);
+  }
+
+  function cancelClose() {
+    if (closeTimer.current) clearTimeout(closeTimer.current);
   }
 
   useEffect(() => {
@@ -131,6 +144,7 @@ export function TickerHoverChart({
 
   useEffect(() => () => {
     if (timer.current) clearTimeout(timer.current);
+    if (closeTimer.current) clearTimeout(closeTimer.current);
   }, []);
 
   const pct = data?.pct ?? null;
@@ -141,8 +155,15 @@ export function TickerHoverChart({
     open && pos ? (
       <div
         role="tooltip"
-        className="fixed z-[100] border border-border bg-background shadow-lg pointer-events-none"
-        style={{ left: pos.left, top: pos.top, width: CARD_W }}
+        className="fixed z-[100] border border-border bg-background shadow-lg"
+        style={{
+          left: pos.left,
+          top: pos.top,
+          width: CARD_W,
+          transform: pos.above ? "translateY(-100%)" : undefined,
+        }}
+        onMouseEnter={cancelClose}
+        onMouseLeave={hide}
       >
         <div className="flex items-baseline justify-between gap-2 px-2 py-1 border-b border-border">
           <span className="text-[11px] font-mono font-black">{ticker}</span>

@@ -790,7 +790,7 @@ function NytList({ articles, showSection }: { articles: NyTimesArticle[]; showSe
           href={a.url}
           target="_blank"
           rel="noopener noreferrer"
-          className="flex items-center gap-1.5 px-2 py-1 border-b border-border last:border-0 hover:bg-secondary/50 transition-colors group"
+          className="flex items-center gap-1.5 px-2 py-0.5 border-b border-border last:border-0 hover:bg-secondary/50 transition-colors group"
         >
           {showSection && a.section && <HubCap label={a.section} />}
           <p className="text-[10px] font-semibold leading-tight line-clamp-2 group-hover:underline">
@@ -930,7 +930,7 @@ export default async function CommandCenter() {
         <div>
           {nytDigest.map(([sectionKey, article]) => (
             <a key={article.id} href={article.url} target="_blank" rel="noopener noreferrer"
-              className="flex items-center gap-1.5 px-2 py-1 border-b border-border last:border-0 hover:bg-secondary/50 transition-colors group">
+              className="flex items-center gap-1.5 px-2 py-0.5 border-b border-border last:border-0 hover:bg-secondary/50 transition-colors group">
               <HubCap label={sectionKey} />
               <p className="text-[10px] font-semibold leading-tight line-clamp-1 group-hover:underline">
                 {article.title}
@@ -949,12 +949,10 @@ export default async function CommandCenter() {
         <div>
           {nytMore.map((article) => (
             <a key={article.id} href={article.url} target="_blank" rel="noopener noreferrer"
-              className="flex items-center gap-1.5 px-2 py-1 border-b border-border last:border-0 hover:bg-secondary/50 transition-colors group">
+              className="flex items-center gap-1.5 px-2 py-0.5 border-b border-border last:border-0 hover:bg-secondary/50 transition-colors group">
               {article.section && <HubCap label={article.section} />}
-              <span className="flex min-h-[2.2em] min-w-0 flex-col justify-center">
-                <span className="text-[10px] font-semibold leading-tight line-clamp-2 group-hover:underline">
-                  {article.title}
-                </span>
+              <span className="min-w-0 text-[10px] font-semibold leading-tight line-clamp-2 group-hover:underline">
+                {article.title}
               </span>
             </a>
           ))}
@@ -1021,7 +1019,7 @@ export default async function CommandCenter() {
           {/* eslint-disable-next-line @typescript-eslint/no-explicit-any */}
           {marketNews.map((item: any) => (
             <a key={item.id} href={item.url} target="_blank" rel="noopener noreferrer"
-              className="flex items-center gap-1.5 px-2 py-1 border-b border-border last:border-0 hover:bg-secondary/50 transition-colors group">
+              className="flex items-center gap-1.5 px-2 py-0.5 border-b border-border last:border-0 hover:bg-secondary/50 transition-colors group">
               {/* Two stacked hub caps: category on top, source below */}
               <div className="flex flex-col gap-0.5 shrink-0 items-center">
                 {item.category && <HubCap label={item.category} />}
@@ -1133,9 +1131,9 @@ export default async function CommandCenter() {
         <div>
           {companyNews.map((item) => (
             <a key={item.id} href={item.url} target="_blank" rel="noopener noreferrer"
-              className="flex items-center gap-1.5 px-2 py-1 border-b border-border last:border-0 hover:bg-secondary/50 transition-colors group">
+              className="flex items-center gap-1.5 px-2 py-0.5 border-b border-border last:border-0 hover:bg-secondary/50 transition-colors group">
               {item.source && <HubCap label={item.source} />}
-              <div className="min-w-0 flex min-h-[2.2em] flex-col justify-center">
+              <div className="min-w-0">
                 <p className="text-[10px] font-medium leading-tight line-clamp-2 group-hover:underline">
                   {item.headline}
                 </p>
@@ -1173,7 +1171,7 @@ export default async function CommandCenter() {
               {/* eslint-disable-next-line @typescript-eslint/no-explicit-any */}
               {cryptoHeadlines.map((item: any) => (
                 <a key={item.id} href={item.url} target="_blank" rel="noopener noreferrer"
-                  className="flex items-center gap-1.5 px-2 py-1 border-b border-border last:border-0 hover:bg-secondary/50 transition-colors group">
+                  className="flex items-center gap-1.5 px-2 py-0.5 border-b border-border last:border-0 hover:bg-secondary/50 transition-colors group">
                   {item.source && <HubCap label={item.source} />}
                   <p className="text-[10px] font-medium leading-tight line-clamp-1 group-hover:underline">
                     {item.headline}

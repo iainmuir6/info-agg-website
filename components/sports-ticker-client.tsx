@@ -1,19 +1,57 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import Link from "next/link";
 import { createClient } from "@/lib/supabase/client";
 import { TickerShell } from "@/components/ticker-shell";
 
 export type SportsTickerItem = {
   id: string;
-  league: string;
+  league: string;       // display label, e.g. "WNBA"
+  leagueSlug: string;   // route slug, e.g. "wnba"
   away: string;
   home: string;
   awayScore: number | null;
   homeScore: number | null;
   state: "final" | "live" | "scheduled";
-  detail: string;
+  /** Status split across two lines so a long detail fits the ticker height. */
+  detail: { top: string; bottom: string };
 };
+
+/** Compact a live status so it fits the ticker without being clipped.
+ *  "4:45 - 3rd Quarter" → 4:45 / 3rd   ·   "Top 1st" → ▲ / 1st */
+export function compactStatus(detail: string): { top: string; bottom: string } {
+  const s = (detail ?? "").trim();
+  if (!s) return { top: "LIVE", bottom: "" };
+
+  const half = s.match(/^(Top|Bot(?:tom)?)\s+(.*)$/i);
+  if (half) {
+    return { top: /^top$/i.test(half[1]) ? "▲" : "▼", bottom: half[2] };
+  }
+
+  // "12:34 - 3rd Quarter" / "12:34 - 3rd"
+  const clocked = s.match(/^([\d:]+)\s*-\s*(.*)$/);
+  if (clocked) {
+    return { top: clocked[1], bottom: shortPeriod(clocked[2]) };
+  }
+
+  // "End of 3rd Quarter" → End / 3rd
+  const endOf = s.match(/^End\s+of\s+(.*)$/i);
+  if (endOf) return { top: "End", bottom: shortPeriod(endOf[1]) };
+
+  const words = s.split(/\s+/);
+  if (words.length === 1) return { top: shortPeriod(s), bottom: "" };
+  return { top: words[0], bottom: shortPeriod(words.slice(1).join(" ")) };
+}
+
+function shortPeriod(p: string): string {
+  return p
+    .replace(/\bQuarter\b/i, "")
+    .replace(/\bPeriod\b/i, "")
+    .replace(/\bInning\b/i, "")
+    .replace(/\bHalf\b/i, "H")
+    .trim();
+}
 
 const POLL_INTERVAL_MS = 60_000;
 
@@ -30,15 +68,21 @@ export function normalizeSportsRows(rows: any[]): SportsTickerItem[] {
           timeZone: "America/New_York",
         })
       : "";
+    const slug = r.leagues?.league ?? "";
     return {
       id: r.id,
-      league: (r.leagues?.league ?? "").toUpperCase(),
+      league: slug.toUpperCase(),
+      leagueSlug: slug,
       away: r.away_abbrev ?? (r.away_team ?? "").slice(0, 3).toUpperCase(),
       home: r.home_abbrev ?? (r.home_team ?? "").slice(0, 3).toUpperCase(),
       awayScore: r.away_score,
       homeScore: r.home_score,
       state: isFinal ? "final" : isLive ? "live" : "scheduled",
-      detail: isFinal ? "F" : isLive ? (r.status_detail ?? "LIVE") : tip,
+      detail: isFinal
+        ? { top: "F", bottom: "" }
+        : isLive
+          ? compactStatus(r.status_detail ?? "LIVE")
+          : { top: tip, bottom: "" },
     };
   });
 }
@@ -90,22 +134,34 @@ export function SportsTickerClient({ items: initialItems }: { items: SportsTicke
         {looped.map((g, i) => (
           <span
             key={`${g.id}-${i}`}
-            className="inline-flex items-center gap-1.5 px-3 sm:px-4 shrink-0 text-[10px] sm:text-xs font-mono"
+            className="inline-flex items-center gap-1.5 px-3 sm:px-4 shrink-0 text-[10px] sm:text-xs font-mono whitespace-nowrap"
             aria-hidden={i >= items.length}
           >
-            <span className="text-muted-foreground text-[8px] sm:text-[9px]">{g.league}</span>
-            <span className="font-bold">{g.away}</span>
+            <Link href={`/${g.leagueSlug}`} tabIndex={i >= items.length ? -1 : undefined}
+              className="text-muted-foreground text-[8px] sm:text-[9px] hover:text-foreground">
+              {g.league}
+            </Link>
+            <Link href={`/${g.leagueSlug}/${g.away}`} tabIndex={i >= items.length ? -1 : undefined}
+              className="font-bold hover:underline">
+              {g.away}
+            </Link>
             {g.state !== "scheduled" && <span className="tabular-nums">{g.awayScore ?? "–"}</span>}
             <span className="text-muted-foreground/60">{g.state === "scheduled" ? "@" : "–"}</span>
             {g.state !== "scheduled" && <span className="tabular-nums">{g.homeScore ?? "–"}</span>}
-            <span className="font-bold">{g.home}</span>
+            <Link href={`/${g.leagueSlug}/${g.home}`} tabIndex={i >= items.length ? -1 : undefined}
+              className="font-bold hover:underline">
+              {g.home}
+            </Link>
+            {/* Two lines of status: uses the ticker's full height instead of
+                being clipped when the detail is long ("4:45 - 3rd Quarter") */}
             <span
-              className="text-[8px] sm:text-[9px]"
+              className="flex flex-col items-center leading-[1.05] text-[8px] sm:text-[9px]"
               style={{
                 color: g.state === "live" ? "hsl(142 65% 42%)" : "hsl(var(--muted-foreground))",
               }}
             >
-              {g.detail}
+              <span>{g.detail.top}</span>
+              {g.detail.bottom && <span>{g.detail.bottom}</span>}
             </span>
             <span className="text-muted-foreground/30 ml-1">·</span>
           </span>
