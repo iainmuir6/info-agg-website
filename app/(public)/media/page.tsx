@@ -1,35 +1,7 @@
 import { createClient } from "@/lib/supabase/server";
-
-type SpotifyRelease = {
-  id: number;
-  spotify_id: string;
-  name: string;
-  artists: string[];
-  album_type: string | null;
-  release_date: string | null;
-  image_url: string | null;
-  external_url: string | null;
-  total_tracks: number | null;
-  fetched_at: string;
-};
-
-type RedditPost = {
-  id: number;
-  post_id: string;
-  subreddit: string;
-  title: string;
-  author: string | null;
-  score: number;
-  upvote_ratio: number | null;
-  num_comments: number;
-  url: string | null;
-  permalink: string | null;
-  selftext: string | null;
-  thumbnail_url: string | null;
-  is_self: boolean;
-  flair: string | null;
-  posted_at: string | null;
-};
+import { SPOTIFY_HOME_PLAYLISTS, spotifyShowEmbedUrl } from "@/lib/top-podcasts";
+import { buildPodcastList } from "@/lib/podcast-list";
+import { FavoritePodcastButton } from "@/components/favorite-podcast-button";
 
 type YouTubeVideo = {
   id: string;
@@ -44,29 +16,13 @@ type YouTubeVideo = {
 };
 
 async function getMediaData(supabase: Awaited<ReturnType<typeof createClient>>) {
-  const [releasesRes, postsRes, videosRes] = await Promise.all([
-    supabase
-      .from("spotify_releases")
-      .select("id, spotify_id, name, artists, album_type, release_date, image_url, external_url, total_tracks, fetched_at")
-      .order("release_date", { ascending: false })
-      .limit(40),
-    supabase
-      .from("reddit_posts")
-      .select("id, post_id, subreddit, title, author, score, upvote_ratio, num_comments, url, permalink, selftext, thumbnail_url, is_self, flair, posted_at")
-      .order("score", { ascending: false })
-      .limit(50),
-    supabase
-      .from("youtube_videos")
-      .select("id, video_id, title, channel_title, thumbnail_url, published_at, view_count, like_count, duration")
-      .order("view_count", { ascending: false })
-      .limit(30),
-  ]);
+  const { data } = await supabase
+    .from("youtube_videos")
+    .select("id, video_id, title, channel_title, thumbnail_url, published_at, view_count, like_count, duration")
+    .order("view_count", { ascending: false })
+    .limit(30);
 
-  return {
-    releases: (releasesRes.data ?? []) as SpotifyRelease[],
-    posts: (postsRes.data ?? []) as RedditPost[],
-    videos: (videosRes.data ?? []) as YouTubeVideo[],
-  };
+  return { videos: (data ?? []) as YouTubeVideo[] };
 }
 
 /** 1234567 → 1.2M */
@@ -88,27 +44,23 @@ function formatDuration(iso: string | null) {
   return h > 0 ? `${h}:${pad(mi)}:${pad(s)}` : `${mi}:${pad(s)}`;
 }
 
-function formatScore(score: number) {
-  if (score >= 1000) return `${(score / 1000).toFixed(1)}k`;
-  return score.toString();
-}
-
-function getAlbumTypeLabel(type: string | null) {
-  if (!type) return null;
-  return type.charAt(0).toUpperCase() + type.slice(1);
-}
+const SPOTIFY_EMBED_ALLOW =
+  "autoplay; clipboard-write; encrypted-media; fullscreen; picture-in-picture";
 
 export default async function MediaPage() {
   const supabase = await createClient();
-  const { releases, posts, videos } = await getMediaData(supabase);
+  const { videos } = await getMediaData(supabase);
 
-  // Group reddit posts by subreddit
-  const subreddits = [...new Set(posts.map((p) => p.subreddit))].sort();
+  const { data: claimsData } = await supabase.auth.getClaims();
+  const signedIn = !!claimsData?.claims;
+  const userId = claimsData?.claims?.sub as string | undefined;
+  const { data: favoriteRows } = signedIn
+    ? await supabase.from("watchlist_podcasts").select("show_id, name, image_url").eq("user_id", userId!)
+    : { data: null };
+  const podcasts = buildPodcastList(favoriteRows ?? []);
 
-  const hasSpotify = releases.length > 0;
-  const hasReddit = posts.length > 0;
   const hasYouTube = videos.length > 0;
-  const hasData = hasSpotify || hasReddit || hasYouTube;
+  const hasData = hasYouTube || SPOTIFY_HOME_PLAYLISTS.length > 0 || podcasts.length > 0;
 
   return (
     <div className="px-3 sm:px-6 py-4 sm:py-6 space-y-8">
@@ -123,11 +75,11 @@ export default async function MediaPage() {
             <span style={{ color: "hsl(340 78% 50%)" }}>◎</span> MEDIA
           </h2>
           <span className="text-xs font-mono text-muted-foreground">
-            {releases.length} releases · {posts.length} posts
+            {videos.length} videos
           </span>
         </div>
         <p className="text-xs font-mono text-muted-foreground mt-1 tracking-wider">
-          SPOTIFY · REDDIT
+          SPOTIFY · PODCASTS · YOUTUBE
         </p>
       </div>
 
@@ -144,7 +96,7 @@ export default async function MediaPage() {
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-px bg-border">
           {/* YouTube Trending */}
           {hasYouTube && (
-            <div className="bg-background">
+            <div className="bg-background lg:col-span-2">
               <div
                 className="flex items-center gap-3 px-5 py-3 border-b border-border"
                 style={{ borderLeftWidth: "3px", borderLeftColor: "hsl(0 72% 50%)" }}
@@ -203,8 +155,8 @@ export default async function MediaPage() {
             </div>
           )}
 
-          {/* Spotify New Releases */}
-          <div className="bg-background">
+          {/* Spotify — live playlist embeds */}
+          <div className="bg-background lg:col-span-2">
             <div
               className="flex items-center gap-3 px-5 py-3 border-b border-border"
               style={{ borderLeftWidth: "3px", borderLeftColor: "hsl(340 78% 50%)" }}
@@ -213,187 +165,72 @@ export default async function MediaPage() {
                 className="text-xs font-mono font-bold tracking-widest uppercase"
                 style={{ color: "hsl(340 78% 50%)" }}
               >
-                ♫ Spotify — New Releases
-              </span>
-              <span className="text-[10px] font-mono text-muted-foreground">
-                {releases.length} albums
+                ♫ Spotify
               </span>
             </div>
-
-            {!hasSpotify ? (
-              <div className="p-8 text-center">
-                <p className="text-xs font-mono text-muted-foreground">No Spotify data yet</p>
-              </div>
-            ) : (
-              <div className="divide-y divide-border">
-                {releases.map((release, i) => (
-                  <a
-                    key={release.id}
-                    href={release.external_url ?? "#"}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="flex items-center gap-4 px-5 py-3 group hover:bg-secondary transition-colors animate-fade-in-up"
-                    style={{ animationDelay: `${i * 0.03}s` }}
-                  >
-                    {/* Album art */}
-                    {release.image_url ? (
-                      <div className="w-12 h-12 shrink-0 overflow-hidden">
-                        {/* eslint-disable-next-line @next/next/no-img-element */}
-                        <img
-                          src={release.image_url}
-                          alt=""
-                          className="w-full h-full object-cover grayscale group-hover:grayscale-0 transition-all duration-300"
-                        />
-                      </div>
-                    ) : (
-                      <div
-                        className="w-12 h-12 shrink-0 flex items-center justify-center"
-                        style={{ backgroundColor: "hsl(340 78% 50% / 0.1)" }}
-                      >
-                        <span
-                          className="text-lg"
-                          style={{ color: "hsl(340 78% 50%)" }}
-                        >
-                          ♫
-                        </span>
-                      </div>
-                    )}
-
-                    {/* Info */}
-                    <div className="flex-1 min-w-0">
-                      <p className="text-sm font-bold leading-snug line-clamp-1 group-hover:underline">
-                        {release.name}
-                      </p>
-                      <p className="text-xs text-muted-foreground line-clamp-1">
-                        {release.artists.join(", ")}
-                      </p>
-                    </div>
-
-                    {/* Meta */}
-                    <div className="shrink-0 text-right">
-                      {release.album_type && (
-                        <p
-                          className="text-[10px] font-mono tracking-wider uppercase"
-                          style={{ color: "hsl(340 78% 50%)" }}
-                        >
-                          {getAlbumTypeLabel(release.album_type)}
-                        </p>
-                      )}
-                      {release.release_date && (
-                        <p className="text-[10px] font-mono text-muted-foreground">
-                          {new Date(release.release_date).toLocaleDateString("en-US", {
-                            month: "short",
-                            day: "numeric",
-                            year: "numeric",
-                          })}
-                        </p>
-                      )}
-                      {release.total_tracks != null && (
-                        <p className="text-[10px] font-mono text-muted-foreground">
-                          {release.total_tracks} tracks
-                        </p>
-                      )}
-                    </div>
-                  </a>
-                ))}
-              </div>
-            )}
+            <div className="p-4 grid grid-cols-1 md:grid-cols-2 gap-4">
+              {SPOTIFY_HOME_PLAYLISTS.map((p) => (
+                <div key={p.playlistId}>
+                  <p className="text-[10px] font-mono text-muted-foreground uppercase tracking-wider mb-1.5">
+                    {p.name}
+                  </p>
+                  <iframe
+                    src={`https://open.spotify.com/embed/playlist/${p.playlistId}?utm_source=generator`}
+                    width="100%"
+                    height="352"
+                    allow={SPOTIFY_EMBED_ALLOW}
+                    loading="lazy"
+                    className="rounded-md border-0"
+                    title={`Spotify playlist: ${p.name}`}
+                  />
+                </div>
+              ))}
+            </div>
           </div>
 
-          {/* Reddit Hot Posts */}
-          <div className="bg-background">
+          {/* Top Podcasts — curated, live show embeds. Full-width + a
+              multi-column grid packs far more shows into the same vertical
+              space than a single stacked column would. */}
+          <div className="bg-background lg:col-span-2">
             <div
               className="flex items-center gap-3 px-5 py-3 border-b border-border"
-              style={{ borderLeftWidth: "3px", borderLeftColor: "hsl(25 95% 50%)" }}
+              style={{ borderLeftWidth: "3px", borderLeftColor: "hsl(142 65% 42%)" }}
             >
               <span
                 className="text-xs font-mono font-bold tracking-widest uppercase"
-                style={{ color: "hsl(25 95% 50%)" }}
+                style={{ color: "hsl(142 65% 42%)" }}
               >
-                ▲ Reddit — Top Posts
+                🎙 Top Podcasts
               </span>
               <span className="text-[10px] font-mono text-muted-foreground">
-                {subreddits.length} subreddits
+                {podcasts.length} shows
               </span>
             </div>
-
-            {!hasReddit ? (
-              <div className="p-8 text-center">
-                <p className="text-xs font-mono text-muted-foreground">No Reddit data yet</p>
-              </div>
-            ) : (
-              <div className="divide-y divide-border">
-                {posts.map((post, i) => {
-                  const link = post.is_self
-                    ? post.permalink ?? post.url ?? "#"
-                    : post.url ?? post.permalink ?? "#";
-
-                  return (
-                    <a
-                      key={post.id}
-                      href={link}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="flex gap-4 px-5 py-3 group hover:bg-secondary transition-colors animate-fade-in-up"
-                      style={{ animationDelay: `${i * 0.02}s` }}
-                    >
-                      {/* Score */}
-                      <div className="shrink-0 flex flex-col items-center justify-center w-10">
-                        <span
-                          className="text-[10px] font-mono font-bold"
-                          style={{ color: "hsl(25 95% 50%)" }}
-                        >
-                          ▲
-                        </span>
-                        <span className="text-xs font-mono font-bold tabular-nums">
-                          {formatScore(post.score)}
-                        </span>
-                      </div>
-
-                      {/* Thumbnail */}
-                      {post.thumbnail_url ? (
-                        <div className="w-12 h-10 shrink-0 overflow-hidden">
-                          {/* eslint-disable-next-line @next/next/no-img-element */}
-                          <img
-                            src={post.thumbnail_url}
-                            alt=""
-                            className="w-full h-full object-cover grayscale group-hover:grayscale-0 transition-all"
-                          />
-                        </div>
-                      ) : null}
-
-                      {/* Content */}
-                      <div className="flex-1 min-w-0">
-                        <p className="text-xs font-bold leading-snug line-clamp-2 group-hover:underline">
-                          {post.title}
-                        </p>
-                        <div className="flex items-center gap-2 mt-1 flex-wrap">
-                          <span
-                            className="text-[10px] font-mono tracking-wider"
-                            style={{ color: "hsl(25 95% 50%)" }}
-                          >
-                            r/{post.subreddit}
-                          </span>
-                          {post.author && (
-                            <span className="text-[10px] font-mono text-muted-foreground">
-                              · u/{post.author}
-                            </span>
-                          )}
-                          <span className="text-[10px] font-mono text-muted-foreground">
-                            · {post.num_comments} comments
-                          </span>
-                          {post.flair && (
-                            <span className="text-[10px] font-mono px-1 bg-secondary text-muted-foreground">
-                              {post.flair}
-                            </span>
-                          )}
-                        </div>
-                      </div>
-                    </a>
-                  );
-                })}
-              </div>
-            )}
+            <div className="p-4 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+              {podcasts.map((p) => (
+                <div key={p.showId} className="relative">
+                  {signedIn && (
+                    <FavoritePodcastButton
+                      showId={p.showId}
+                      name={p.name}
+                      imageUrl={p.imageUrl}
+                      initialFavorited={p.favorited}
+                      signedIn={signedIn}
+                      className="absolute top-1.5 right-1.5 z-10 bg-background/90 rounded-full w-5 h-5 flex items-center justify-center shadow"
+                    />
+                  )}
+                  <iframe
+                    src={spotifyShowEmbedUrl(p.showId)}
+                    width="100%"
+                    height="152"
+                    allow={SPOTIFY_EMBED_ALLOW}
+                    loading="lazy"
+                    className="rounded-md border-0"
+                    title={`Spotify podcast: ${p.name}`}
+                  />
+                </div>
+              ))}
+            </div>
           </div>
         </div>
       )}
