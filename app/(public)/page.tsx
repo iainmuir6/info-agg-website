@@ -1009,8 +1009,9 @@ export default async function CommandCenter() {
             <div>
               {news.map((n) => (
                 <a key={n.id} href={n.url} target="_blank" rel="noopener noreferrer"
-                  className="tap-row flex items-center min-h-[30px] px-2 py-0.5 border-b border-border last:border-0 text-[10px] leading-tight hover:underline hover:bg-secondary/50 transition-colors">
-                  <span className="line-clamp-2">{n.title}</span>
+                  className="tap-row flex items-center gap-1.5 min-h-[30px] px-2 py-0.5 border-b border-border last:border-0 text-[10px] leading-tight hover:bg-secondary/50 transition-colors group">
+                  <HubCap label={n.source ?? "ESPN"} />
+                  <span className="line-clamp-2 group-hover:underline">{n.title}</span>
                 </a>
               ))}
             </div>
