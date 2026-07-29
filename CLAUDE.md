@@ -22,6 +22,13 @@ python src/api/run_etl.py --news-only
 python src/api/run_etl.py --media-only
 python src/api/run_etl.py --skip-sentiment                  # Skip AV sentiment (quotes + news only)
 
+# Historical score backfill (one-off / recovery — safe to re-run, upserts by event)
+python src/api/backfill_scores.py --season current           # Current season, all leagues
+python src/api/backfill_scores.py --leagues wnba --season 2026
+python src/api/backfill_scores.py --leagues nfl,nba --season 2023,2024,2025
+python src/api/backfill_scores.py --start 2026-04-01 --end 2026-07-29
+python src/api/backfill_scores.py --season current --dry-run # Show the plan, write nothing
+
 python src/api/run_db_seed.py                               # Initial seed (interleaved AV backfill)
 python src/api/run_db_seed.py --backfill-quotes 30          # Backfill market OHLCV history
 python src/api/run_db_seed.py --backfill-news 30            # Backfill NYT articles via Archive API*

@@ -212,7 +212,7 @@ export default function NewsInfiniteScroll() {
                 href={article.url}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="flex gap-0 hover:bg-secondary transition-colors"
+                className="flex items-stretch gap-0 hover:bg-secondary transition-colors"
               >
                 {/* Article image */}
                 {article.image_url ? (
@@ -233,7 +233,7 @@ export default function NewsInfiniteScroll() {
                 )}
 
                 {/* Content */}
-                <div className="flex-1 p-4 min-w-0">
+                <div className="flex-1 p-4 min-w-0 flex flex-col justify-center">
                   <div className="flex items-center gap-2 mb-1.5">
                     <span
                       className="text-[10px] font-mono uppercase tracking-widest"

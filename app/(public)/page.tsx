@@ -78,6 +78,11 @@ type EconRow = {
 
 // Friendly labels + formatting for economic indicators
 const ECON_CONFIG: Record<string, { label: string; fmt: (v: number) => string; group: string }> = {
+  treasury_1m:  { label: "1M",            fmt: (v) => `${v.toFixed(2)}%`,  group: "Treasuries" },
+  treasury_3m:  { label: "3M",            fmt: (v) => `${v.toFixed(2)}%`,  group: "Treasuries" },
+  treasury_6m:  { label: "6M",            fmt: (v) => `${v.toFixed(2)}%`,  group: "Treasuries" },
+  treasury_7y:  { label: "7Y",            fmt: (v) => `${v.toFixed(2)}%`,  group: "Treasuries" },
+  treasury_20y: { label: "20Y",           fmt: (v) => `${v.toFixed(2)}%`,  group: "Treasuries" },
   treasury_1y:  { label: "1Y",            fmt: (v) => `${v.toFixed(2)}%`,  group: "Yield Curve" },
   treasury_2y:  { label: "2Y",            fmt: (v) => `${v.toFixed(2)}%`,  group: "Yield Curve" },
   treasury_3y:  { label: "3Y",            fmt: (v) => `${v.toFixed(2)}%`,  group: "Yield Curve" },
@@ -645,21 +650,23 @@ function TickerGrid({ rows, href }: { rows: QuoteRow[]; href: string }) {
         const pct = parseFloat(String(s.quote?.percent_change ?? 0));
         const price = parseFloat(String(s.quote?.current_price ?? 0));
         return (
-          <Link
+          <TickerHoverChart
             key={s.ticker}
+            ticker={s.ticker}
             href={href.startsWith("/sports") ? href : `/markets/${s.ticker}`}
+            wrapperClassName="block min-w-0"
             className="flex items-center justify-between gap-1 px-2 py-1 border-b border-r border-border hover:bg-secondary/50 transition-colors group"
           >
             <span className="text-[10px] font-mono font-black shrink-0 group-hover:underline">
               {s.ticker}
             </span>
-            <div className="flex flex-col items-end shrink-0 min-w-0">
+            <span className="flex flex-col items-end shrink-0 min-w-0">
               <span className="text-[9px] font-mono tabular-nums font-bold leading-none">
                 ${price.toFixed(2)}
               </span>
               <ChangeTag pct={pct} />
-            </div>
-          </Link>
+            </span>
+          </TickerHoverChart>
         );
       })}
     </div>
@@ -717,7 +724,11 @@ function ScoreCell({ game, leagueSlug }: { game: ScoreRowType; leagueSlug: strin
     : null;
 
   return (
-    <div className="relative flex items-center justify-center gap-2 px-2 py-1.5 border-b border-border hover:bg-secondary/50 transition-colors text-[9px] font-mono leading-tight">
+    /* One grid across the whole row so the container allocates the width.
+       The two team columns are minmax(0,1fr): they absorb slack evenly and
+       truncate under pressure instead of pushing the row past the card edge,
+       which fixed ch widths did at narrow masonry column widths. */
+    <div className="relative grid items-center gap-x-1 px-2 py-1.5 border-b border-border hover:bg-secondary/50 transition-colors text-[9px] font-mono leading-tight overflow-hidden [grid-template-columns:minmax(0,1fr)_auto_auto_auto_minmax(0,1fr)_2.5rem]">
       {/* Stretched link: the row body opens the ESPN game page; team links sit above it */}
       {espnUrl && (
         <a
@@ -728,38 +739,36 @@ function ScoreCell({ game, leagueSlug }: { game: ScoreRowType; leagueSlug: strin
           className="absolute inset-0"
         />
       )}
-      <div className="grid shrink-0 items-center gap-x-1.5 [grid-template-columns:4ch_2.5ch_1ch_2.5ch_4ch]">
-        <Link
-          href={`/${leagueSlug}/${awayAbbr}`}
-          title={game.away_team}
-          className={`relative z-10 ${teamCls(awayWon)} text-left`}
-        >
-          {awayAbbr}
-        </Link>
-        <span className={`${scoreCls(awayWon)} text-right`}>
-          {isScheduled ? "" : awayN ?? ""}
-        </span>
-        <span className="text-muted-foreground/60 text-center">{isScheduled ? "@" : "–"}</span>
-        <span className={`${scoreCls(homeWon)} text-right`}>
-          {isScheduled ? "" : homeN ?? ""}
-        </span>
-        <Link
-          href={`/${leagueSlug}/${homeAbbr}`}
-          title={game.home_team}
-          className={`relative z-10 ${teamCls(homeWon)} text-left`}
-        >
-          {homeAbbr}
-        </Link>
-      </div>
+      <Link
+        href={`/${leagueSlug}/${awayAbbr}`}
+        title={game.away_team}
+        className={`relative z-10 ${teamCls(awayWon)} text-right truncate`}
+      >
+        {awayAbbr}
+      </Link>
+      <span className={`${scoreCls(awayWon)} text-right tabular-nums`}>
+        {isScheduled ? "" : awayN ?? ""}
+      </span>
+      <span className="text-muted-foreground/60 text-center px-0.5">{isScheduled ? "@" : "–"}</span>
+      <span className={`${scoreCls(homeWon)} text-left tabular-nums`}>
+        {isScheduled ? "" : homeN ?? ""}
+      </span>
+      <Link
+        href={`/${leagueSlug}/${homeAbbr}`}
+        title={game.home_team}
+        className={`relative z-10 ${teamCls(homeWon)} text-left truncate`}
+      >
+        {homeAbbr}
+      </Link>
       {isLive ? (
-        <div className="flex items-center gap-1 shrink-0 w-10">
-          <div className="w-1.5 h-1.5 rounded-full animate-pulse-dot shrink-0" style={{ backgroundColor: "hsl(142 65% 42%)" }} />
+        <span className="flex items-center gap-0.5 justify-end min-w-0">
+          <span className="w-1 h-1 rounded-full animate-pulse-dot shrink-0" style={{ backgroundColor: "hsl(142 65% 42%)" }} />
           <span className="text-[7px] leading-none truncate" style={{ color: "hsl(142 65% 42%)" }}>
             {game.status_detail ?? "LIVE"}
           </span>
-        </div>
+        </span>
       ) : (
-        <span className="text-[7px] leading-none text-muted-foreground uppercase shrink-0 w-10 text-left">
+        <span className="text-[7px] leading-none text-muted-foreground uppercase text-right truncate">
           {isFinal ? "Final" : tipOff ?? "Sched"}
         </span>
       )}
@@ -860,7 +869,12 @@ export default async function CommandCenter() {
     acc[group].push(row);
     return acc;
   }, {});
-  const TREASURY_ORDER = ["treasury_1y","treasury_2y","treasury_3y","treasury_5y","treasury_10y","treasury_30y"];
+  const TREASURY_ORDER = ["treasury_1m","treasury_3m","treasury_6m","treasury_1y","treasury_2y","treasury_3y","treasury_5y","treasury_7y","treasury_10y","treasury_20y","treasury_30y"];
+  if (econByGroup["Treasuries"]) {
+    econByGroup["Treasuries"].sort(
+      (a, b) => TREASURY_ORDER.indexOf(a.indicator_name) - TREASURY_ORDER.indexOf(b.indicator_name),
+    );
+  }
   if (econByGroup["Yield Curve"]) {
     econByGroup["Yield Curve"].sort(
       (a, b) => TREASURY_ORDER.indexOf(a.indicator_name) - TREASURY_ORDER.indexOf(b.indicator_name)
@@ -937,9 +951,11 @@ export default async function CommandCenter() {
             <a key={article.id} href={article.url} target="_blank" rel="noopener noreferrer"
               className="flex items-center gap-1.5 px-2 py-1 border-b border-border last:border-0 hover:bg-secondary/50 transition-colors group">
               {article.section && <HubCap label={article.section} />}
-              <p className="text-[10px] font-semibold leading-tight line-clamp-2 min-h-[2.2em] group-hover:underline">
-                {article.title}
-              </p>
+              <span className="flex min-h-[2.2em] min-w-0 flex-col justify-center">
+                <span className="text-[10px] font-semibold leading-tight line-clamp-2 group-hover:underline">
+                  {article.title}
+                </span>
+              </span>
             </a>
           ))}
         </div>
@@ -1084,17 +1100,22 @@ export default async function CommandCenter() {
               </div>
             </div>
           )}
+          {/* Remaining treasury maturities use the same column treatment as the
+              yield curve: maturity label above the rate, one column each. */}
           {otherRows.map(([group, rows]) => (
             <div key={group}>
               <p className="px-2 py-0.5 text-[8px] font-mono uppercase tracking-widest text-muted-foreground bg-secondary/40 border-b border-border">
                 {group}
               </p>
-              <div className="grid grid-cols-2">
+              <div className="flex divide-x divide-border border-b border-border">
                 {rows.map((row) => (
-                  <div key={row.indicator_name}
-                    className="flex items-center justify-between gap-1 px-2 py-1 border-b border-r border-border min-w-0">
-                    <span className="text-[9px] font-mono text-muted-foreground truncate">{row.indicator_name}</span>
-                    <span className="text-[9px] font-mono font-bold tabular-nums shrink-0">{row.value.toFixed(2)}</span>
+                  <div key={row.indicator_name} className="flex-1 px-1 py-1 text-center min-w-0">
+                    <p className="text-[8px] font-mono text-muted-foreground leading-none truncate">
+                      {ECON_CONFIG[row.indicator_name]?.label ?? row.indicator_name}
+                    </p>
+                    <p className="text-[10px] font-mono font-bold tabular-nums leading-tight mt-0.5">
+                      {row.value.toFixed(2)}
+                    </p>
                   </div>
                 ))}
               </div>
@@ -1114,8 +1135,8 @@ export default async function CommandCenter() {
             <a key={item.id} href={item.url} target="_blank" rel="noopener noreferrer"
               className="flex items-center gap-1.5 px-2 py-1 border-b border-border last:border-0 hover:bg-secondary/50 transition-colors group">
               {item.source && <HubCap label={item.source} />}
-              <div className="min-w-0">
-                <p className="text-[10px] font-medium leading-tight line-clamp-2 min-h-[2.2em] group-hover:underline">
+              <div className="min-w-0 flex min-h-[2.2em] flex-col justify-center">
+                <p className="text-[10px] font-medium leading-tight line-clamp-2 group-hover:underline">
                   {item.headline}
                 </p>
                 {(item.related_tickers ?? []).length > 0 && (

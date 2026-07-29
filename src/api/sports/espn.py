@@ -252,14 +252,18 @@ def find_espn_team_by_name(
     return None
 
 
-def fetch_espn_scores(sport: str, league: str, dates: Optional[str] = None) -> List[Dict[str, Any]]:
+def fetch_espn_scores(
+    sport: str, league: str, dates: Optional[str] = None, limit: Optional[int] = None
+) -> List[Dict[str, Any]]:
     """
     Fetch scores/schedule for a specific sport/league from ESPN API
 
     Args:
         sport: Sport name (e.g., 'football', 'basketball')
         league: League name (e.g., 'nfl', 'nba')
-        dates: Optional date filter in YYYYMMDD format (e.g., '20250115')
+        dates: Single date 'YYYYMMDD' or an inclusive range 'YYYYMMDD-YYYYMMDD'
+        limit: Optional cap on events ESPN returns. The backfill sets this so a
+            truncated range can be detected (returned == limit) and split.
 
     Returns:
         List of game/match dictionaries
@@ -269,6 +273,8 @@ def fetch_espn_scores(sport: str, league: str, dates: Optional[str] = None) -> L
     params = {}
     if dates:
         params['dates'] = dates
+    if limit:
+        params['limit'] = limit
 
     try:
         _espn_min_interval()

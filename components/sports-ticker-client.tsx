@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
+import { TickerShell } from "@/components/ticker-shell";
 
 export type SportsTickerItem = {
   id: string;
@@ -81,49 +82,35 @@ export function SportsTickerClient({ items: initialItems }: { items: SportsTicke
   const looped = [...items, ...items];
 
   return (
-    <div className="bg-secondary/20 overflow-hidden h-7 flex items-center pause-on-hover">
-      <div className="shrink-0 px-3 border-r border-border h-full flex items-center">
-        <span className="text-[9px] font-mono tracking-widest uppercase text-muted-foreground">
-          Scores
-        </span>
-      </div>
-      <div className="flex-1 overflow-hidden relative">
-        <div
-          className="animate-ticker flex items-center"
-          style={{ animationDuration: `${Math.max(40, items.length * 5)}s` }}
-        >
-          {looped.map((g, i) => (
+    <TickerShell label="Sports" className="bg-secondary/20">
+      <div
+        className="animate-ticker flex items-center"
+        style={{ animationDuration: `${Math.max(40, items.length * 5)}s` }}
+      >
+        {looped.map((g, i) => (
+          <span
+            key={`${g.id}-${i}`}
+            className="inline-flex items-center gap-1.5 px-3 sm:px-4 shrink-0 text-[10px] sm:text-xs font-mono"
+            aria-hidden={i >= items.length}
+          >
+            <span className="text-muted-foreground text-[8px] sm:text-[9px]">{g.league}</span>
+            <span className="font-bold">{g.away}</span>
+            {g.state !== "scheduled" && <span className="tabular-nums">{g.awayScore ?? "–"}</span>}
+            <span className="text-muted-foreground/60">{g.state === "scheduled" ? "@" : "–"}</span>
+            {g.state !== "scheduled" && <span className="tabular-nums">{g.homeScore ?? "–"}</span>}
+            <span className="font-bold">{g.home}</span>
             <span
-              key={`${g.id}-${i}`}
-              className="inline-flex items-center gap-1.5 px-4 shrink-0 text-[10px] font-mono"
-              aria-hidden={i >= items.length}
+              className="text-[8px] sm:text-[9px]"
+              style={{
+                color: g.state === "live" ? "hsl(142 65% 42%)" : "hsl(var(--muted-foreground))",
+              }}
             >
-              <span className="text-muted-foreground text-[8px]">{g.league}</span>
-              <span className="font-bold">{g.away}</span>
-              {g.state !== "scheduled" && (
-                <span className="tabular-nums">{g.awayScore ?? "–"}</span>
-              )}
-              <span className="text-muted-foreground/60">{g.state === "scheduled" ? "@" : "–"}</span>
-              {g.state !== "scheduled" && (
-                <span className="tabular-nums">{g.homeScore ?? "–"}</span>
-              )}
-              <span className="font-bold">{g.home}</span>
-              <span
-                className="text-[8px]"
-                style={{
-                  color:
-                    g.state === "live"
-                      ? "hsl(142 65% 42%)"
-                      : "hsl(var(--muted-foreground))",
-                }}
-              >
-                {g.detail}
-              </span>
-              <span className="text-muted-foreground/30 ml-1">·</span>
+              {g.detail}
             </span>
-          ))}
-        </div>
+            <span className="text-muted-foreground/30 ml-1">·</span>
+          </span>
+        ))}
       </div>
-    </div>
+    </TickerShell>
   );
 }
