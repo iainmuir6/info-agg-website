@@ -52,9 +52,9 @@ See [`src/api/RATE_LIMITS.md`](src/api/RATE_LIMITS.md) for per-API limits, daily
 - `SUPABASE_SERVICE_ROLE_KEY` — Service role key (ETL writes, `POST /api/auth/invite`)
 
 **Supabase Auth → URL configuration:** Add redirect URLs for the auth callback route, e.g. `http://localhost:3000/auth/callback` and `${NEXT_PUBLIC_SITE_URL}/auth/callback`.
-- API keys for fetchers: `NYT_API_KEY_1`, `NYT_API_KEY_2`, `FINNHUB_API_KEY_1`, `FINNHUB_API_KEY_2`, `FMP_API_KEY`, `ALPHA_VANTAGE_API_KEY` (+ `_1/_2`), `SPOTIFY_CLIENT_ID`, `SPOTIFY_CLIENT_SECRET`
+- API keys for fetchers: `NYT_API_KEY_1`, `NYT_API_KEY_2`, `FINNHUB_API_KEY_1`, `FINNHUB_API_KEY_2`, `FMP_API_KEY`, `ALPHA_VANTAGE_API_KEY` (+ `_1/_2`)
 - `YOUTUBE_API_KEY` — YouTube Data API v3 key (API key only, no OAuth). Powers the trending-videos feed. `videos.list` with `chart=mostPopular` costs 1 unit against a 10,000/day quota, so a daily run is negligible. Create at https://console.cloud.google.com/apis/credentials with the YouTube Data API v3 enabled.
-- `REDDIT_CLIENT_ID`, `REDDIT_CLIENT_SECRET` — optional but **required in CI**. Reddit blocks its public `*.json` endpoints from datacenter IPs, so scheduled runs get 403 and write zero posts; with these set the fetcher uses `oauth.reddit.com` instead. Create a "script" app at https://www.reddit.com/prefs/apps. Optional `REDDIT_USER_AGENT` overrides the default UA.
+- Spotify playlists/podcast embeds (`lib/top-podcasts.ts`) need no backend fetch — they're live `<iframe>`s, not ETL-synced. `SPOTIFY_CLIENT_ID`/`SPOTIFY_CLIENT_SECRET` are still required, though: `app/api/podcasts/search` uses them (client-credentials flow, `lib/spotify-search.ts`) to power the "search a podcast to favorite" UI on `/profile`. Reddit was removed.
 
 ## Architecture
 
@@ -95,7 +95,7 @@ Each domain follows the same pattern:
 - `sports/` → ESPN API (scores + news for NFL, NBA, NHL, MLB, EPL, etc.)
 - `markets/` → Finnhub API (daily quotes, company news, market news) + FMP API (company profiles, ETF holdings, historical backfill) + Alpha Vantage (news sentiment)
 - `news/` → NYT Top Stories API + NewsAPI
-- `media/` → Spotify API (new releases) + YouTube Data API (trending videos) + Reddit API (hot posts; needs OAuth in CI)
+- `media/` → YouTube Data API (trending videos). Spotify (playlists, Top Podcasts) is live-embedded on the frontend with no fetcher. Reddit was removed.
 - `misc/` — placeholder for additional sources
 
 Python venv: `_agg_venv/` (at repo root). Dependencies: `requirements.txt` (repo root).
@@ -109,10 +109,10 @@ All tables live in the `info_agg` schema. Apply migrations in order:
 4. `04_indexes.sql` — performance indexes
 
 **Key tables:**
-- Sports: `leagues`, `sports_news`, `sports_scores`
+- Sports: `leagues`, `sports_news`, `sports_scores`, `sports_standings`
 - Markets: `stocks`, `stock_quotes`, `etf_holdings`, `company_news`, `market_news`, `news_sentiment`
 - News: `news_articles`
-- Media: `spotify_releases`, `youtube_videos`, `reddit_posts`
+- Media: `youtube_videos` (Spotify playlists/podcasts are embedded, not stored)
 
 The ETL uses `SUPABASE_SERVICE_ROLE_KEY` with `ClientOptions(schema='info_agg')` for writes. The frontend uses the publishable key targeting the same schema.
 

@@ -25,18 +25,20 @@ src/api/
 │   └── markets_db_helper.py # DB layer: upserts for all markets tables
 │
 ├── sports/
-│   ├── sports_fetcher.py    # ESPN fetcher: scores + news for all configured leagues
-│   └── sports_db_helper.py  # DB layer: upserts for leagues, sports_news, sports_scores
+│   ├── espn.py              # ESPN fetcher: scores, news, and standings for all configured leagues
+│   └── sports_db_helper.py  # DB layer: upserts for leagues, sports_news, sports_scores, sports_standings
 │
 ├── news/
 │   ├── nyt.py               # NYT Top Stories + Most Popular fetcher
 │   └── news_db_helper.py    # DB layer: upserts for news_articles
 │
 └── media/
-    ├── spotify.py           # Spotify new releases fetcher
-    ├── reddit.py            # Reddit hot posts fetcher (unauthenticated)
-    └── media_db_helper.py   # DB layer: upserts for spotify_releases, reddit_posts
+    ├── youtube.py           # YouTube trending-videos fetcher
+    └── media_db_helper.py   # DB layer: upserts for youtube_videos
 ```
+
+Spotify (playlists, Top Podcasts) is live-embedded on the frontend (`lib/top-podcasts.ts`) —
+no fetcher or table. Reddit was removed.
 
 Python dependencies live in **`requirements.txt` at the repo root** (same level as `src/`).
 
@@ -67,8 +69,7 @@ Python dependencies live in **`requirements.txt` at the repo root** (same level 
    NYT_API_KEY_2=<key>
 
    # Media
-   SPOTIFY_CLIENT_ID=<id>
-   SPOTIFY_CLIENT_SECRET=<secret>
+   YOUTUBE_API_KEY=<key>
    ```
 
 3. **Apply DB migrations** (once, on a new environment):
@@ -88,7 +89,7 @@ All market ETL is driven by `markets/baskets.json`. Five groups determine which 
 
 | Group | Asset Type | Tickers (count) | Daily Quote Source | Seed Backfill Source |
 |-------|-----------|-----------------|-------------------|---------------------|
-| `core_stocks` | `stock` | AAPL MSFT NVDA AMZN GOOGL META TSLA BRK.B JPM AVGO (10) | Finnhub `/quote` | AV `TIME_SERIES_DAILY` |
+| `core_stocks` | `stock` | AAPL MSFT NVDA AMZN GOOGL META TSLA BRK-B JPM AVGO (10) | Finnhub `/quote` | AV `TIME_SERIES_DAILY` |
 | `core_market` | `etf` | VTI SPY QQQ IWM VXUS (5) | Finnhub `/quote` | AV `TIME_SERIES_DAILY` |
 | `sectors` | `etf` | XLC XLY XLP XLE XLF XLV XLI XLB XLRE XLK XLU (11) | Finnhub `/quote` | AV `TIME_SERIES_DAILY` |
 | `breadth` | `etf` | RSP VUG VTV (3) | Finnhub `/quote` | AV `TIME_SERIES_DAILY` |
@@ -133,7 +134,7 @@ python src/api/run_etl.py --media-only
 | `run_etl.py --markets-only` | Quotes + news + sentiment | ~2–3 min | 36 Finnhub calls + 5 AV calls |
 | `run_etl.py --sports-only` | ESPN news + scores | ~10–15s | ESPN calls spaced >=1s between requests |
 | `run_etl.py --news-only` | NYT top stories | ~10–25s | 9 sections × ~1.1s minimum sleep between calls + 1 most-popular |
-| `run_etl.py --media-only` | Spotify + Reddit | ~15–20s | 8 Reddit calls × 1s sleep |
+| `run_etl.py --media-only` | YouTube | ~1–2s | 1 call, 1 quota unit |
 
 > **Vercel Cron (Hobby plan, 60s limit):** A full daily run exceeds the limit. Partial
 > completion is normal — Sports and Media finish comfortably; Markets and News may be cut
@@ -201,13 +202,15 @@ AV NEWS_SENTIMENT (5–10 topics) ───────────────�
 FMP /stable/treasury-rates ──────────────────────────────────────► economic_indicators
 FMP /stable/economic-indicators (7 names) ───────────────────────► economic_indicators
 
-ESPN /news, /scoreboard ─────────────────────────────────────────► sports_news, sports_scores
+ESPN /news, /scoreboard, /standings ──────────────────────────────► sports_news, sports_scores, sports_standings
 
 NYT /topstories, /mostpopular ───────────────────────────────────► news_articles
 
-Spotify /browse/new-releases ────────────────────────────────────► spotify_releases
-Reddit /r/{sub}/hot ─────────────────────────────────────────────► reddit_posts
+YouTube /videos?chart=mostPopular ────────────────────────────────► youtube_videos
 ```
+
+Spotify (playlists, Top Podcasts) is embedded directly on the frontend via `<iframe>` — no
+fetch, no table, not part of this pipeline.
 
 ---
 
@@ -221,6 +224,5 @@ See [`RATE_LIMITS.md`](RATE_LIMITS.md) for full details. Quick reference:
 | Alpha Vantage | 60 s / key | 5 req | Sliding-window deque per key — burst then sleep |
 | FMP | 1 day | 250 req | Daily counter; warns at 220, raises at 250 |
 | NYT | 60 s | 5 req/key | Daily run switches keys after 5 calls (10 calls/day total) and enforces >=1s between NYT HTTP calls |
-| Reddit | 60 s | 60 req | 1 s sleep between subreddit calls |
-| Spotify | — | ~30/s | No explicit limiting needed at current volume |
+| YouTube | 1 day | 10,000 units | 1 call/run, 1 unit cost — no limiting needed |
 | ESPN | — | Unknown | No limiting applied (unofficial API, low call count) |

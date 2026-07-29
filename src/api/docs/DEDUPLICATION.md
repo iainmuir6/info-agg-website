@@ -164,30 +164,22 @@ Both the NYT Top Stories API and the NYT Archive API write to this table using t
 
 ### Media
 
-#### `spotify_releases`
+#### `youtube_videos`
 
 | Field | Value |
 |---|---|
-| Dedup key | `spotify_id` |
-| UNIQUE constraint | `UNIQUE (spotify_id)` (`02_tables.sql:303`) |
-| `on_conflict` | `'spotify_id'` |
-| Behavior on conflict | Update name, release_date, artists, image_url |
-| DB helper | `sync_spotify_data()` — `media/media_db_helper.py:92` |
+| Dedup key | `(video_id, region_code)` |
+| UNIQUE constraint | `UNIQUE (video_id, region_code)` (`02_tables.sql`) |
+| `on_conflict` | `'video_id,region_code'` |
+| Behavior on conflict | Update stats (views, likes, comments) and refresh `fetched_at` |
+| DB helper | `sync_youtube_data()` — `media/media_db_helper.py` |
 
----
+Trending videos are mutable (view/like/comment counts change over time), and `fetched_at` is
+refreshed on every run so retention (which keys off `fetched_at`) keeps rows that are still
+trending. Updating on conflict is intentional.
 
-#### `reddit_posts`
-
-| Field | Value |
-|---|---|
-| Dedup key | `post_id` |
-| UNIQUE constraint | `UNIQUE (post_id)` (`02_tables.sql:329`) |
-| `on_conflict` | `'post_id'` |
-| Behavior on conflict | Update score, num_comments, title (mutable fields — intentional, see note below) |
-| DB helper | `sync_reddit_data()` — `media/media_db_helper.py:160` |
-
-Reddit posts are mutable (score and comment count change over time). Updating these fields on
-conflict is intentional — each daily run reflects the current engagement snapshot.
+Spotify (playlists, Top Podcasts) is live-embedded on the frontend with no backend fetch or
+table — nothing to deduplicate. Reddit (`reddit_posts`) was removed.
 
 ---
 
@@ -206,8 +198,8 @@ conflict is intentional — each daily run reflects the current engagement snaps
 | `sports_scores` | `(league_id, event_id)` | `league_id,event_id` | ✓ |
 | `sports_news` | `url` | `url` | ✓ |
 | `news_articles` | `url` | `url` | ✓ |
-| `spotify_releases` | `spotify_id` | `spotify_id` | ✓ |
-| `reddit_posts` | `post_id` | `post_id` | ✓ |
+| `youtube_videos` | `(video_id, region_code)` | `video_id,region_code` | ✓ |
+| `sports_standings` | `(league_id, team_abbrev, season)` | `league_id,team_abbrev,season` | ✓ |
 
 All 13 tables: UNIQUE constraint matches `on_conflict` key. No raw INSERTs anywhere in the pipeline.
 

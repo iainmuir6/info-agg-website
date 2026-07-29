@@ -23,7 +23,7 @@ python src/api/run_db_seed.py --backfill-quotes 90 --backfill-news 30 --backfill
 
 `run_db_seed.py` is a dedicated seed orchestrator that **interleaves** Alpha Vantage backfill
 batches with other domain ETL. This ensures the AV 5 req/min window resets naturally during
-domain work (ESPN, NYT, Spotify) rather than burning a `sleep()` call.
+domain work (ESPN, NYT, YouTube) rather than burning a `sleep()` call.
 
 #### Phase layout (36-ticker basket)
 
@@ -36,7 +36,7 @@ domain work (ESPN, NYT, Spotify) rather than burning a `sleep()` call.
 | 4 | AV backfill — tickers 11–20 | — |
 | 5 | News — NYT Archive backfill | >60s → AV window reset ✓ |
 | 6 | AV backfill — tickers 21–30 | — |
-| 7 | Media — Spotify + Reddit | >60s → AV window reset ✓ |
+| 7 | Media — YouTube | >60s → AV window reset ✓ |
 | 8 | AV backfill — remaining tickers + sentiment (all 10 topics) | — |
 | 9 | Finnhub — market news + company news (all 36 tickers) | — |
 | 10 | FMP — economic indicators full history (treasury rates + 7 macro, ~8 calls) | — |
@@ -69,7 +69,7 @@ key exhausts its daily cap mid-run. Phase 0 prints a live budget breakdown befor
 | 4 | 10 AV calls (window reset by Phase 3) | ~1 min |
 | 5 | NYT Archive (1–2 months) + Top Stories (9 sections; >=1s between calls) | ~2 min |
 | 6 | 10 AV calls (window reset by Phase 5) | ~1 min |
-| 7 | Spotify + Reddit (8 subs × 1s sleep) | ~15–20s |
+| 7 | YouTube (1 call) | ~1–2s |
 | 8 | 6 AV ticker calls + 10 sentiment calls | ~1 min |
 | 9 | Finnhub company news (36 tickers) + market news | ~1–2 min |
 | 10 | FMP treasury rates + 7 macro indicators (~8 calls) | ~10–15s |
@@ -124,10 +124,10 @@ and capped at **5 articles per section per day**.
 
 | Action | Source | Table |
 |--------|--------|-------|
-| Fetch new album releases | Spotify `/v1/browse/new-releases` | `spotify_releases` |
-| Fetch hot posts (8 subreddits) | Reddit `/r/{sub}/hot.json` | `reddit_posts` |
+| Fetch trending videos | YouTube `videos.list?chart=mostPopular` | `youtube_videos` |
 
-No historical backfill available for media sources.
+Spotify (playlists, Top Podcasts) is live-embedded on the frontend — no fetch, no table, nothing
+to seed or backfill. Reddit was removed.
 
 ---
 
@@ -147,7 +147,7 @@ Runs all four domains sequentially: **sports → markets → news → media**.
 | Sports | ESPN: news + scores for ~10 leagues | ~10–15s |
 | Markets | Finnhub: 36 quotes + 36 company-news + 4 market-news; AV: 5 sentiment topics | ~90–120s |
 | News | NYT Top Stories: 9 sections × >=1s pacing + 1 most-popular call | ~90–120s |
-| Media | Spotify (1–2 calls) + Reddit (8 subs × 1s sleep) | ~15–20s |
+| Media | YouTube (1 call) | ~1–2s |
 | **Total** | | **~5–7 min** |
 
 > **Vercel Cron note:** The Hobby plan enforces a 60-second serverless function limit.

@@ -11,7 +11,7 @@ A single-page dashboard that pulls together news, sports scores, market data, an
 - **News** — NYT top stories across 9 sections
 - **Sports** — Live scores and headlines for NFL, NBA, NHL, MLB, EPL, and more (via ESPN)
 - **Markets** — Quotes, company news, and sentiment for a curated watchlist of stocks, ETFs, crypto, forex, and commodities
-- **Media** — Spotify new releases and Reddit hot posts
+- **Media** — Trending YouTube videos, live Spotify playlists, and Top Podcasts
 - Dark / light mode, responsive layout
 - Auth-gated admin panel with ETL trigger
 
@@ -23,7 +23,7 @@ A single-page dashboard that pulls together news, sports scores, market data, an
 | UI | shadcn/ui, Tailwind CSS |
 | Auth | Supabase Auth (PKCE flow) |
 | Database | Supabase (PostgreSQL, `info_agg` schema) |
-| Data sources | ESPN · NYT · Finnhub · FMP · Alpha Vantage · Spotify · Reddit |
+| Data sources | ESPN · NYT · Finnhub · FMP · Alpha Vantage · YouTube · Spotify (embedded) |
 | ETL | Python, scheduled via GitHub Actions |
 | Deployment | Vercel |
 

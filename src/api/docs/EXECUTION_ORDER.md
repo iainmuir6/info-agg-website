@@ -47,13 +47,15 @@ Total: ~10s+ (network + JSON parsing dependent)
 
 ---
 
-## MEDIA (~10–15s, sequential)
+## MEDIA (~1–2s)
 
 ```
-Step 1 — Spotify new releases:            ~3s
-Step 2 — Reddit (8 subreddits, sequential): ~8–10s
+Step 1 — YouTube trending videos (1 call): ~1–2s
 
-Total: ~11–13s
+Spotify (playlists, Top Podcasts) is live-embedded on the frontend — no ETL
+step. Reddit was removed.
+
+Total: ~1–2s
 ```
 
 ---
