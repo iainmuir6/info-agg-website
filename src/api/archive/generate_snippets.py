@@ -396,86 +396,6 @@ def snippet_etfdb_vti():
 # MEDIA
 # ---------------------------------------------------------------------------
 
-def snippet_spotify_new_releases():
-    from spotify import fetch_spotify_new_releases, get_spotify_access_token
-    token = get_spotify_access_token()
-    if not token:
-        return None, "failed to get Spotify access token"
-    result = fetch_spotify_new_releases(country='US', limit=5, access_token=token)
-    if not result:
-        return None, "fetch returned None"
-    albums = result.get('albums', [])
-    raw_sample = result.copy()
-    raw_sample['albums'] = albums[:2]
-    stored_shapes = []
-    for album in albums[:2]:
-        images = album.get('images', [])
-        image_url = None
-        for img in images:
-            if img.get('width', 0) >= 300:
-                image_url = img.get('url')
-                break
-        if not image_url and images:
-            image_url = images[0].get('url')
-        release_date = album.get('release_date')
-        precision = album.get('release_date_precision', 'day')
-        if release_date and precision == 'year':
-            release_date = f"{release_date}-01-01"
-        elif release_date and precision == 'month':
-            release_date = f"{release_date}-01"
-        stored_shapes.append({
-            'spotify_id': album.get('album_id') or album.get('id'),
-            'name': album.get('name'),
-            'artists': [a.get('name') for a in album.get('artists', []) if a.get('name')],
-            'album_type': album.get('album_type'),
-            'release_date': release_date,
-            'image_url': image_url,
-            'external_url': album.get('external_urls', {}).get('spotify'),
-            'total_tracks': album.get('total_tracks'),
-        })
-    return save_snippet(
-        'media', 'spotify_new_releases',
-        'GET https://api.spotify.com/v1/browse/new-releases?country=US',
-        raw_sample, stored_shapes
-    ), None
-
-
-def snippet_reddit_hot_posts():
-    from reddit import fetch_reddit_hot
-    posts = fetch_reddit_hot('technology', limit=5)
-    if not posts:
-        return None, "fetch returned None or empty"
-    stored_shapes = []
-    for post in posts[:2]:
-        created_utc = post.get('created_utc')
-        posted_at = None
-        if created_utc:
-            posted_at = datetime.fromtimestamp(created_utc, tz=timezone.utc).isoformat()
-        thumbnail = post.get('thumbnail')
-        thumbnail_url = thumbnail if thumbnail and thumbnail.startswith('http') else None
-        stored_shapes.append({
-            'post_id': post.get('post_id'),
-            'subreddit': post.get('subreddit'),
-            'title': post.get('title'),
-            'author': post.get('author'),
-            'score': post.get('score', 0),
-            'upvote_ratio': post.get('upvote_ratio'),
-            'num_comments': post.get('num_comments', 0),
-            'url': post.get('url'),
-            'permalink': post.get('permalink'),
-            'selftext': (post.get('selftext') or '')[:200],
-            'thumbnail_url': thumbnail_url,
-            'is_self': post.get('is_self', False),
-            'flair': post.get('link_flair_text'),
-            'posted_at': posted_at,
-        })
-    return save_snippet(
-        'media', 'reddit_hot_posts',
-        'GET https://www.reddit.com/r/technology/hot.json',
-        posts[:2], stored_shapes
-    ), None
-
-
 # ---------------------------------------------------------------------------
 # MISC
 # ---------------------------------------------------------------------------
@@ -666,8 +586,6 @@ SNIPPETS = [
     ('markets', 'finnhub_company_news',   snippet_finnhub_company_news),
     ('markets', 'finnhub_market_news',    snippet_finnhub_market_news),
     ('markets', 'etfdb_vti',              snippet_etfdb_vti),
-    ('media',   'spotify_new_releases',   snippet_spotify_new_releases),
-    ('media',   'reddit_hot_posts',       snippet_reddit_hot_posts),
     ('misc',    'weather_new_york',       snippet_misc_weather),
     ('misc',    'holidays_us',            snippet_misc_holidays),
     ('misc',    'wikipedia_random',       snippet_misc_wikipedia_random),

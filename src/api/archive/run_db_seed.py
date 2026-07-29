@@ -18,7 +18,7 @@
 #     4   AV backfill      tickers [10:20]
 #     5   News             NYT Archive backfill              (~60s elapsed → AV resets)
 #     6   AV backfill      tickers [20:30]
-#     7   Media            Spotify + Reddit                 (~60s elapsed → AV resets)
+#     7   Media            YouTube                          (~60s elapsed → AV resets)
 #     8   AV backfill      remaining tickers + sentiment (all 10 topics)
 #     9   Markets          Finnhub market news + company news
 #     10  Economic         FMP treasury rates + 7 macro indicators (full history)
@@ -216,7 +216,7 @@ def run_seed(
 
     # ── Phase 7: Media ────────────────────────────────────────────────────────
     # ~60s+ elapsed since Phase 6 → AV window reset.
-    _phase_header(7, "Media — Spotify + Reddit")
+    _phase_header(7, "Media — YouTube")
     run_media_etl(supabase)
 
     # ── Phase 8: AV — remaining batches + sentiment ───────────────────────────

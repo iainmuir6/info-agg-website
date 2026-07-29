@@ -76,10 +76,8 @@ def build_test_cases() -> list:
         fetch_fmp_quote, fetch_treasury_rates, fetch_economic_indicator,
         get_fmp_api_key,
     )
-    from sports.espn import fetch_espn_news, fetch_espn_scores
+    from sports.espn import fetch_espn_news, fetch_espn_scores, fetch_espn_standings
     from news.nyt import fetch_nyt_top_stories
-    from media.spotify import fetch_spotify_new_releases
-    from media.reddit import fetch_reddit_hot
 
     fh_key  = get_finnhub_api_key()
     fmp_key = get_fmp_api_key()
@@ -207,6 +205,15 @@ def build_test_cases() -> list:
                 else (False, f"empty (off-season may return 0) — got {len(d) if d else 0} events")
             ),
         ),
+        TestCase(
+            name='ESPN: standings (football/nfl)',
+            callable=lambda: fetch_espn_standings('football', 'nfl'),
+            validate_fn=lambda d: (
+                (True, f"{len(d)} teams")
+                if d and len(d) > 0
+                else (False, f"empty — got {len(d) if d else 0} teams")
+            ),
+        ),
         # ── NYT ──────────────────────────────────────────────────────────────
         TestCase(
             name='NYT: top stories (technology)',
@@ -215,26 +222,6 @@ def build_test_cases() -> list:
                 (True, f"{len(d.get('articles', []))} articles")
                 if d and len(d.get('articles', [])) > 0
                 else (False, f"empty or error — got {d}")
-            ),
-        ),
-        # ── Spotify ──────────────────────────────────────────────────────────
-        TestCase(
-            name='Spotify: new releases',
-            callable=lambda: fetch_spotify_new_releases(limit=5),
-            validate_fn=lambda d: (
-                (True, f"{len(d)} releases")
-                if d and len(d) > 0
-                else (False, f"empty — got {len(d) if d else 0} releases")
-            ),
-        ),
-        # ── Reddit ───────────────────────────────────────────────────────────
-        TestCase(
-            name='Reddit: hot posts (all)',
-            callable=lambda: fetch_reddit_hot('all', limit=5),
-            validate_fn=lambda d: (
-                (True, f"{len(d)} posts, top score={d[0].get('score')}")
-                if d and len(d) > 0 and d[0].get('score') is not None
-                else (False, f"missing posts or score — got {len(d) if d else 0} items")
             ),
         ),
     ]

@@ -30,7 +30,7 @@ from etl_lib import (
     finish_etl_run,
     collect_domain_errors,
 )
-from sports.sports_db_helper import sync_all_sports_data, sync_season_schedules
+from sports.sports_db_helper import sync_all_sports_data, sync_season_schedules, sync_standings
 from markets.markets_db_helper import (
     sync_stock_data,
     sync_market_news,
@@ -41,7 +41,7 @@ from markets.markets_db_helper import (
     upsert_daily_stock_quotes_batch,
 )
 from news.news_db_helper import sync_nyt_data
-from media.media_db_helper import sync_spotify_data, sync_reddit_data, sync_youtube_data
+from media.media_db_helper import sync_youtube_data
 
 load_dotenv()
 
@@ -57,11 +57,6 @@ DEFAULT_NYT_SECTIONS = [
     'us', 'world', 'opinion', 'business', 'insider',
     'realestate', 'science', 'technology', 'arts',
     # 'sports', 'politics', 'movies', 'nyregion', 
-]
-
-DEFAULT_SUBREDDITS = [
-    'worldnews', 'technology', 'science', 'sports',
-    'entertainment', 'music', 'movies', 'programming'
 ]
 
 MARKET_NEWS_CATEGORIES = [
@@ -115,8 +110,9 @@ def run_sports_etl(supabase: Client, season_schedules: bool = False) -> Dict[str
     """Run sports ETL: ESPN news and scores (today's snapshot).
 
     season_schedules=True additionally walks each in-season league's full
-    season so team pages show complete win/loss records (daily only —
-    it costs ~11 extra ESPN calls per in-season league).
+    season so team pages show complete win/loss records, and refreshes
+    standings — both daily-only (one ESPN standings call per league, ~9
+    total, so this stays well inside the 60s ETL budget).
     """
     try:
         stats = sync_all_sports_data(supabase, news_limit_per_sport=20)
@@ -125,6 +121,11 @@ def run_sports_etl(supabase: Client, season_schedules: bool = False) -> Dict[str
             stats['season_leagues'] = season_stats.get('leagues_processed', 0)
             stats['season_scores'] = season_stats.get('scores_inserted', 0)
             stats['errors'].extend(season_stats.get('errors', []))
+
+            standings_stats = sync_standings(supabase)
+            stats['standings_leagues'] = standings_stats.get('leagues_processed', 0)
+            stats['standings_rows'] = standings_stats.get('rows_inserted', 0)
+            stats['errors'].extend(standings_stats.get('errors', []))
         # Honest success: ESPN always has news, so writing nothing at all
         # means the fetch or the writes failed — not a quiet day.
         ok = (stats['news_inserted'] + stats['scores_inserted']) > 0
@@ -308,34 +309,21 @@ def run_news_etl(supabase: Client, sections: Optional[List[str]] = None) -> Dict
         return {'success': False, 'error': str(e)}
 
 
-def run_media_etl(
-    supabase: Client,
-    subreddits: Optional[List[str]] = None
-) -> Dict[str, Any]:
-    """Run media ETL: Spotify new releases and Reddit hot posts."""
-    if subreddits is None:
-        subreddits = DEFAULT_SUBREDDITS
+def run_media_etl(supabase: Client) -> Dict[str, Any]:
+    """Run media ETL: YouTube trending videos.
 
+    Spotify (new releases) and Reddit (hot posts) were removed — Spotify's
+    media page/homepage surfaces are now live embedded playlists/shows with
+    no backend fetch, and Reddit blocked datacenter IPs without OAuth.
+    """
     try:
-        spotify_stats = sync_spotify_data(supabase)
         youtube_stats = sync_youtube_data(supabase)
-        reddit_stats = sync_reddit_data(supabase, subreddits=subreddits)
 
         stats = {
-            'spotify_releases': spotify_stats.get('releases_inserted', 0),
             'youtube_videos': youtube_stats.get('videos_inserted', 0),
-            'reddit_posts': reddit_stats.get('posts_inserted', 0),
-            'errors': (
-                spotify_stats.get('errors', [])
-                + youtube_stats.get('errors', [])
-                + reddit_stats.get('errors', [])
-            ),
+            'errors': youtube_stats.get('errors', []),
         }
-        # Reddit blocks datacenter IPs without OAuth credentials, so it is not
-        # required for the domain to be healthy — any source writing counts.
-        ok = (
-            stats['spotify_releases'] + stats['youtube_videos'] + stats['reddit_posts']
-        ) > 0
+        ok = stats['youtube_videos'] > 0
         result: Dict[str, Any] = {'success': ok, 'stats': stats}
         if not ok:
             result['error'] = 'media wrote 0 rows from any source'
@@ -567,9 +555,7 @@ def run_full_etl(
             return (f"sections={s.get('sections_processed',0)}  "
                     f"articles={s.get('articles_inserted',0)}")
         if domain == 'media':
-            return (f"spotify={s.get('spotify_releases',0)}  "
-                    f"youtube={s.get('youtube_videos',0)}  "
-                    f"reddit={s.get('reddit_posts',0)}")
+            return f"youtube={s.get('youtube_videos',0)}"
         return ''
 
     passed = failed = 0
