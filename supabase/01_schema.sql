@@ -49,9 +49,8 @@ SET search_path = '';
 -- ============================================================
 CREATE OR REPLACE FUNCTION info_agg.cleanup_daily(
     p_news_days          integer DEFAULT 7,   -- news_articles, company_news, market_news, sports_news, news_sentiment
-    p_reddit_days        integer DEFAULT 3,   -- reddit_posts
     p_scores_days        integer DEFAULT 30,  -- sports_scores
-    p_releases_days      integer DEFAULT 30,  -- spotify_releases
+    p_youtube_days       integer DEFAULT 30,  -- youtube_videos
     p_quote_history_days integer DEFAULT 400, -- EOD stock_quotes history cap
     p_etl_runs_days      integer DEFAULT 90   -- etl_runs
 ) RETURNS jsonb
@@ -120,31 +119,15 @@ BEGIN
     GET DIAGNOSTICS v_count = ROW_COUNT;
     v_report := v_report || jsonb_build_object('news_sentiment', v_count);
 
-    -- ── reddit_posts: hot posts go stale within hours ──
-    DELETE FROM info_agg.reddit_posts
-    WHERE coalesce(posted_at, fetched_at) < now() - make_interval(days => p_reddit_days);
-    GET DIAGNOSTICS v_count = ROW_COUNT;
-    v_report := v_report || jsonb_build_object('reddit_posts', v_count);
-
     -- ── sports_scores: keep recent history for team pages ──
     DELETE FROM info_agg.sports_scores
     WHERE game_date < now() - make_interval(days => p_scores_days);
     GET DIAGNOSTICS v_count = ROW_COUNT;
     v_report := v_report || jsonb_build_object('sports_scores', v_count);
 
-    -- ── spotify_releases ──
-    -- Keyed on fetched_at, NOT release_date: Spotify's new-releases feed
-    -- includes back-catalog and reissues whose release dates are already
-    -- older than the window, so pruning by release_date emptied the whole
-    -- table at once (lifetime stats showed 50 inserts / 50 deletes / 0 live).
-    DELETE FROM info_agg.spotify_releases
-    WHERE fetched_at < now() - make_interval(days => p_releases_days);
-    GET DIAGNOSTICS v_count = ROW_COUNT;
-    v_report := v_report || jsonb_build_object('spotify_releases', v_count);
-
     -- ── youtube_videos ──
     DELETE FROM info_agg.youtube_videos
-    WHERE fetched_at < now() - make_interval(days => p_releases_days);
+    WHERE fetched_at < now() - make_interval(days => p_youtube_days);
     GET DIAGNOSTICS v_count = ROW_COUNT;
     v_report := v_report || jsonb_build_object('youtube_videos', v_count);
 
@@ -160,6 +143,6 @@ END;
 $$;
 
 -- Only the ETL (service role) may run cleanup.
-REVOKE ALL ON FUNCTION info_agg.cleanup_daily(integer, integer, integer, integer, integer, integer) FROM PUBLIC;
-REVOKE ALL ON FUNCTION info_agg.cleanup_daily(integer, integer, integer, integer, integer, integer) FROM anon, authenticated;
-GRANT EXECUTE ON FUNCTION info_agg.cleanup_daily(integer, integer, integer, integer, integer, integer) TO service_role;
+REVOKE ALL ON FUNCTION info_agg.cleanup_daily(integer, integer, integer, integer, integer) FROM PUBLIC;
+REVOKE ALL ON FUNCTION info_agg.cleanup_daily(integer, integer, integer, integer, integer) FROM anon, authenticated;
+GRANT EXECUTE ON FUNCTION info_agg.cleanup_daily(integer, integer, integer, integer, integer) TO service_role;

@@ -32,6 +32,12 @@ CREATE INDEX IF NOT EXISTS idx_sports_scores_league_date
     ON info_agg.sports_scores (league_id, game_date DESC);
 
 
+-- ── SPORTS — sports_standings ───────────────────────────────
+
+CREATE INDEX IF NOT EXISTS idx_sports_standings_league_season
+    ON info_agg.sports_standings (league_id, season);
+
+
 -- ── MARKETS — stocks ────────────────────────────────────────
 
 CREATE INDEX IF NOT EXISTS idx_stocks_ticker
@@ -99,18 +105,6 @@ CREATE INDEX IF NOT EXISTS idx_news_articles_source
 
 CREATE INDEX IF NOT EXISTS idx_news_articles_published_at
     ON info_agg.news_articles (published_at DESC);
-
-
--- ── MEDIA — spotify_releases ────────────────────────────────
-
-CREATE INDEX IF NOT EXISTS idx_spotify_releases_release_date
-    ON info_agg.spotify_releases (release_date DESC);
-
-
--- ── MEDIA — reddit_posts ────────────────────────────────────
-
-CREATE INDEX IF NOT EXISTS idx_reddit_posts_score
-    ON info_agg.reddit_posts (score DESC);
 
 
 -- ── MARKETS — news_sentiment ─────────────────────────────────

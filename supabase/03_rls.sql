@@ -48,6 +48,13 @@ CREATE POLICY "sports_scores: anon read"
     TO anon, authenticated
     USING (true);
 
+ALTER TABLE info_agg.sports_standings ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "sports_standings: anon read"
+    ON info_agg.sports_standings FOR SELECT
+    TO anon, authenticated
+    USING (true);
+
 
 -- ── MARKETS ─────────────────────────────────────────────────
 
@@ -122,18 +129,6 @@ CREATE POLICY "youtube_videos: anon read"
     TO anon, authenticated
     USING (true);
 
-ALTER TABLE info_agg.spotify_releases ENABLE ROW LEVEL SECURITY;
-ALTER TABLE info_agg.reddit_posts     ENABLE ROW LEVEL SECURITY;
-
-CREATE POLICY "spotify_releases: anon read"
-    ON info_agg.spotify_releases FOR SELECT
-    TO anon, authenticated
-    USING (true);
-
-CREATE POLICY "reddit_posts: anon read"
-    ON info_agg.reddit_posts FOR SELECT
-    TO anon, authenticated
-    USING (true);
 
 
 -- ── OPS ─────────────────────────────────────────────────────

@@ -78,6 +78,38 @@ CREATE TABLE IF NOT EXISTS info_agg.sports_scores (
 -- source of truth while staying safe to re-run against an existing DB.
 ALTER TABLE info_agg.sports_scores ADD COLUMN IF NOT EXISTS home_abbrev TEXT;
 ALTER TABLE info_agg.sports_scores ADD COLUMN IF NOT EXISTS away_abbrev TEXT;
+ALTER TABLE info_agg.sports_scores ADD COLUMN IF NOT EXISTS home_logo TEXT;
+ALTER TABLE info_agg.sports_scores ADD COLUMN IF NOT EXISTS away_logo TEXT;
+-- 1=preseason, 2=regular, 3=postseason (ESPN's season.type); NULL = rows
+-- fetched before this column existed, treated as regular season.
+ALTER TABLE info_agg.sports_scores ADD COLUMN IF NOT EXISTS season_type INTEGER;
+
+
+-- ============================================================
+-- SPORTS — sports_standings
+-- ============================================================
+CREATE TABLE IF NOT EXISTS info_agg.sports_standings (
+    id                  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    league_id           UUID    NOT NULL REFERENCES info_agg.leagues(id) ON DELETE CASCADE,
+    team_name           TEXT,
+    team_abbrev         TEXT    NOT NULL,
+    logo                TEXT,
+    conference          TEXT,   -- NULL for leagues with no conference split
+    division            TEXT,   -- NULL when ESPN doesn't expose a division tier
+    wins                INTEGER,
+    losses              INTEGER,
+    ties                INTEGER,
+    win_percent         NUMERIC,
+    games_behind        TEXT,
+    streak              TEXT,
+    playoff_seed        INTEGER,
+    point_differential  NUMERIC,
+    points              NUMERIC,  -- league points (NHL/soccer standings order)
+    rank                INTEGER,  -- ESPN's own rank (soccer has no winPercent/seed)
+    season              INTEGER,
+    fetched_at          TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(),
+    UNIQUE (league_id, team_abbrev, season)
+);
 
 
 -- ============================================================
@@ -234,24 +266,6 @@ CREATE TABLE IF NOT EXISTS info_agg.news_articles (
 
 
 -- ============================================================
--- MEDIA — spotify_releases
--- ============================================================
-CREATE TABLE IF NOT EXISTS info_agg.spotify_releases (
-    id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    spotify_id   TEXT    NOT NULL,
-    name         TEXT    NOT NULL,
-    artists      TEXT[]  NOT NULL DEFAULT '{}',
-    album_type   TEXT,              -- album, single, compilation
-    release_date DATE,
-    image_url    TEXT,
-    external_url TEXT,
-    total_tracks INTEGER,
-    fetched_at   TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
-    UNIQUE (spotify_id)
-);
-
-
--- ============================================================
 -- MEDIA — youtube_videos
 -- ============================================================
 CREATE TABLE IF NOT EXISTS info_agg.youtube_videos (
@@ -271,30 +285,6 @@ CREATE TABLE IF NOT EXISTS info_agg.youtube_videos (
     region_code    TEXT    NOT NULL DEFAULT 'US',
     fetched_at     TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
     UNIQUE (video_id, region_code)
-);
-
-
--- ============================================================
--- MEDIA — reddit_posts
--- ============================================================
-CREATE TABLE IF NOT EXISTS info_agg.reddit_posts (
-    id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    post_id       TEXT    NOT NULL,
-    subreddit     TEXT    NOT NULL,
-    title         TEXT    NOT NULL,
-    author        TEXT,
-    score         INTEGER NOT NULL DEFAULT 0,
-    upvote_ratio  DECIMAL(5, 4),
-    num_comments  INTEGER NOT NULL DEFAULT 0,
-    url           TEXT,
-    permalink     TEXT,
-    selftext      TEXT,
-    thumbnail_url TEXT,
-    is_self       BOOLEAN NOT NULL DEFAULT FALSE,
-    flair         TEXT,
-    posted_at     TIMESTAMP WITH TIME ZONE,
-    fetched_at    TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
-    UNIQUE (post_id)
 );
 
 
