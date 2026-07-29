@@ -2,6 +2,13 @@ import type { Config } from "tailwindcss";
 
 export default {
   darkMode: ["class"],
+  // Touch devices emulate :hover on tap and never clear it, so every hover:
+  // and group-hover: style stayed applied after a tap until you tapped
+  // elsewhere. This wraps those variants in @media (hover: hover) so they
+  // only apply to real pointers. Opt-in in Tailwind v3; default from v4.
+  future: {
+    hoverOnlyWhenSupported: true,
+  },
   content: [
     "./pages/**/*.{js,ts,jsx,tsx,mdx}",
     "./components/**/*.{js,ts,jsx,tsx,mdx}",

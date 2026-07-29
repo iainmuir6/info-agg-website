@@ -111,6 +111,14 @@ export function TickerHoverChart({
   }, [ticker]);
 
   function show() {
+    // Touch taps emulate mouseenter but frequently never emit mouseleave, so
+    // a popup opened here would stay open. Restrict it to real pointers.
+    if (
+      typeof window !== "undefined" &&
+      !window.matchMedia("(hover: hover) and (pointer: fine)").matches
+    ) {
+      return;
+    }
     cancelClose();
     // Short delay so sweeping the cursor across a row doesn't fire a fetch.
     timer.current = setTimeout(() => {
@@ -205,10 +213,16 @@ export function TickerHoverChart({
   return (
     <span
       ref={anchorRef}
-      className={wrapperClassName ?? "relative inline-block"}
+      className={`tap-row ${wrapperClassName ?? "relative inline-block"}`}
       onMouseEnter={show}
       onMouseLeave={hide}
       onFocus={() => {
+        if (
+          typeof window !== "undefined" &&
+          !window.matchMedia("(hover: hover) and (pointer: fine)").matches
+        ) {
+          return;
+        }
         place();
         setOpen(true);
         load();

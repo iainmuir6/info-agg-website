@@ -149,7 +149,7 @@ export default async function TeamPage({
       : "";
 
     return (
-      <div className="relative bg-background px-2 py-2 hover:bg-secondary/50 transition-colors">
+      <div className="tap-row relative bg-background px-2 py-2 hover:bg-secondary/50 transition-colors">
         {url && (
           <a href={url} target="_blank" rel="noopener noreferrer"
             aria-label="Open game on ESPN" className="absolute inset-0" />

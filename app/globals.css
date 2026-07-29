@@ -209,3 +209,22 @@
   background: hsl(var(--foreground));
   color: hsl(var(--background));
 }
+
+
+/* iOS lifts a link into a floating, shadowed preview card on long-press, and
+   the lift can persist after the gesture ends — rows appear raised and never
+   settle back. Interactive rows opt out of the callout while keeping normal
+   tap navigation. `touch-action: manipulation` also drops the 300ms
+   double-tap delay. */
+.tap-row {
+  -webkit-touch-callout: none;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+}
+
+/* The ticker pauses on hover; on touch that pause would stick after a tap. */
+@media (hover: none) {
+  .pause-on-hover:hover .animate-ticker {
+    animation-play-state: running;
+  }
+}

@@ -731,7 +731,7 @@ function ScoreCell({ game, leagueSlug }: { game: ScoreRowType; leagueSlug: strin
        The two team columns are minmax(0,1fr): they absorb slack evenly and
        truncate under pressure instead of pushing the row past the card edge,
        which fixed ch widths did at narrow masonry column widths. */
-    <div className="relative grid items-center gap-x-0.5 px-1.5 py-1.5 border-b border-border hover:bg-secondary/50 transition-colors text-[9px] font-mono leading-tight overflow-hidden [grid-template-columns:minmax(3.5ch,1fr)_auto_auto_auto_minmax(3.5ch,1fr)_1.9rem]">
+    <div className="tap-row relative grid items-center gap-x-0.5 px-1.5 py-1.5 border-b border-border hover:bg-secondary/50 transition-colors text-[9px] font-mono leading-tight overflow-hidden [grid-template-columns:minmax(3.5ch,1fr)_auto_auto_auto_minmax(3.5ch,1fr)_1.9rem]">
       {/* Stretched link: the row body opens the ESPN game page; team links sit above it */}
       {espnUrl && (
         <a
@@ -799,7 +799,7 @@ function NytList({ articles, showSection }: { articles: NyTimesArticle[]; showSe
           href={a.url}
           target="_blank"
           rel="noopener noreferrer"
-          className="flex items-center gap-1.5 px-2 py-0.5 border-b border-border last:border-0 hover:bg-secondary/50 transition-colors group"
+          className="tap-row flex items-center gap-1.5 px-2 py-0.5 border-b border-border last:border-0 hover:bg-secondary/50 transition-colors group"
         >
           {showSection && a.section && <HubCap label={a.section} />}
           <p className="text-[10px] font-semibold leading-tight line-clamp-2 group-hover:underline">
@@ -939,7 +939,7 @@ export default async function CommandCenter() {
         <div>
           {nytDigest.map(([sectionKey, article]) => (
             <a key={article.id} href={article.url} target="_blank" rel="noopener noreferrer"
-              className="flex items-center gap-1.5 px-2 py-0.5 border-b border-border last:border-0 hover:bg-secondary/50 transition-colors group">
+              className="tap-row flex items-center gap-1.5 px-2 py-0.5 border-b border-border last:border-0 hover:bg-secondary/50 transition-colors group">
               <HubCap label={sectionKey} />
               <p className="text-[10px] font-semibold leading-tight line-clamp-1 group-hover:underline">
                 {article.title}
@@ -958,7 +958,7 @@ export default async function CommandCenter() {
         <div>
           {nytMore.map((article) => (
             <a key={article.id} href={article.url} target="_blank" rel="noopener noreferrer"
-              className="flex items-center gap-1.5 px-2 py-0.5 border-b border-border last:border-0 hover:bg-secondary/50 transition-colors group">
+              className="tap-row flex items-center gap-1.5 px-2 py-0.5 border-b border-border last:border-0 hover:bg-secondary/50 transition-colors group">
               {article.section && <HubCap label={article.section} />}
               <span className="min-w-0 text-[10px] font-semibold leading-tight line-clamp-2 group-hover:underline">
                 {article.title}
@@ -1028,7 +1028,7 @@ export default async function CommandCenter() {
           {/* eslint-disable-next-line @typescript-eslint/no-explicit-any */}
           {marketNews.map((item: any) => (
             <a key={item.id} href={item.url} target="_blank" rel="noopener noreferrer"
-              className="flex items-center gap-1.5 px-2 py-0.5 border-b border-border last:border-0 hover:bg-secondary/50 transition-colors group">
+              className="tap-row flex items-center gap-1.5 px-2 py-0.5 border-b border-border last:border-0 hover:bg-secondary/50 transition-colors group">
               {/* Two stacked hub caps: category on top, source below */}
               <div className="flex flex-col gap-0.5 shrink-0 items-center">
                 {item.category && <HubCap label={item.category} />}
@@ -1140,7 +1140,7 @@ export default async function CommandCenter() {
         <div>
           {companyNews.map((item) => (
             <a key={item.id} href={item.url} target="_blank" rel="noopener noreferrer"
-              className="flex items-center gap-1.5 px-2 py-0.5 border-b border-border last:border-0 hover:bg-secondary/50 transition-colors group">
+              className="tap-row flex items-center gap-1.5 px-2 py-0.5 border-b border-border last:border-0 hover:bg-secondary/50 transition-colors group">
               {item.source && <HubCap label={item.source} />}
               <div className="min-w-0">
                 <p className="text-[10px] font-medium leading-tight line-clamp-2 group-hover:underline">
@@ -1180,7 +1180,7 @@ export default async function CommandCenter() {
               {/* eslint-disable-next-line @typescript-eslint/no-explicit-any */}
               {cryptoHeadlines.map((item: any) => (
                 <a key={item.id} href={item.url} target="_blank" rel="noopener noreferrer"
-                  className="flex items-center gap-1.5 px-2 py-0.5 border-b border-border last:border-0 hover:bg-secondary/50 transition-colors group">
+                  className="tap-row flex items-center gap-1.5 px-2 py-0.5 border-b border-border last:border-0 hover:bg-secondary/50 transition-colors group">
                   {item.source && <HubCap label={item.source} />}
                   <p className="text-[10px] font-medium leading-tight line-clamp-1 group-hover:underline">
                     {item.headline}
