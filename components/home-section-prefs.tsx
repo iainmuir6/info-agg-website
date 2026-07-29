@@ -70,7 +70,7 @@ export function HomeSectionPrefs({ initialOrder, initialHidden }: Props) {
 
   return (
     <div>
-      <div className="flex items-center justify-between px-4 py-2 border-b border-border">
+      <div className="flex items-center justify-between px-3 py-2 border-b border-border">
         <span className="text-[9px] font-mono text-muted-foreground">
           Order and visibility of Command Center sections
         </span>
@@ -90,7 +90,7 @@ export function HomeSectionPrefs({ initialOrder, initialHidden }: Props) {
         {order.map((key, i) => {
           const isHidden = hidden.has(key);
           return (
-            <div key={key} className="flex items-center gap-2 px-4 py-1.5">
+            <div key={key} className="flex items-center gap-2 px-3 py-1.5">
               <span className="text-[9px] font-mono text-muted-foreground w-5 shrink-0">{i + 1}.</span>
               <span className={`text-xs font-mono flex-1 ${isHidden ? "line-through text-muted-foreground" : ""}`}>
                 {sectionLabel(key)}

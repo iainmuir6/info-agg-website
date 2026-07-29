@@ -4,16 +4,33 @@ import { createClient } from "@/lib/supabase/server";
 import { isSuperAdmin } from "@/lib/rbac";
 import { UpdatePasswordForm } from "@/components/update-password-form";
 import { SignOutButton } from "@/components/sign-out-button";
-import { WatchlistStocks } from "@/components/watchlist-stocks";
-import { WatchlistLeagues } from "@/components/watchlist-leagues";
-import { FavoriteTeams, type FavoriteTeam } from "@/components/favorite-teams";
+import {
+  FavoritesPanel,
+  type FavoriteStock,
+  type FavoriteTeamRow,
+} from "@/components/favorites-panel";
 import { HomeSectionPrefs } from "@/components/home-section-prefs";
 import { EtlTriggerButton } from "@/components/etl-trigger";
 
-function SectionCard({ title, children }: { title: string; children: React.ReactNode }) {
+/** Matches the chrome the self-contained watchlist cards already render, so a
+ *  wrapped section and an unwrapped one are indistinguishable in the grid. */
+function SectionCard({
+  title,
+  accent,
+  className,
+  children,
+}: {
+  title: string;
+  accent: string;
+  className?: string;
+  children: React.ReactNode;
+}) {
   return (
-    <div className="border border-border mb-6">
-      <div className="px-4 py-2 border-b border-border">
+    <div className={`border border-border ${className ?? ""}`}>
+      <div
+        className="px-3 py-1.5 border-b border-border"
+        style={{ borderLeftColor: accent, borderLeftWidth: 3 }}
+      >
         <span className="text-[10px] font-mono tracking-widest uppercase font-bold">{title}</span>
       </div>
       {children}
@@ -43,17 +60,26 @@ export default async function ProfilePage() {
       })
     : "—";
 
-  const [watchlistStocksRes, allLeaguesRes, watchlistLeaguesRes, favoriteTeamsRes, homePrefsRes] =
+  // NOTE: `watchlist_leagues` is deliberately not read here. Its only reader
+  // was the "Tracked Leagues" toggle on this page — the Command Center gates
+  // sports cards on an in-season date check, not on user league prefs — so the
+  // control did nothing. Table and component are left in place; only the dead
+  // UI is gone.
+  const [watchlistStocksRes, favoriteTeamsRes, watchlistPodcastsRes, homePrefsRes] =
     await Promise.all([
       supabase
         .from("watchlist_stocks")
-        .select("id, stock_id, stocks(ticker, name, stock_quotes(current_price, percent_change, fetched_at))")
-        .eq("user_id", userId),
-      supabase.from("leagues").select("id, display_name, sport, league").eq("is_active", true),
-      supabase.from("watchlist_leagues").select("league_id").eq("user_id", userId),
+        .select("id, stock_id, stocks(ticker, name, stock_quotes(current_price, percent_change, quote_timestamp))")
+        .eq("user_id", userId)
+        .order("added_at", { ascending: true }),
       supabase
         .from("watchlist_teams")
         .select("id, team_name, leagues(league, display_name)")
+        .eq("user_id", userId)
+        .order("added_at", { ascending: true }),
+      supabase
+        .from("watchlist_podcasts")
+        .select("id, show_id, name, image_url")
         .eq("user_id", userId)
         .order("added_at", { ascending: true }),
       supabase
@@ -64,13 +90,12 @@ export default async function ProfilePage() {
     ]);
 
   /* eslint-disable @typescript-eslint/no-explicit-any */
-  const stocks = (watchlistStocksRes.data ?? []).map((row: any) => {
+  const stocks: FavoriteStock[] = (watchlistStocksRes.data ?? []).map((row: any) => {
     const quotes = (row.stocks?.stock_quotes ?? []).sort(
-      (a: any, b: any) => new Date(b.fetched_at).getTime() - new Date(a.fetched_at).getTime()
+      (a: any, b: any) => new Date(b.quote_timestamp).getTime() - new Date(a.quote_timestamp).getTime()
     );
     const latest = quotes[0];
     return {
-      id: row.id,
       stock_id: row.stock_id,
       ticker: row.stocks?.ticker ?? "",
       name: row.stocks?.name ?? "",
@@ -79,15 +104,7 @@ export default async function ProfilePage() {
     };
   });
 
-  const trackedLeagueIds = new Set((watchlistLeaguesRes.data ?? []).map((r: any) => r.league_id));
-  const leagues = (allLeaguesRes.data ?? []).map((l: any) => ({
-    id: l.id,
-    display_name: l.display_name,
-    sport: l.sport,
-    tracked: trackedLeagueIds.has(l.id),
-  }));
-
-  const favoriteTeams: FavoriteTeam[] = (favoriteTeamsRes.data ?? []).map((row: any) => ({
+  const favoriteTeams: FavoriteTeamRow[] = (favoriteTeamsRes.data ?? []).map((row: any) => ({
     id: row.id,
     team_name: row.team_name,
     league: row.leagues?.league ?? "",
@@ -96,85 +113,87 @@ export default async function ProfilePage() {
   /* eslint-enable @typescript-eslint/no-explicit-any */
 
   return (
-    <div className="max-w-3xl mx-auto px-3 sm:px-6 py-6 sm:py-8">
-      <div className="mb-6">
-        <h1 className="text-2xl font-black tracking-tighter" style={{ fontFamily: "Georgia, serif" }}>
-          PROFILE
-        </h1>
-        <div className="mt-1 border-t-4 border-double border-border" />
-      </div>
+    <div className="px-3 sm:px-6 py-3 sm:py-4 space-y-3">
+      {/* ── Masthead — account facts live inline here instead of in their own
+             card; three read-only key/value rows didn't earn a full panel ── */}
+      <div>
+        <div className="rule-double mb-2" />
+        <div className="flex items-center justify-between gap-x-6 gap-y-2 flex-wrap">
+          <div className="min-w-0">
+            <h1 className="text-xl font-black tracking-tight leading-none" style={{ fontFamily: "Georgia, serif" }}>
+              PROFILE
+            </h1>
+            <p className="text-xs font-mono text-muted-foreground mt-1 truncate">{email}</p>
+          </div>
 
-      <SectionCard title="Account">
-        <div className="px-4 py-4 flex flex-col gap-3">
-          <div className="flex items-center justify-between">
-            <span className="text-[10px] font-mono tracking-wider text-muted-foreground uppercase">Email</span>
-            <span className="text-xs font-mono">{email}</span>
-          </div>
-          <div className="flex items-center justify-between">
-            <span className="text-[10px] font-mono tracking-wider text-muted-foreground uppercase">Role</span>
-            <span
-              className="text-[10px] font-mono tracking-widest uppercase border px-2 py-0.5"
-              style={admin
-                ? { borderColor: "hsl(45 90% 52%)", color: "hsl(45 90% 52%)" }
-                : { borderColor: "hsl(220 90% 52%)", color: "hsl(220 90% 52%)" }
-              }
-            >
-              {admin ? "Super Admin" : "User"}
-            </span>
-          </div>
-          <div className="flex items-center justify-between">
-            <span className="text-[10px] font-mono tracking-wider text-muted-foreground uppercase">Member since</span>
-            <span className="text-xs font-mono">{memberSince}</span>
+          <div className="flex items-center gap-4 sm:gap-6 flex-wrap">
+            <div>
+              <p className="text-[8px] font-mono tracking-widest text-muted-foreground uppercase">Role</p>
+              <p
+                className="text-[10px] font-mono tracking-wider uppercase font-bold mt-0.5"
+                style={{ color: admin ? "hsl(45 90% 52%)" : "hsl(220 90% 52%)" }}
+              >
+                {admin ? "Super Admin" : "User"}
+              </p>
+            </div>
+            <div>
+              <p className="text-[8px] font-mono tracking-widest text-muted-foreground uppercase">Member since</p>
+              <p className="text-[10px] font-mono mt-0.5">{memberSince}</p>
+            </div>
+            <SignOutButton />
           </div>
         </div>
-      </SectionCard>
-
-      <SectionCard title="Command Center Layout">
-        <HomeSectionPrefs
-          initialOrder={homePrefsRes.data?.section_order ?? null}
-          initialHidden={homePrefsRes.data?.hidden_sections ?? []}
-        />
-      </SectionCard>
-
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
-        <WatchlistStocks initialStocks={stocks} />
-        <WatchlistLeagues initialLeagues={leagues} />
       </div>
 
-      <SectionCard title="Favorite Teams">
-        <FavoriteTeams initialTeams={favoriteTeams} />
-      </SectionCard>
+      {/* ── Two columns across the full viewport width: everything you act on
+             day to day on the left, the Command Center layout editor parked in
+             its own rail on the right. `items-start` keeps each panel at its
+             natural height rather than stretching to match its neighbour. ── */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-3 items-start">
+        <div className="lg:col-span-2 space-y-3">
+          <FavoritesPanel
+            initialStocks={stocks}
+            initialTeams={favoriteTeams}
+            initialPodcasts={watchlistPodcastsRes.data ?? []}
+          />
 
-      {admin && (
-        <SectionCard title="Admin">
-          <div className="px-4 py-3 flex items-center justify-between gap-4">
-            <span className="text-[11px] font-mono text-muted-foreground">
-              Queue an intraday data refresh (runs on GitHub Actions, ~1 min)
-            </span>
-            <EtlTriggerButton />
-          </div>
-          <div className="px-4 py-3 border-t border-border flex items-center justify-between gap-4">
-            <span className="text-[11px] font-mono text-muted-foreground">
-              Per-domain sync status and row counts
-            </span>
-            <Link
-              href="/dashboard"
-              className="text-[10px] font-mono tracking-widest uppercase border border-border px-3 py-1.5 hover:border-foreground transition-colors"
-            >
-              Dashboard →
-            </Link>
-          </div>
+          <SectionCard title="Change Password" accent="hsl(220 90% 52%)">
+            <div className="px-3 py-2.5">
+              <UpdatePasswordForm />
+            </div>
+          </SectionCard>
+
+          {admin && (
+            <SectionCard title="Admin" accent="hsl(45 90% 52%)">
+              <div className="grid grid-cols-1 sm:grid-cols-2 sm:divide-x divide-border">
+                <div className="px-3 py-2 flex items-center justify-between gap-3">
+                  <span className="text-[11px] font-mono text-muted-foreground">
+                    Queue an intraday data refresh (~1 min)
+                  </span>
+                  <EtlTriggerButton />
+                </div>
+                <div className="px-3 py-2 flex items-center justify-between gap-3 border-t border-border sm:border-t-0">
+                  <span className="text-[11px] font-mono text-muted-foreground">
+                    Per-domain sync status and row counts
+                  </span>
+                  <Link
+                    href="/dashboard"
+                    className="shrink-0 text-[10px] font-mono tracking-widest uppercase border border-border px-3 py-1.5 hover:border-foreground transition-colors"
+                  >
+                    Dashboard →
+                  </Link>
+                </div>
+              </div>
+            </SectionCard>
+          )}
+        </div>
+
+        <SectionCard title="Command Center Layout" accent="hsl(220 90% 52%)">
+          <HomeSectionPrefs
+            initialOrder={homePrefsRes.data?.section_order ?? null}
+            initialHidden={homePrefsRes.data?.hidden_sections ?? []}
+          />
         </SectionCard>
-      )}
-
-      <SectionCard title="Change Password">
-        <div className="px-4 py-4">
-          <UpdatePasswordForm />
-        </div>
-      </SectionCard>
-
-      <div className="flex justify-end">
-        <SignOutButton />
       </div>
     </div>
   );
