@@ -33,7 +33,14 @@ type PodcastResult = {
   imageUrl: string | null;
 };
 
-type AddMode = "stock" | "podcast";
+type TeamResult = {
+  leagueId: string;
+  league: string;
+  teamName: string;
+  logo: string | null;
+};
+
+type AddMode = "stock" | "team" | "podcast";
 
 /** Row-side accent is the only thing distinguishing the three kinds of
  *  favorite — they share one panel, so a per-kind header would just be three
@@ -77,9 +84,9 @@ function Row({
  * One panel for every kind of favorite — stocks, teams and podcasts — replacing
  * the three separate watchlist cards the profile page used to stack.
  *
- * Teams have no add-form here on purpose: they're favorited from a team page
- * (there's no useful "search all teams" endpoint), so this panel only removes
- * them.
+ * All three are searchable here. Teams come from `sports_standings`, which is
+ * the closest thing to a teams table: one row per team per league per season,
+ * carrying the same ESPN display name `watchlist_teams` keys on plus a logo.
  */
 export function FavoritesPanel({
   initialStocks,
@@ -97,6 +104,7 @@ export function FavoritesPanel({
   const [mode, setMode] = useState<AddMode>("stock");
   const [query, setQuery] = useState("");
   const [stockHits, setStockHits] = useState<{ id: string; ticker: string; name: string }[]>([]);
+  const [teamHits, setTeamHits] = useState<TeamResult[]>([]);
   const [podcastHits, setPodcastHits] = useState<PodcastResult[]>([]);
   const [searching, setSearching] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -105,6 +113,7 @@ export function FavoritesPanel({
   function resetSearch() {
     setQuery("");
     setStockHits([]);
+    setTeamHits([]);
     setPodcastHits([]);
   }
 
@@ -121,6 +130,44 @@ export function FavoritesPanel({
         .eq("is_active", true)
         .limit(6);
       setStockHits(data ?? []);
+      return;
+    }
+    if (mode === "team") {
+      if (value.trim().length < 2) return setTeamHits([]);
+      setSearching(true);
+      try {
+        const supabase = createClient();
+        // Over-fetch and dedupe client-side: a team has one standings row per
+        // season, and PostgREST has no DISTINCT ON.
+        const { data } = await supabase
+          .from("sports_standings")
+          .select("team_name, logo, league_id, season, leagues(league)")
+          .ilike("team_name", `%${value.trim()}%`)
+          .order("season", { ascending: false })
+          .limit(40);
+        const seen = new Set<string>();
+        const hits: TeamResult[] = [];
+        /* eslint-disable-next-line @typescript-eslint/no-explicit-any */
+        for (const row of (data ?? []) as any[]) {
+          const key = `${row.league_id}:${row.team_name}`;
+          // No league slug means no team page to link the favorite to, so the
+          // row would be unusable once added.
+          if (!row.team_name || !row.leagues?.league || seen.has(key)) continue;
+          seen.add(key);
+          hits.push({
+            leagueId: row.league_id,
+            league: row.leagues.league,
+            teamName: row.team_name,
+            logo: row.logo ?? null,
+          });
+          if (hits.length === 8) break;
+        }
+        setTeamHits(hits);
+      } catch {
+        setTeamHits([]);
+      } finally {
+        setSearching(false);
+      }
       return;
     }
     if (value.trim().length < 2) return setPodcastHits([]);
@@ -150,6 +197,39 @@ export function FavoritesPanel({
       setStocks((prev) => [
         ...prev,
         { stock_id: hit.id, ticker: hit.ticker, name: hit.name, current_price: null, percent_change: null },
+      ]);
+      resetSearch();
+    }
+    setBusy(false);
+  }
+
+  async function addTeam(hit: TeamResult) {
+    setBusy(true);
+    setError(null);
+    const supabase = createClient();
+    const { data: { user } } = await supabase.auth.getUser();
+    const { data: inserted, error: insertError } = await supabase
+      .from("watchlist_teams")
+      .insert({ user_id: user?.id, league_id: hit.leagueId, team_name: hit.teamName })
+      .select("id")
+      .single();
+    if (insertError) {
+      // 23505 = the (user_id, league_id, team_name) unique constraint: the team
+      // is already favorited, most likely starred from its own team page.
+      setError(
+        insertError.code === "23505"
+          ? `${hit.teamName} is already in your favorites.`
+          : insertError.message,
+      );
+    } else if (inserted) {
+      setTeams((prev) => [
+        ...prev,
+        {
+          id: inserted.id as string,
+          team_name: hit.teamName,
+          league: hit.league,
+          league_label: hit.league.toUpperCase(),
+        },
       ]);
       resetSearch();
     }
@@ -202,6 +282,7 @@ export function FavoritesPanel({
   const total = stocks.length + teams.length + podcasts.length;
   const addedShowIds = new Set(podcasts.map((p) => p.show_id));
   const addedStockIds = new Set(stocks.map((s) => s.stock_id));
+  const addedTeamKeys = new Set(teams.map((t) => `${t.league}:${t.team_name}`));
 
   return (
     <div className="border border-border">
@@ -223,7 +304,7 @@ export function FavoritesPanel({
 
       {total === 0 ? (
         <p className="px-3 py-4 text-[11px] font-mono text-muted-foreground">
-          Nothing favorited yet — add a stock or podcast below, or hit ☆ on any team page.
+          Nothing favorited yet — search for a stock, team or podcast below.
         </p>
       ) : (
         <div className="divide-y divide-border">
@@ -288,12 +369,11 @@ export function FavoritesPanel({
         </div>
       )}
 
-      {/* Add row — one search box, switched between the two kinds that have a
-          searchable catalogue */}
+      {/* Add row — one search box, switched between the three kinds */}
       <div className="px-3 py-2 border-t border-border relative">
         <div className="flex items-center gap-2">
           <div className="flex items-center gap-0.5 shrink-0">
-            {(["stock", "podcast"] as const).map((m) => (
+            {(["stock", "team", "podcast"] as const).map((m) => (
               <button
                 key={m}
                 onClick={() => { setMode(m); resetSearch(); }}
@@ -309,7 +389,9 @@ export function FavoritesPanel({
             type="text"
             value={query}
             onChange={(e) => handleSearch(e.target.value)}
-            placeholder={mode === "stock" ? "Add ticker…" : "Search podcasts…"}
+            placeholder={
+              mode === "stock" ? "Add ticker…" : mode === "team" ? "Search teams…" : "Search podcasts…"
+            }
             className="flex-1 min-w-0 text-[11px] font-mono bg-transparent border border-border px-2 py-1 outline-none focus:border-foreground placeholder:text-muted-foreground"
           />
         </div>
@@ -329,6 +411,34 @@ export function FavoritesPanel({
                 >
                   <span className="text-[11px] font-mono font-bold">{s.ticker}</span>
                   <span className="text-[10px] font-mono text-muted-foreground truncate">{s.name}</span>
+                  {added && <span className="text-[9px] font-mono text-muted-foreground ml-auto shrink-0">added</span>}
+                </button>
+              );
+            })}
+          </div>
+        )}
+
+        {mode === "team" && teamHits.length > 0 && (
+          <div className="absolute left-3 right-3 top-full z-10 border border-border bg-background divide-y divide-border shadow-sm max-h-64 overflow-y-auto">
+            {teamHits.map((t) => {
+              const added = addedTeamKeys.has(`${t.league}:${t.teamName}`);
+              return (
+                <button
+                  key={`${t.leagueId}-${t.teamName}`}
+                  disabled={busy || added}
+                  onClick={() => addTeam(t)}
+                  className="w-full text-left px-3 py-1.5 flex items-center gap-2 hover:bg-muted transition-colors disabled:opacity-50"
+                >
+                  {t.logo ? (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img src={t.logo} alt="" className="w-4 h-4 shrink-0 object-contain" />
+                  ) : (
+                    <span className="w-4 shrink-0" />
+                  )}
+                  <span className="text-[9px] font-mono uppercase tracking-wider text-muted-foreground w-10 shrink-0">
+                    {t.league.toUpperCase()}
+                  </span>
+                  <span className="text-[11px] font-mono truncate">{t.teamName}</span>
                   {added && <span className="text-[9px] font-mono text-muted-foreground ml-auto shrink-0">added</span>}
                 </button>
               );

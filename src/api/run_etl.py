@@ -537,9 +537,20 @@ def run_full_etl(
         run_status = 'success'
     results['status'] = run_status
 
+    # Persist per-domain outcome alongside the counters — the admin dashboard
+    # reads this row and cannot otherwise tell OK from SKIP from FAIL.
+    def _domain_payload(r: Dict[str, Any]) -> Dict[str, Any]:
+        payload = dict(r.get('stats') or {})
+        if r.get('error'):
+            payload['error'] = r['error']
+        payload['ok'] = bool(r.get('success'))
+        if r.get('skipped'):
+            payload['skipped'] = True
+        return payload
+
     finish_etl_run(
         run_supabase, run_id, run_status,
-        stats={d: r.get('stats') or {'error': r.get('error')} for d, r in active.items()},
+        stats={d: _domain_payload(r) for d, r in active.items()},
         errors=all_errors,
         duration_seconds=duration,
         cleanup=cleanup_report,
