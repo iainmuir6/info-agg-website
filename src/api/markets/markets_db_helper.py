@@ -22,6 +22,11 @@ _HERE = os.path.dirname(os.path.abspath(__file__))
 if _HERE not in sys.path:
     sys.path.insert(0, _HERE)
 
+_PARENT = os.path.dirname(_HERE)
+if _PARENT not in sys.path:
+    sys.path.insert(0, _PARENT)
+from etl_lib import chunked_upsert, db_call
+
 try:
     from .finnhub import (
         fetch_stock_quote,
@@ -60,12 +65,14 @@ except ImportError:
 
 try:
     from .alpha_vantage import (
+        AVQuotaExhausted,
         fetch_etf_holdings_av,
         fetch_news_sentiment,
         get_alphavantage_api_keys,
     )
 except ImportError:
     from alpha_vantage import (
+        AVQuotaExhausted,
         fetch_etf_holdings_av,
         fetch_news_sentiment,
         get_alphavantage_api_keys,
@@ -243,26 +250,17 @@ def build_stock_quote_row(stock_id: str, quote_data: Dict[str, Any]) -> Dict[str
     }
 
 
-def upsert_daily_stock_quotes_batch(supabase: Client, rows: List[Dict[str, Any]]) -> int:
+def upsert_daily_stock_quotes_batch(
+    supabase: Client, rows: List[Dict[str, Any]], errors: Optional[List[str]] = None
+) -> int:
     """
     Upsert many daily quote rows (e.g. after parallel fetch with persist=False).
     Chunks to respect PostgREST payload limits.
     """
-    if not rows:
-        return 0
-    inserted = 0
-    batch_size = 100
-    try:
-        for i in range(0, len(rows), batch_size):
-            batch = rows[i : i + batch_size]
-            supabase.table('stock_quotes').upsert(
-                batch, on_conflict='stock_id,quote_timestamp'
-            ).execute()
-            inserted += len(batch)
-        return inserted
-    except Exception as e:
-        print(f"Error batch-upserting daily stock quotes: {e}")
-        return inserted
+    return chunked_upsert(
+        supabase, 'stock_quotes', rows,
+        on_conflict='stock_id,quote_timestamp', errors=errors, chunk_size=100,
+    )
 
 
 def insert_stock_quotes_batch(supabase: Client, stock_id: str, quotes: List[Dict[str, Any]]) -> int:
@@ -298,20 +296,10 @@ def insert_stock_quotes_batch(supabase: Client, stock_id: str, quotes: List[Dict
             'quote_timestamp': quote_timestamp
         })
 
-    try:
-        inserted = 0
-        batch_size = 100
-        for i in range(0, len(batch_data), batch_size):
-            batch = batch_data[i:i + batch_size]
-            response = supabase.table('stock_quotes').upsert(
-                batch,
-                on_conflict='stock_id,quote_timestamp'
-            ).execute()
-            inserted += len(batch)
-        return inserted
-    except Exception as e:
-        print(f"Error batch-inserting quotes for stock_id={stock_id}: {e}")
-        return 0
+    return chunked_upsert(
+        supabase, 'stock_quotes', batch_data,
+        on_conflict='stock_id,quote_timestamp', chunk_size=100,
+    )
 
 
 def insert_company_news(supabase: Client, stock_id: str, articles: List[Dict[str, Any]]) -> int:
@@ -347,15 +335,12 @@ def insert_company_news(supabase: Client, stock_id: str, articles: List[Dict[str
     if not records:
         return 0
 
-    try:
-        response = supabase.table('company_news').upsert(records, on_conflict='url').execute()
-        return len(response.data) if response.data else 0
-    except Exception as e:
-        print(f"Error batch-upserting company news: {e}")
-        return 0
+    return chunked_upsert(supabase, 'company_news', records, on_conflict='url')
 
 
-def insert_market_news(supabase: Client, articles: List[Dict[str, Any]]) -> int:
+def insert_market_news(
+    supabase: Client, articles: List[Dict[str, Any]], errors: Optional[List[str]] = None
+) -> int:
     """
     Batch-upsert market news articles (single DB round-trip).
 
@@ -387,12 +372,7 @@ def insert_market_news(supabase: Client, articles: List[Dict[str, Any]]) -> int:
     if not records:
         return 0
 
-    try:
-        response = supabase.table('market_news').upsert(records, on_conflict='url').execute()
-        return len(response.data) if response.data else 0
-    except Exception as e:
-        print(f"Error batch-upserting market news: {e}")
-        return 0
+    return chunked_upsert(supabase, 'market_news', records, on_conflict='url', errors=errors)
 
 
 def _shape_quote_row(stock_id: str, quote: Dict[str, Any]) -> Dict[str, Any]:
@@ -594,7 +574,7 @@ def sync_market_news(supabase: Client, categories: List[str] = ['general'], api_
             for a in all_articles
             if a.get('url') and not (a['url'] in seen_urls or seen_urls.add(a['url']))
         ]
-        stats['articles_inserted'] = insert_market_news(supabase, deduped)
+        stats['articles_inserted'] = insert_market_news(supabase, deduped, errors=stats['errors'])
 
     return stats
 
@@ -626,7 +606,10 @@ def insert_stub_stocks(supabase: Client, tickers: List[str], asset_type: str = '
 
     # Fetch IDs for all requested tickers
     try:
-        resp = supabase.table('stocks').select('id,ticker').in_('ticker', unique).execute()
+        resp = db_call(
+            lambda: supabase.table('stocks').select('id,ticker').in_('ticker', unique).execute(),
+            'stocks id prefetch',
+        )
         return {row['ticker']: row['id'] for row in (resp.data or [])}
     except Exception as e:
         print(f"Error fetching stock IDs after stub insert: {e}")
@@ -663,20 +646,10 @@ def upsert_etf_holdings(supabase: Client, etf_stock_id: str, holdings: List[Dict
     if not batch_data:
         return 0
 
-    try:
-        upserted = 0
-        batch_size = 100
-        for i in range(0, len(batch_data), batch_size):
-            batch = batch_data[i:i + batch_size]
-            supabase.table('etf_holdings').upsert(
-                batch,
-                on_conflict='etf_stock_id,asset_stock_id,as_of_date'
-            ).execute()
-            upserted += len(batch)
-        return upserted
-    except Exception as e:
-        print(f"Error upserting ETF holdings for stock_id={etf_stock_id}: {e}")
-        return 0
+    return chunked_upsert(
+        supabase, 'etf_holdings', batch_data,
+        on_conflict='etf_stock_id,asset_stock_id,as_of_date', chunk_size=100,
+    )
 
 
 def upsert_etf_sectors(supabase: Client, etf_stock_id: str, sectors: List[Dict[str, Any]]) -> int:
@@ -703,19 +676,10 @@ def upsert_etf_sectors(supabase: Client, etf_stock_id: str, sectors: List[Dict[s
     if not batch_data:
         return 0
 
-    try:
-        upserted = 0
-        batch_size = 100
-        for i in range(0, len(batch_data), batch_size):
-            supabase.table('etf_sectors').upsert(
-                batch_data[i:i + batch_size],
-                on_conflict='etf_stock_id,sector,as_of_date'
-            ).execute()
-            upserted += len(batch_data[i:i + batch_size])
-        return upserted
-    except Exception as e:
-        print(f"Error upserting ETF sectors for stock_id={etf_stock_id}: {e}")
-        return 0
+    return chunked_upsert(
+        supabase, 'etf_sectors', batch_data,
+        on_conflict='etf_stock_id,sector,as_of_date', chunk_size=100,
+    )
 
 
 def sync_fmp_data(
@@ -940,7 +904,9 @@ def sync_etfdb_data(supabase: Client, etf_tickers: List[str]) -> Dict[str, Any]:
     return stats
 
 
-def insert_news_sentiment(supabase: Client, articles: List[Dict[str, Any]]) -> int:
+def insert_news_sentiment(
+    supabase: Client, articles: List[Dict[str, Any]], errors: Optional[List[str]] = None
+) -> int:
     """
     Upsert AV news sentiment articles into info_agg.news_sentiment.
 
@@ -1003,20 +969,10 @@ def insert_news_sentiment(supabase: Client, articles: List[Dict[str, Any]]) -> i
     if not batch_data:
         return 0
 
-    try:
-        upserted = 0
-        batch_size = 100
-        for i in range(0, len(batch_data), batch_size):
-            batch = batch_data[i:i + batch_size]
-            supabase.table('news_sentiment').upsert(
-                batch,
-                on_conflict='url'
-            ).execute()
-            upserted += len(batch)
-        return upserted
-    except Exception as e:
-        print(f"Error upserting news sentiment articles: {e}")
-        return 0
+    return chunked_upsert(
+        supabase, 'news_sentiment', batch_data,
+        on_conflict='url', errors=errors, chunk_size=100,
+    )
 
 
 def sync_news_sentiment(
@@ -1064,9 +1020,17 @@ def sync_news_sentiment(
             try:
                 articles = fetch_news_sentiment(api_key=key, tickers=tickers, topic=topic)
                 collected.extend(articles)
+            except AVQuotaExhausted as e:
+                # This key is done for the UTC day. Report once and stop rather
+                # than spending a request per remaining topic to be told again.
+                remaining = assigned_topics[assigned_topics.index(topic):]
+                stats['errors'].append(
+                    f"{e} — skipped {len(remaining)} topic(s): {', '.join(remaining)}"
+                )
+                break
             except Exception as e:
                 stats['errors'].append(f"Sentiment topic {topic}: {e}")
-            
+
         return collected
 
     all_articles: List[Dict[str, Any]] = []
@@ -1087,7 +1051,7 @@ def sync_news_sentiment(
     if all_articles:
         seen: set = set()
         deduped = [a for a in all_articles if a.get('url') and not (a['url'] in seen or seen.add(a['url']))]
-        stats['articles_upserted'] = insert_news_sentiment(supabase, deduped)
+        stats['articles_upserted'] = insert_news_sentiment(supabase, deduped, errors=stats['errors'])
 
     return stats
 
@@ -1151,7 +1115,9 @@ def backfill_missing_profiles(supabase: Client, batch_size: int = 50) -> Dict[st
     return stats
 
 
-def upsert_economic_indicators(supabase: Client, rows: List[Dict[str, Any]]) -> int:
+def upsert_economic_indicators(
+    supabase: Client, rows: List[Dict[str, Any]], errors: Optional[List[str]] = None
+) -> int:
     """
     Batch upsert rows into info_agg.economic_indicators on (indicator_name, date).
 
@@ -1166,20 +1132,10 @@ def upsert_economic_indicators(supabase: Client, rows: List[Dict[str, Any]]) -> 
     if not clean:
         return 0
 
-    try:
-        upserted = 0
-        batch_size = 200
-        for i in range(0, len(clean), batch_size):
-            batch = clean[i:i + batch_size]
-            supabase.table('economic_indicators').upsert(
-                batch,
-                on_conflict='indicator_name,date'
-            ).execute()
-            upserted += len(batch)
-        return upserted
-    except Exception as e:
-        print(f"Error upserting economic indicators: {e}")
-        return 0
+    return chunked_upsert(
+        supabase, 'economic_indicators', clean,
+        on_conflict='indicator_name,date', errors=errors, chunk_size=200,
+    )
 
 
 def sync_economic_indicators(supabase: Client) -> Dict[str, Any]:
@@ -1216,7 +1172,7 @@ def sync_economic_indicators(supabase: Client) -> Dict[str, Any]:
         stats['indicators_processed'] += 1
     except RuntimeError as e:
         stats['errors'].append(str(e))
-        stats['rows_upserted'] += upsert_economic_indicators(supabase, all_rows)
+        stats['rows_upserted'] += upsert_economic_indicators(supabase, all_rows, errors=stats['errors'])
         return stats
     except Exception as e:
         stats['errors'].append(f"Error fetching treasury rates: {e}")
@@ -1232,7 +1188,7 @@ def sync_economic_indicators(supabase: Client) -> Dict[str, Any]:
         except Exception as e:
             stats['errors'].append(f"Error fetching {name}: {e}")
 
-    stats['rows_upserted'] += upsert_economic_indicators(supabase, all_rows)
+    stats['rows_upserted'] += upsert_economic_indicators(supabase, all_rows, errors=stats['errors'])
     return stats
 
 

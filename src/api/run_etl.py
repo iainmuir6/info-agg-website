@@ -24,6 +24,8 @@ if _API_DIR not in sys.path:
 
 from etl_lib import (
     get_logger,
+    chunked_upsert,
+    db_call,
     preflight_env,
     distinct_env_values,
     start_etl_run,
@@ -167,7 +169,10 @@ def run_markets_etl(
         }
 
         # Pre-load all stock IDs in one query so threads make zero DB calls
-        stock_rows = supabase.table('stocks').select('id,ticker').in_('ticker', watchlist).execute()
+        stock_rows = db_call(
+            lambda: supabase.table('stocks').select('id,ticker').in_('ticker', watchlist).execute(),
+            'stocks prefetch',
+        )
         stock_id_map: Dict[str, str] = {r['ticker']: r['id'] for r in (stock_rows.data or [])}
 
         def _fetch_ticker(ticker: str) -> tuple:
@@ -207,7 +212,9 @@ def run_markets_etl(
 
         # Phase 2: chunked batch upsert for all quotes after all threads complete
         if all_pending_quotes:
-            inserted = upsert_daily_stock_quotes_batch(supabase, all_pending_quotes)
+            inserted = upsert_daily_stock_quotes_batch(
+                supabase, all_pending_quotes, errors=total_stats['errors']
+            )
             total_stats['quotes_inserted'] = inserted
             if inserted < len(all_pending_quotes):
                 total_stats['errors'].append(
@@ -239,18 +246,11 @@ def run_markets_etl(
                     news_for_db.append(r)
             seen: set = set()
             deduped = [r for r in news_for_db if not (r['url'] in seen or seen.add(r['url']))]
-            # Chunked upsert so one rejected payload can't lose the whole batch
-            inserted = 0
-            for i in range(0, len(deduped), 100):
-                chunk = deduped[i:i + 100]
-                try:
-                    supabase.table('company_news').upsert(chunk, on_conflict='url').execute()
-                    inserted += len(chunk)
-                except Exception as e:
-                    total_stats['errors'].append(
-                        f"Company news chunk {i}-{i + len(chunk)} failed: {e}"
-                    )
-            total_stats['news_inserted'] = inserted
+            # Chunked + bisecting upsert: a rejected row costs that row, not the batch
+            total_stats['news_inserted'] = chunked_upsert(
+                supabase, 'company_news', deduped,
+                on_conflict='url', errors=total_stats['errors'], chunk_size=100,
+            )
 
         # Run market-news, sentiment, and econ-indicators in parallel —
         # each hits a different API (Finnhub / AV / FMP) so there is no contention.

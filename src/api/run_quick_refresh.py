@@ -114,7 +114,9 @@ def run_quick_markets_etl(supabase, include_fmp_quotes: bool) -> Dict[str, Any]:
             pending_quotes.extend(stats.get('pending_quotes', []))
 
     if pending_quotes:
-        inserted = upsert_daily_stock_quotes_batch(supabase, pending_quotes)
+        inserted = upsert_daily_stock_quotes_batch(
+            supabase, pending_quotes, errors=total_stats['errors']
+        )
         total_stats['quotes_inserted'] = inserted
         if inserted < len(pending_quotes):
             total_stats['errors'].append(

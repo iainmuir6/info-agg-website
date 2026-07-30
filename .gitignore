@@ -50,3 +50,6 @@ next-env.d.ts
 __pycache__/
 *.pyc
 *.pyo
+
+# Local ETL run reports (CI uploads its own as an artifact)
+etl-report.json

@@ -22,6 +22,11 @@ _HERE = os.path.dirname(os.path.abspath(__file__))
 if _HERE not in sys.path:
     sys.path.insert(0, _HERE)
 
+_PARENT = os.path.dirname(_HERE)
+if _PARENT not in sys.path:
+    sys.path.insert(0, _PARENT)
+from etl_lib import chunked_upsert
+
 try:
     from .nyt import (
         fetch_nyt_top_stories,
@@ -83,7 +88,12 @@ def _extract_nyt_popular_image(article: Dict[str, Any]) -> Optional[str]:
     return None
 
 
-def insert_nyt_articles(supabase: Client, articles: List[Dict[str, Any]], source_type: str = 'top_stories') -> int:
+def insert_nyt_articles(
+    supabase: Client,
+    articles: List[Dict[str, Any]],
+    source_type: str = 'top_stories',
+    errors: Optional[List[str]] = None,
+) -> int:
     """
     Batch-upsert NYT article records into the news_articles table (single DB round-trip).
 
@@ -135,12 +145,9 @@ def insert_nyt_articles(supabase: Client, articles: List[Dict[str, Any]], source
             seen.add(r['url'])
             deduped.append(r)
 
-    try:
-        response = supabase.table('news_articles').upsert(deduped, on_conflict='url').execute()
-        return len(response.data) if response.data else 0
-    except Exception as e:
-        print(f"Error batch-upserting NYT articles: {e}")
-        return 0
+    return chunked_upsert(
+        supabase, 'news_articles', deduped, on_conflict='url', errors=errors
+    )
 
 
 def get_nyt_api_keys() -> List[str]:
@@ -190,6 +197,8 @@ def sync_nyt_data(supabase: Client, sections: List[str]) -> Dict[str, Any]:
         key_index = min(idx // 5, len(keys) - 1)
         sections_by_key_index[key_index].append(section)
 
+    section_errors: List[str] = []
+
     def _worker(api_key: str, assigned_sections: List[str]) -> List[Dict[str, Any]]:
         collected_top: List[Dict[str, Any]] = []
         # Worker uses its starting key, but if that key gets disabled due to 429
@@ -203,7 +212,12 @@ def sync_nyt_data(supabase: Client, sections: List[str]) -> Dict[str, Any]:
                     break
                 current_key = active_keys[0]
 
-            result = fetch_nyt_top_stories(section=section, api_key=current_key)
+            # One bad section must not abandon this key's remaining sections.
+            try:
+                result = fetch_nyt_top_stories(section=section, api_key=current_key)
+            except Exception as e:
+                section_errors.append(f"NYT section {section} failed: {e}")
+                continue
             if result and result.get('articles'):
                 collected_top.extend(result['articles'])
         return collected_top
@@ -220,6 +234,8 @@ def sync_nyt_data(supabase: Client, sections: List[str]) -> Dict[str, Any]:
                 top_stories_articles.extend(future.result())
             except Exception as e:
                 stats['errors'].append(f"NYT worker key_index={key_index} failed: {e}")
+
+    stats['errors'].extend(section_errors)
 
     # Phase 2: Fetch most-popular AFTER all workers complete.
     # most-popular is the (len(sections))-th call overall (after top-story calls).
@@ -253,9 +269,13 @@ def sync_nyt_data(supabase: Client, sections: List[str]) -> Dict[str, Any]:
 
     # Phase 2: Single batch upsert per article type.
     if top_stories_articles:
-        stats['articles_inserted'] += insert_nyt_articles(supabase, top_stories_articles, source_type='top_stories')
+        stats['articles_inserted'] += insert_nyt_articles(
+            supabase, top_stories_articles, source_type='top_stories', errors=stats['errors']
+        )
     if popular_articles:
-        stats['articles_inserted'] += insert_nyt_articles(supabase, popular_articles, source_type='most_popular')
+        stats['articles_inserted'] += insert_nyt_articles(
+            supabase, popular_articles, source_type='most_popular', errors=stats['errors']
+        )
 
     return stats
 

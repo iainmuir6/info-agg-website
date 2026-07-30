@@ -88,6 +88,103 @@ class MinInterval:
             time.sleep(delay)
 
 
+# ── Database resilience ──────────────────────────────────────────────────────
+# Supabase/PostgREST calls go through httpx with no retry policy of its own, so
+# a single dropped connection or 5xx would otherwise lose a whole batch — and,
+# because domains judge success on rows written, fail the domain.
+
+_db_log = get_logger('db')
+
+DB_ATTEMPTS = 3
+DB_BACKOFF_S = 0.4
+UPSERT_CHUNK = 250
+
+
+def db_call(fn: Any, what: str, attempts: int = DB_ATTEMPTS) -> Any:
+    """Run a Supabase call, retrying transient failures with backoff.
+
+    Raises the last exception if every attempt fails — callers decide whether
+    that is fatal or just an entry in their error list.
+    """
+    last: Optional[Exception] = None
+    for attempt in range(1, attempts + 1):
+        try:
+            return fn()
+        except Exception as e:
+            last = e
+            if attempt < attempts:
+                _db_log.warning('%s failed (attempt %d/%d): %s', what, attempt, attempts, e)
+                time.sleep(DB_BACKOFF_S * attempt)
+    raise last  # type: ignore[misc]
+
+
+def chunked_upsert(
+    supabase: Any,
+    table: str,
+    records: List[Dict[str, Any]],
+    on_conflict: Optional[str] = None,
+    errors: Optional[List[str]] = None,
+    chunk_size: int = UPSERT_CHUNK,
+) -> int:
+    """Upsert records in chunks, salvaging everything that can be written.
+
+    A chunk that fails is retried, then split in half and each half retried,
+    recursing down to single rows. One malformed row therefore costs that row
+    instead of the whole day's data for the table. Returns the number of rows
+    written; failures are appended to ``errors`` (bounded to keep the etl_runs
+    payload small) rather than raised.
+    """
+    if not records:
+        return 0
+
+    def _write(batch: List[Dict[str, Any]], attempts: int) -> int:
+        def _exec():
+            q = supabase.table(table).upsert(batch, on_conflict=on_conflict) if on_conflict \
+                else supabase.table(table).upsert(batch)
+            return q.execute()
+        resp = db_call(_exec, f'{table} upsert ({len(batch)} rows)', attempts=attempts)
+        # PostgREST may return no representation; assume the batch landed.
+        return len(resp.data) if getattr(resp, 'data', None) else len(batch)
+
+    def _note(msg: str) -> None:
+        _db_log.warning(msg)
+        if errors is not None and len(errors) < 100:
+            errors.append(msg)
+
+    def _bisect(batch: List[Dict[str, Any]]) -> int:
+        """Salvage what a failed batch can still write.
+
+        Sub-batches get a single attempt, not the full retry ladder: the parent
+        already exhausted its retries, so the error is deterministic and further
+        backoff would only burn the run's time budget. A row that fails alone
+        gets one last retried attempt before being dropped.
+        """
+        try:
+            return _write(batch, attempts=1)
+        except Exception as e:
+            if len(batch) == 1:
+                try:
+                    return _write(batch, attempts=DB_ATTEMPTS)
+                except Exception as final:
+                    _note(f'{table}: dropped 1 unwritable row: {str(final)[:160]}')
+                    return 0
+            mid = len(batch) // 2
+            _db_log.warning('%s: batch of %d failed, bisecting: %s', table, len(batch), str(e)[:160])
+            return _bisect(batch[:mid]) + _bisect(batch[mid:])
+
+    written = 0
+    for i in range(0, len(records), chunk_size):
+        chunk = records[i:i + chunk_size]
+        try:
+            written += _write(chunk, attempts=DB_ATTEMPTS)
+        except Exception as e:
+            _db_log.warning('%s: chunk of %d failed, bisecting: %s', table, len(chunk), str(e)[:160])
+            written += _bisect(chunk)
+    if written < len(records):
+        _note(f'{table}: wrote {written}/{len(records)} rows')
+    return written
+
+
 # ── Environment preflight ────────────────────────────────────────────────────
 
 def distinct_env_values(*names: str) -> List[str]:
@@ -123,7 +220,7 @@ def preflight_env() -> Tuple[List[str], List[str]]:
     if len(av) < 2:
         warnings_.append(
             f'Only {len(av)} distinct Alpha Vantage key(s) — 10 sentiment topics on <2 keys '
-            'trips the 5/min limiter into a ~60s sleep; sentiment should be skipped'
+            'exhausts the 25/key/day free-tier quota; later topics will return no data'
         )
 
     nyt = distinct_env_values('NYT_API_KEY_1', 'NYT_API_KEY_2', 'NYT_API_KEY_3')

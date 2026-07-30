@@ -35,6 +35,26 @@ _AV_INIT_LOCK = threading.Lock()
 _AV_RATE_LIMIT = 5     # calls per window
 _AV_WINDOW     = 60.0  # seconds
 
+
+class AVQuotaExhausted(RuntimeError):
+    """A key has spent its 25-request daily allowance. Retrying costs a request
+    and returns the same answer, so callers should stop using that key today."""
+
+
+_AV_EXHAUSTED: set = set()
+_AV_EXHAUSTED_LOCK = threading.Lock()
+
+
+def mark_av_key_exhausted(api_key: str) -> None:
+    with _AV_EXHAUSTED_LOCK:
+        _AV_EXHAUSTED.add(api_key)
+
+
+def is_av_key_exhausted(api_key: str) -> bool:
+    with _AV_EXHAUSTED_LOCK:
+        return api_key in _AV_EXHAUSTED
+
+
 # AV also throttles bursts by IP, not just by key, answering with an
 # "Information: … 1 request per second" body instead of data. Pace every
 # request at least this far apart across all keys.
@@ -460,6 +480,9 @@ def fetch_news_sentiment(
             lists outright with "Invalid inputs", hence the hard cap below.
         topic: Optional single topic filter (e.g. 'earnings', 'technology').
     """
+    if is_av_key_exhausted(api_key):
+        raise AVQuotaExhausted(f"AV daily quota already exhausted for key …{api_key[-4:]}")
+
     if tickers and len(tickers) > MAX_SENTIMENT_TICKERS:
         raise ValueError(
             f"NEWS_SENTIMENT ANDs tickers; got {len(tickers)} "
@@ -484,6 +507,12 @@ def fetch_news_sentiment(
         # silently returning [] made "sentiment=0" look like a healthy run.
         if 'Note' in data or 'Information' in data:
             msg = (data.get('Note') or data.get('Information') or '')[:120]
+            if 'per day' in msg:
+                # Daily quota is spent for the rest of the UTC day. Remember it
+                # so the remaining topics skip this key instead of burning a
+                # request each to be told the same thing.
+                mark_av_key_exhausted(api_key)
+                raise AVQuotaExhausted(f"AV daily quota exhausted for key …{api_key[-4:]}")
             raise RuntimeError(f"AV rate/quota response for topic {topic}: {msg}")
 
         if 'Error Message' in data:

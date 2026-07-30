@@ -9,7 +9,7 @@ from typing import Dict, List, Optional, Any
 from supabase import create_client, Client
 from supabase import ClientOptions
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import time
 import sys
 import os
@@ -25,6 +25,11 @@ try:
     from .espn import SPORT_CONFIGS, fetch_espn_news, fetch_espn_scores, fetch_espn_standings
 except ImportError:
     from espn import SPORT_CONFIGS, fetch_espn_news, fetch_espn_scores, fetch_espn_standings
+
+_PARENT = os.path.dirname(_HERE)
+if _PARENT not in sys.path:
+    sys.path.insert(0, _PARENT)
+from etl_lib import chunked_upsert, db_call
 
 
 def get_supabase_client() -> Client:
@@ -88,14 +93,9 @@ def _upsert_sports_news_records(
 ) -> int:
     if not records:
         return 0
-    try:
-        response = supabase.table('sports_news').upsert(records, on_conflict='url').execute()
-        return len(response.data) if response.data else 0
-    except Exception as e:
-        print(f"Error batch-upserting sports news: {e}")
-        if errors is not None:
-            errors.append(f"sports_news upsert failed ({len(records)} records): {e}")
-        return 0
+    return chunked_upsert(
+        supabase, 'sports_news', records, on_conflict='url', errors=errors
+    )
 
 
 def insert_news_articles(supabase: Client, league_id: str, articles: List[Dict[str, Any]]) -> int:
@@ -158,16 +158,10 @@ def _upsert_sports_score_records(
         if k not in seen:
             seen.add(k)
             deduped.append(r)
-    try:
-        response = supabase.table('sports_scores').upsert(
-            deduped, on_conflict='league_id,event_id'
-        ).execute()
-        return len(response.data) if response.data else 0
-    except Exception as e:
-        print(f"Error batch-upserting sports scores: {e}")
-        if errors is not None:
-            errors.append(f"sports_scores upsert failed ({len(deduped)} records): {e}")
-        return 0
+    return chunked_upsert(
+        supabase, 'sports_scores', deduped,
+        on_conflict='league_id,event_id', errors=errors,
+    )
 
 
 def insert_scores(supabase: Client, league_id: str, games: List[Dict[str, Any]]) -> int:
@@ -211,7 +205,10 @@ def sync_all_sports_data(
 
     # Prefetch all league IDs in one query — avoids N sequential DB reads in the hot loop
     try:
-        resp = supabase.table('leagues').select('id,sport,league').execute()
+        resp = db_call(
+            lambda: supabase.table('leagues').select('id,sport,league').execute(),
+            'leagues prefetch',
+        )
         league_id_map = {(r['sport'], r['league']): r['id'] for r in (resp.data or [])}
     except Exception as e:
         stats['errors'].append(f"Failed to prefetch league IDs: {e}")
@@ -281,7 +278,10 @@ def sync_season_schedules(
     }
 
     try:
-        resp = supabase.table('leagues').select('id,sport,league').execute()
+        resp = db_call(
+            lambda: supabase.table('leagues').select('id,sport,league').execute(),
+            'leagues prefetch',
+        )
         league_rows = resp.data or []
     except Exception as e:
         stats['errors'].append(f"Failed to load leagues: {e}")
@@ -357,23 +357,25 @@ def _standings_records(league_id: str, rows: List[Dict[str, Any]]) -> List[Dict[
             'points': row.get('points'),
             'rank': row.get('rank'),
             'season': row.get('season'),
+            # Stamped on every upsert — without it an existing row keeps the
+            # fetched_at from its first insert and looks permanently stale.
+            'fetched_at': datetime.now(timezone.utc).isoformat(),
         })
     return records
 
 
-def insert_standings(supabase: Client, league_id: str, rows: List[Dict[str, Any]]) -> int:
+def insert_standings(
+    supabase: Client, league_id: str, rows: List[Dict[str, Any]],
+    errors: Optional[List[str]] = None,
+) -> int:
     """Batch-upsert one league's standings, keyed on (league_id, team_abbrev, season)."""
     records = _standings_records(league_id, rows)
     if not records:
         return 0
-    try:
-        response = supabase.table('sports_standings').upsert(
-            records, on_conflict='league_id,team_abbrev,season'
-        ).execute()
-        return len(response.data) if response.data else 0
-    except Exception as e:
-        print(f"Error batch-upserting standings: {e}")
-        return 0
+    return chunked_upsert(
+        supabase, 'sports_standings', records,
+        on_conflict='league_id,team_abbrev,season', errors=errors,
+    )
 
 
 def sync_standings(supabase: Client) -> Dict[str, Any]:
@@ -386,7 +388,10 @@ def sync_standings(supabase: Client) -> Dict[str, Any]:
     }
 
     try:
-        resp = supabase.table('leagues').select('id,sport,league').execute()
+        resp = db_call(
+            lambda: supabase.table('leagues').select('id,sport,league').execute(),
+            'leagues prefetch',
+        )
         league_id_map = {(r['sport'], r['league']): r['id'] for r in (resp.data or [])}
     except Exception as e:
         stats['errors'].append(f"Failed to prefetch league IDs: {e}")
@@ -400,7 +405,9 @@ def sync_standings(supabase: Client) -> Dict[str, Any]:
         try:
             rows = fetch_espn_standings(sport, league)
             if rows:
-                stats['rows_inserted'] += insert_standings(supabase, league_id, rows)
+                stats['rows_inserted'] += insert_standings(
+                    supabase, league_id, rows, errors=stats['errors']
+                )
             stats['leagues_processed'] += 1
         except Exception as e:
             stats['errors'].append(f"Error fetching standings for {sport}/{league}: {e}")
