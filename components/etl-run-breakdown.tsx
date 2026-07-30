@@ -20,26 +20,17 @@ export function EtlRunBreakdown({
   run: EtlRun;
   maxErrors?: number;
 }) {
+  // Only domains that actually ran get a row. Listing the absent ones as four
+  // near-identical "not part of this run" lines made a deliberately scoped run
+  // (--news-only, or an intraday tier that carries no news) look like a full
+  // run that had failed three quarters of its work.
+  const ran = DOMAIN_ORDER.filter((key) => run.domains[key]);
+  const notRun = DOMAIN_ORDER.filter((key) => !run.domains[key]);
+
   return (
     <div className="divide-y divide-border">
-      {DOMAIN_ORDER.map((key) => {
-        const d = run.domains[key];
-        if (!d) {
-          return (
-            <div
-              key={key}
-              className="px-3 py-1.5 flex items-center gap-2 border-l-[3px]"
-              style={{ borderLeftColor: "hsl(0 0% 50%)" }}
-            >
-              <span className="text-[10px] font-mono uppercase tracking-wider font-bold w-16 shrink-0">
-                {key}
-              </span>
-              <span className="text-[10px] font-mono text-muted-foreground">
-                not part of this run
-              </span>
-            </div>
-          );
-        }
+      {ran.map((key) => {
+        const d = run.domains[key]!;
         return (
           <div
             key={key}
@@ -95,6 +86,15 @@ export function EtlRunBreakdown({
           </div>
         );
       })}
+
+      {notRun.length > 0 && (
+        <div className="px-3 py-1.5">
+          <span className="text-[10px] font-mono text-muted-foreground">
+            Out of scope for this run:{" "}
+            <span className="uppercase tracking-wider">{notRun.join(" · ")}</span>
+          </span>
+        </div>
+      )}
 
       <div className="px-3 py-1.5 flex items-center justify-between gap-3 flex-wrap">
         <span className="text-[10px] font-mono text-muted-foreground tracking-wider uppercase">

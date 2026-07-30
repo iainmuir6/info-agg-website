@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { EtlRunBreakdown } from "@/components/etl-run-breakdown";
-import { STATUS_COLOR, type EtlRun } from "@/lib/etl-runs";
+import { STATUS_COLOR, tierLabel, type EtlRun } from "@/lib/etl-runs";
 import { formatTime } from "@/lib/format-date";
 
 /**
@@ -44,7 +44,7 @@ export function EtlRunHistory({ runs }: { runs: EtlRun[] }) {
                 {formatTime(r.started_at)}
               </span>
               <span className="text-[9px] font-mono uppercase tracking-wider text-muted-foreground shrink-0">
-                {r.tier}
+                {tierLabel(r.tier)}
               </span>
               <span
                 className="text-[9px] font-mono uppercase tracking-wider font-bold shrink-0"
@@ -70,7 +70,7 @@ export function EtlRunHistory({ runs }: { runs: EtlRun[] }) {
               <div className="border-b-2 border-b-muted-foreground/30 bg-background">
                 <div className="px-2 py-1.5 flex items-center gap-2 flex-wrap border-b border-border">
                   <span className="text-[9px] font-mono uppercase tracking-widest text-muted-foreground">
-                    {r.tier} · {r.triggered_by}
+                    {tierLabel(r.tier)} · {r.triggered_by}
                   </span>
                   <span className="text-[9px] font-mono text-muted-foreground tabular-nums">
                     {formatTime(r.started_at, true)}

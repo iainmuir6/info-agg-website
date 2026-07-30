@@ -445,13 +445,25 @@ def run_full_etl(
         'media': None,
     }
 
-    # Observability: record the run (best-effort — never blocks the pipeline)
+    # Observability: record the run (best-effort — never blocks the pipeline).
+    #
+    # The tier says which domains were in scope. It used to be hardcoded
+    # 'daily' even for --news-only, so a deliberately scoped run was recorded as
+    # a daily run that had simply not done three quarters of its job.
+    in_scope = [
+        d for d, skipped in (
+            ('sports', skip_sports), ('markets', skip_markets),
+            ('news', skip_news), ('media', skip_media),
+        ) if not skipped
+    ]
+    tier = 'daily' if len(in_scope) == 4 else f"scoped:{'+'.join(in_scope) or 'none'}"
+
     try:
         run_supabase = get_supabase_client()
     except Exception as e:
         log.warning('no Supabase client for run recording: %s', e)
         run_supabase = None
-    run_id = start_etl_run(run_supabase, triggered_by, 'daily') if run_supabase else None
+    run_id = start_etl_run(run_supabase, triggered_by, tier) if run_supabase else None
 
     domain_fns = {}
     if not skip_sports:

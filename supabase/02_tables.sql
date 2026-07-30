@@ -309,7 +309,9 @@ CREATE TABLE IF NOT EXISTS info_agg.economic_indicators (
 CREATE TABLE IF NOT EXISTS info_agg.etl_runs (
     id               UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     triggered_by     TEXT NOT NULL DEFAULT 'manual',  -- 'cron' | 'manual' | 'dispatch'
-    tier             TEXT NOT NULL DEFAULT 'daily',   -- 'daily' | 'a' | 'b'
+    -- 'daily' (all four domains) | 'a' | 'b' (intraday tiers)
+    -- | 'scoped:<domain>[+<domain>…]' (operator run, e.g. --news-only)
+    tier             TEXT NOT NULL DEFAULT 'daily',
     status           TEXT NOT NULL DEFAULT 'running', -- 'running' | 'success' | 'partial' | 'failed'
     started_at       TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
     finished_at      TIMESTAMP WITH TIME ZONE,

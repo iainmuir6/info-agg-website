@@ -101,6 +101,21 @@ export function parseDomains(stats: unknown): Record<string, DomainOutcome> {
   return out;
 }
 
+/**
+ * Human label for a run's tier.
+ *
+ * `daily` is the full nightly run; `a` / `b` are the intraday tiers (A carries
+ * no news, so a missing domain there is by design); `scoped:news+media` is an
+ * operator run launched with --news-only and friends. The scoped domains are
+ * already visible as rows in the breakdown, so the chip only needs to say the
+ * run was scoped rather than repeat them.
+ */
+export function tierLabel(tier: string): string {
+  if (tier.startsWith("scoped:")) return "scoped";
+  if (tier === "a" || tier === "b") return `intraday ${tier.toUpperCase()}`;
+  return tier;
+}
+
 /** Total rows pruned by the run's `cleanup_daily()` report, if it ran. */
 export function cleanupTotal(cleanup: unknown): number | null {
   if (!cleanup || typeof cleanup !== "object") return null;

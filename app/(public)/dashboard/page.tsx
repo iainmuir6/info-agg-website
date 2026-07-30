@@ -11,6 +11,7 @@ import {
   parseDomains,
   DOMAIN_ACCENT,
   STATUS_COLOR,
+  tierLabel,
   type CounterRow,
   type EtlRun,
 } from "@/lib/etl-runs";
@@ -248,7 +249,7 @@ export default async function DashboardPage() {
             meta={
               latest ? (
                 <span className="flex items-center gap-2 text-[9px] font-mono text-muted-foreground tracking-wider">
-                  <span className="uppercase">{latest.tier} · {latest.triggered_by}</span>
+                  <span className="uppercase">{tierLabel(latest.tier)} · {latest.triggered_by}</span>
                   <span className="tabular-nums">
                     {formatTime(latest.started_at, true)}
                     {latest.duration_seconds != null && ` · ${latest.duration_seconds}s`}
