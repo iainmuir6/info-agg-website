@@ -134,7 +134,7 @@ def preflight_env() -> Tuple[List[str], List[str]]:
         warnings_.append('No FMP_API_KEY — forex/commodity quotes and economic indicators will fail')
 
     if not os.getenv('YOUTUBE_API_KEY'):
-        warnings_.append('No YOUTUBE_API_KEY — media domain will fail (Spotify/podcasts need no key, they are frontend embeds)')
+        warnings_.append('No YOUTUBE_API_KEY — media domain will be skipped (Spotify/podcasts need no key, they are frontend embeds)')
 
     return fatal, warnings_
 

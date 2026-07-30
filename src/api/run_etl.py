@@ -259,8 +259,12 @@ def run_markets_etl(
             'econ':        lambda: sync_economic_indicators(supabase),
         }
         if not skip_sentiment:
+            # No ticker filter: AV ANDs tickers with each other and with the
+            # topic, so passing the watchlist returned 0 rows at best and
+            # "Invalid inputs" once the list grew past ~20 symbols. Per-article
+            # ticker relevance still comes back in each article's payload.
             post_fns['sentiment'] = lambda: sync_news_sentiment(
-                supabase, topics=SENTIMENT_TOPICS_ALL, tickers=watchlist
+                supabase, topics=SENTIMENT_TOPICS_ALL
             )
 
         with ThreadPoolExecutor(max_workers=len(post_fns)) as post_pool:
@@ -323,6 +327,13 @@ def run_media_etl(supabase: Client) -> Dict[str, Any]:
             'youtube_videos': youtube_stats.get('videos_inserted', 0),
             'errors': youtube_stats.get('errors', []),
         }
+        if youtube_stats.get('notes'):
+            stats['notes'] = youtube_stats['notes']
+
+        # No credential configured — nothing ran, so this is a skip, not a failure.
+        if youtube_stats.get('skipped'):
+            return {'success': True, 'skipped': True, 'stats': stats}
+
         ok = stats['youtube_videos'] > 0
         result: Dict[str, Any] = {'success': ok, 'stats': stats}
         if not ok:
@@ -479,7 +490,10 @@ def run_full_etl(
                         results[domain] = future.result()
                         elapsed = domain_elapsed.get(domain, 0)
                         ok = results[domain].get('success', False)
-                        status = 'OK  ' if ok else 'FAIL'
+                        if results[domain].get('skipped'):
+                            status = 'SKIP'
+                        else:
+                            status = 'OK  ' if ok else 'FAIL'
                         print(f"  [{status}] {domain:<8}  {elapsed:.1f}s")
                     except Exception as e:
                         results[domain] = {'success': False, 'error': str(e)}
@@ -516,7 +530,8 @@ def run_full_etl(
     all_errors = collect_domain_errors(active)
     if any(not r.get('success') for r in active.values()):
         run_status = 'failed'
-    elif all_errors or (cleanup_report or {}).get('error'):
+    elif (all_errors or (cleanup_report or {}).get('error')
+          or any(r.get('skipped') for r in active.values())):
         run_status = 'partial'
     else:
         run_status = 'success'
@@ -558,27 +573,35 @@ def run_full_etl(
             return f"youtube={s.get('youtube_videos',0)}"
         return ''
 
-    passed = failed = 0
+    passed = failed = skipped = 0
     for domain in DOMAIN_ORDER:
         result = results.get(domain)
         if result is None:
             continue
         elapsed = domain_elapsed.get(domain, 0)
         ok = result.get('success', False)
-        status = ' OK ' if ok else 'FAIL'
+        was_skipped = bool(result.get('skipped'))
+        status = 'SKIP' if was_skipped else (' OK ' if ok else 'FAIL')
         stat_str = _stat_str(domain, result) if ok else result.get('error', '')
         print(f"  {domain:<8} [{status}]  {stat_str:<48}  {elapsed:.1f}s")
+        notes = result.get('stats', {}).get('notes', [])
         errors = result.get('stats', {}).get('errors', [])
+        for n in notes:
+            print(f"             ↳ {n}")
         if errors:
             for e in errors[:3]:
                 print(f"             ↳ {e}")
             if len(errors) > 3:
                 print(f"             ↳ … and {len(errors) - 3} more errors")
-        passed += ok
-        failed += (not ok)
+        if was_skipped:
+            skipped += 1
+        else:
+            passed += ok
+            failed += (not ok)
 
     print("-" * W)
-    print(f"  {passed} passed · {failed} failed · {duration:.1f}s total")
+    skip_str = f" · {skipped} skipped" if skipped else ""
+    print(f"  {passed} passed · {failed} failed{skip_str} · {duration:.1f}s total")
     print("=" * W)
 
     return results

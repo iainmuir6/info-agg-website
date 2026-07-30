@@ -1034,7 +1034,9 @@ def sync_news_sentiment(
     Args:
         supabase: Supabase client instance
         topics: List of AV topic strings (e.g. ['earnings', 'technology'])
-        tickers: Optional list of tickers to include as additional filter
+        tickers: Optional ticker filter, at most MAX_SENTIMENT_TICKERS. AV ANDs
+            tickers with each other and with the topic, so a watchlist-sized list
+            matches nothing and is rejected outright. Normally leave this unset.
 
     Returns:
         Stats dict: topics_processed, articles_upserted, errors

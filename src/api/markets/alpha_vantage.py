@@ -25,6 +25,9 @@ from etl_lib import get_http_session
 
 ALPHA_VANTAGE_BASE_URL = "https://www.alphavantage.co/query"
 
+# NEWS_SENTIMENT treats a ticker list as AND, not OR, and 400s on long lists.
+MAX_SENTIMENT_TICKERS = 2
+
 # Free tier: 5 req/min per key — sliding-window rate limiter (same pattern as Finnhub)
 _AV_CALL_TIMES: Dict[str, deque] = {}
 _AV_KEY_LOCKS: Dict[str, threading.Lock] = {}
@@ -32,11 +35,20 @@ _AV_INIT_LOCK = threading.Lock()
 _AV_RATE_LIMIT = 5     # calls per window
 _AV_WINDOW     = 60.0  # seconds
 
-def _av_rate_limit(key: str) -> None:
-    """Block only when the per-key 5 req/60 s window is full.
+# AV also throttles bursts by IP, not just by key, answering with an
+# "Information: … 1 request per second" body instead of data. Pace every
+# request at least this far apart across all keys.
+_AV_MIN_GAP    = 1.1   # seconds
+_AV_GAP_LOCK = threading.Lock()
+_AV_LAST_CALL = 0.0
 
-    Never sleeps while holding the key lock — a lock-held sleep serializes
-    every worker sharing the key (the historical ETL hang)."""
+def _av_rate_limit(key: str) -> None:
+    """Block until a request may go out: 5 req/60 s per key, ≥1.1 s apart globally.
+
+    Never sleeps while holding a lock — a lock-held sleep serializes every
+    worker sharing it (the historical ETL hang)."""
+    global _AV_LAST_CALL
+
     if key not in _AV_KEY_LOCKS:
         with _AV_INIT_LOCK:
             if key not in _AV_KEY_LOCKS:
@@ -49,11 +61,21 @@ def _av_rate_limit(key: str) -> None:
             now = time.time()
             while times and now - times[0] >= _AV_WINDOW:
                 times.popleft()
-            if len(times) < _AV_RATE_LIMIT:
-                times.append(now)
+            window_wait = (_AV_WINDOW - (now - times[0]) + 0.05
+                           if len(times) >= _AV_RATE_LIMIT else 0.0)
+        if window_wait > 0:
+            time.sleep(window_wait)
+            continue
+
+        with _AV_GAP_LOCK:
+            now = time.time()
+            gap_wait = _AV_MIN_GAP - (now - _AV_LAST_CALL)
+            if gap_wait <= 0:
+                _AV_LAST_CALL = now
+                with _AV_KEY_LOCKS[key]:
+                    _AV_CALL_TIMES[key].append(now)
                 return
-            sleep_for = _AV_WINDOW - (now - times[0]) + 0.05
-        time.sleep(max(sleep_for, 0.05))
+        time.sleep(gap_wait)
 
 
 def get_alphavantage_api_key() -> str:
@@ -433,14 +455,22 @@ def fetch_news_sentiment(
 
     Args:
         api_key: The specific AV API key to use for this request.
-        tickers: Optional list of ticker symbols to filter by (max 50).
+        tickers: Optional ticker filter. AV ANDs these — an article must mention
+            *every* ticker listed — so only pass one or two. AV also rejects long
+            lists outright with "Invalid inputs", hence the hard cap below.
         topic: Optional single topic filter (e.g. 'earnings', 'technology').
     """
+    if tickers and len(tickers) > MAX_SENTIMENT_TICKERS:
+        raise ValueError(
+            f"NEWS_SENTIMENT ANDs tickers; got {len(tickers)} "
+            f"(max {MAX_SENTIMENT_TICKERS}). Query topics without a ticker filter instead."
+        )
+
     _av_rate_limit(api_key)
 
     params: Dict[str, Any] = {'function': 'NEWS_SENTIMENT', 'apikey': api_key}
     if tickers:
-        params['tickers'] = ','.join(tickers[:50])
+        params['tickers'] = ','.join(tickers)
     if topic:
         params['topics'] = topic
 

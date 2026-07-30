@@ -20,9 +20,9 @@ if _HERE not in sys.path:
     sys.path.insert(0, _HERE)
 
 try:
-    from .youtube import fetch_youtube_trending
+    from .youtube import fetch_youtube_trending, get_youtube_api_key
 except ImportError:
-    from youtube import fetch_youtube_trending
+    from youtube import fetch_youtube_trending, get_youtube_api_key
 
 
 def get_supabase_client() -> Client:
@@ -88,6 +88,14 @@ def insert_youtube_videos(supabase: Client, videos: List[Dict[str, Any]]) -> int
 def sync_youtube_data(supabase: Client, region_code: str = 'US', limit: int = 25) -> Dict[str, Any]:
     """Sync YouTube trending videos to the database."""
     stats: Dict[str, Any] = {'videos_inserted': 0, 'errors': []}
+
+    # A missing key is a config gap, not a pipeline failure — flag it as a skip
+    # so the run does not go red every day the secret is unset.
+    if not get_youtube_api_key():
+        stats['skipped'] = True
+        stats['notes'] = ['YOUTUBE_API_KEY not set — YouTube fetch skipped']
+        return stats
+
     try:
         videos = fetch_youtube_trending(region_code=region_code, limit=limit)
         if videos is None:
