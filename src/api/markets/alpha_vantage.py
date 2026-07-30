@@ -21,7 +21,7 @@ load_dotenv()
 _PARENT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _PARENT not in sys.path:
     sys.path.insert(0, _PARENT)
-from etl_lib import get_http_session
+from etl_lib import get_http_session, et_today
 
 ALPHA_VANTAGE_BASE_URL = "https://www.alphavantage.co/query"
 
@@ -434,7 +434,7 @@ def fetch_etf_holdings_av(symbol: str, api_key: Optional[str] = None) -> List[Di
     if not raw:
         return []
 
-    today = datetime.now().strftime('%Y-%m-%d')
+    today = et_today().isoformat()
     holdings = []
     for h in raw.get('holdings', []):
         asset_symbol = h.get('symbol') or h.get('asset_symbol')

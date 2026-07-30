@@ -192,7 +192,7 @@ def backfill_league(
 
 def parse_season_arg(value: str) -> List[int]:
     if value.strip().lower() == 'current':
-        today = date.today()
+        today = et_today()
         # July onward starts the next split-year season; either way the
         # current calendar year is the right anchor.
         return [today.year]
@@ -260,7 +260,7 @@ def main() -> int:
 
         for start, end in windows:
             # Never ask ESPN for the future beyond the next couple of weeks.
-            end = min(end, date.today() + timedelta(days=14))
+            end = min(end, et_today() + timedelta(days=14))
             if start > end:
                 continue
             print(f"→ {league}: {start} .. {end}", flush=True)

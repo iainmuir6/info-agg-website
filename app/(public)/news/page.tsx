@@ -1,5 +1,6 @@
 import { createClient } from "@/lib/supabase/server";
 import NewsInfiniteScroll from "./NewsInfiniteScroll";
+import { formatDateTime } from "@/lib/format-date";
 
 async function getNewsStats(supabase: Awaited<ReturnType<typeof createClient>>) {
   try {
@@ -39,14 +40,7 @@ export default async function NewsPage() {
   const supabase = await createClient();
   const stats = await getNewsStats(supabase);
 
-  const lastSyncStr = stats.lastSync
-    ? new Date(stats.lastSync).toLocaleString("en-US", {
-        month: "short",
-        day: "numeric",
-        hour: "2-digit",
-        minute: "2-digit",
-      })
-    : "Never";
+  const lastSyncStr = stats.lastSync ? formatDateTime(stats.lastSync, true) : "Never";
 
   return (
     <div className="px-3 sm:px-6 py-4 sm:py-6 space-y-6">

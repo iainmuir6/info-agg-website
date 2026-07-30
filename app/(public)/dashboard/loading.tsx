@@ -88,12 +88,17 @@ export default function DashboardLoading() {
           </div>
         </div>
 
-        {/* Run history rail */}
+        {/* Run history rail — expandable rows: darker fill, thick gray base rule */}
         <div className="border border-border">
-          <PanelHeader w="w-24" meta="w-12" />
-          <div className="divide-y divide-border">
+          <PanelHeader w="w-24" meta="w-28" />
+          <div>
             {Array.from({ length: 10 }).map((_, i) => (
-              <div key={i} className="px-3 py-1.5 flex items-center gap-2 border-l-[3px] border-border">
+              <div
+                key={i}
+                className="px-3 py-2 flex items-center gap-2 border-l-[3px] border-border
+                  border-b-2 border-b-muted-foreground/30 bg-secondary/40"
+              >
+                <Bar w="w-2" h="h-2.5" />
                 <Bar w="w-12" h="h-2.5" />
                 <Bar w="w-10" h="h-2.5" />
                 <Bar w="w-12" h="h-2.5" />

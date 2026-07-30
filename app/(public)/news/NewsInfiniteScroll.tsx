@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useRef, useCallback } from "react";
 import { createClient } from "@/lib/supabase/client";
+import { APP_TIME_ZONE } from "@/lib/format-date";
 
 type Article = {
   id: number;
@@ -123,6 +124,7 @@ export default function NewsInfiniteScroll() {
     if (!dateStr) return "";
     try {
       return new Date(dateStr).toLocaleDateString("en-US", {
+        timeZone: APP_TIME_ZONE,
         month: "short",
         day: "numeric",
         hour: "2-digit",

@@ -9,7 +9,8 @@ import logging
 import os
 import threading
 import time
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
+from zoneinfo import ZoneInfo
 from typing import Any, Dict, List, Optional, Tuple
 
 import requests
@@ -32,6 +33,35 @@ def get_logger(name: str) -> logging.Logger:
             )
             _LOG_CONFIGURED = True
     return logging.getLogger(name)
+
+
+# ── Time ─────────────────────────────────────────────────────────────────────
+# Every stored instant is UTC and every *calendar day* the pipeline reasons
+# about is a US-Eastern day, because that is the day US markets and US sports
+# schedules run on — and the day the frontend renders (lib/format-date.ts).
+#
+# Neither may come from the runner's clock. `datetime.now()` is naive and
+# machine-local: locally it is Eastern, on GitHub Actions it is UTC. So
+# `date.today()` on the intraday tier that fires at 00:07 UTC — 8:07pm ET the
+# evening before — returned *tomorrow's* date and asked upstream APIs for a day
+# that had not happened yet in the market's own timezone.
+
+APP_TZ = ZoneInfo('America/New_York')
+
+
+def utc_now() -> datetime:
+    """Timezone-aware current instant. Use for anything stored in the DB."""
+    return datetime.now(timezone.utc)
+
+
+def et_now() -> datetime:
+    """Timezone-aware current instant in US Eastern."""
+    return datetime.now(APP_TZ)
+
+
+def et_today() -> date:
+    """Today's US-Eastern calendar date — the pipeline's notion of 'today'."""
+    return et_now().date()
 
 
 # ── HTTP session with retries ────────────────────────────────────────────────

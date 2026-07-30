@@ -31,6 +31,7 @@ from dotenv import load_dotenv
 
 from etl_lib import (
     get_logger,
+    et_now,
     start_etl_run,
     finish_etl_run,
     collect_domain_errors,
@@ -155,7 +156,7 @@ def run_quick_sports_etl(supabase, include_news: bool) -> Dict[str, Any]:
 
 def run_quick_refresh(tier: str, triggered_by: str = 'manual') -> Dict[str, Any]:
     """Run a tiered refresh: tier 'a' (15-min) or 'b' (hourly)."""
-    start_time = datetime.now()
+    start_time = et_now()
     supabase = get_supabase_client()
     run_id = start_etl_run(supabase, triggered_by, tier)
 
@@ -171,11 +172,11 @@ def run_quick_refresh(tier: str, triggered_by: str = 'manual') -> Dict[str, Any]
     domain_elapsed: Dict[str, float] = {}
 
     def _timed(domain: str, fn) -> Dict[str, Any]:
-        t0 = datetime.now()
+        t0 = et_now()
         try:
             return fn()
         finally:
-            domain_elapsed[domain] = (datetime.now() - t0).total_seconds()
+            domain_elapsed[domain] = (et_now() - t0).total_seconds()
 
     with ThreadPoolExecutor(max_workers=len(domain_fns)) as executor:
         domain_futures = {
@@ -197,7 +198,7 @@ def run_quick_refresh(tier: str, triggered_by: str = 'manual') -> Dict[str, Any]
                         'error': f'domain exceeded {DOMAIN_TIMEOUT_S}s timeout',
                     }
 
-    end_time = datetime.now()
+    end_time = et_now()
     duration = (end_time - start_time).total_seconds()
     results['completed_at'] = end_time.isoformat()
     results['duration_seconds'] = duration

@@ -17,7 +17,14 @@
 
 from typing import Dict, List, Optional, Any
 from datetime import date, datetime
+import os
+import sys
 import time
+
+_PARENT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _PARENT not in sys.path:
+    sys.path.insert(0, _PARENT)
+from etl_lib import et_today
 
 try:
     from bs4 import BeautifulSoup
@@ -262,7 +269,7 @@ def _parse_holdings(soup: "BeautifulSoup", ticker: str, top_n: int = 15) -> List
     """
     try:
         # Determine as_of_date
-        as_of_date = date.today().isoformat()
+        as_of_date = et_today().isoformat()
         for key, val in _extract_kv(soup).items():
             if 'holdings date' in key or ('as of' in key and 'date' in key):
                 parsed = _try_parse_date(val)

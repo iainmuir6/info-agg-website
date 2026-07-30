@@ -4,6 +4,7 @@ import Link from "next/link";
 import { StockChartPanel } from "@/components/stock-chart-panel";
 import { ViewportFillRow } from "@/components/viewport-fill-row";
 import { FavoriteStockButton } from "@/components/favorite-stock-button";
+import { formatDate, formatDateTime, easternDayKey } from "@/lib/format-date";
 
 type QuoteHistory = {
   current_price: number;
@@ -22,19 +23,11 @@ function fmt(n: number | null | undefined, digits = 2) {
 }
 
 function fmtDate(s: string | null) {
-  if (!s) return "";
-  return new Date(s).toLocaleString("en-US", {
-    month: "short",
-    day: "numeric",
-    hour: "numeric",
-    minute: "2-digit",
-    timeZone: "America/New_York",
-    timeZoneName: "short",
-  });
+  return formatDateTime(s, true);
 }
 
 function fmtDateShort(s: string) {
-  return new Date(s).toLocaleDateString("en-US", { month: "short", day: "numeric" });
+  return formatDate(s);
 }
 
 /** Keep only the latest quote per Eastern calendar day — the intraday tier
@@ -45,7 +38,7 @@ function fmtDateShort(s: string) {
 function latestPerDay(quotes: QuoteHistory[]): QuoteHistory[] {
   const byDay = new Map<string, QuoteHistory>();
   for (const q of quotes) {
-    const day = new Date(q.quote_timestamp).toLocaleDateString("en-US", { timeZone: "America/New_York" });
+    const day = easternDayKey(q.quote_timestamp);
     const existing = byDay.get(day);
     if (!existing || new Date(q.quote_timestamp).getTime() > new Date(existing.quote_timestamp).getTime()) {
       byDay.set(day, q);

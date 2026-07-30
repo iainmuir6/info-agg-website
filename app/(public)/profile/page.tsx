@@ -11,6 +11,7 @@ import {
 } from "@/components/favorites-panel";
 import { HomeSectionPrefs } from "@/components/home-section-prefs";
 import { EtlTriggerButton } from "@/components/etl-trigger";
+import { formatDateLong } from "@/lib/format-date";
 
 /** Matches the chrome the self-contained watchlist cards already render, so a
  *  wrapped section and an unwrapped one are indistinguishable in the grid. */
@@ -52,13 +53,7 @@ export default async function ProfilePage() {
   // token issue time (i.e. last sign-in), which is what used to show here.
   const { data: userData } = await supabase.auth.getUser();
   const createdAt = userData?.user?.created_at;
-  const memberSince = createdAt
-    ? new Date(createdAt).toLocaleDateString("en-US", {
-        year: "numeric",
-        month: "long",
-        day: "numeric",
-      })
-    : "—";
+  const memberSince = createdAt ? formatDateLong(createdAt) : "—";
 
   // NOTE: `watchlist_leagues` is deliberately not read here. Its only reader
   // was the "Tracked Leagues" toggle on this page — the Command Center gates

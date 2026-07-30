@@ -3,97 +3,25 @@ import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { isSuperAdmin } from "@/lib/rbac";
 import { EtlTriggerButton } from "@/components/etl-trigger";
-
-type TableRow = { label: string; count: number | null };
+import { EtlRunBreakdown } from "@/components/etl-run-breakdown";
+import { EtlRunHistory } from "@/components/etl-run-history";
+import { formatAge, formatTime, isTodayEastern } from "@/lib/format-date";
+import {
+  cleanupTotal,
+  parseDomains,
+  DOMAIN_ACCENT,
+  STATUS_COLOR,
+  type CounterRow,
+  type EtlRun,
+} from "@/lib/etl-runs";
 
 type DomainStat = {
   domain: string;
   key: string;
   accent: string;
-  rows: TableRow[];
+  rows: CounterRow[];
   lastFetch: string | null;
 };
-
-/** Per-domain outcome as recorded by the orchestrator on the etl_runs row. */
-type DomainOutcome = {
-  state: "ok" | "skipped" | "failed";
-  error: string | null;
-  errors: string[];
-  notes: string[];
-  counters: TableRow[];
-};
-
-type EtlRun = {
-  id: string;
-  status: string;
-  tier: string;
-  triggered_by: string;
-  started_at: string;
-  finished_at: string | null;
-  duration_seconds: number | null;
-  errors: string[] | null;
-  domains: Record<string, DomainOutcome>;
-  cleanupTotal: number | null;
-};
-
-const STATUS_COLOR: Record<string, string> = {
-  success: "hsl(142 65% 42%)",
-  partial: "hsl(45 90% 52%)",
-  failed: "hsl(0 72% 50%)",
-  running: "hsl(220 90% 52%)",
-};
-
-const DOMAIN_ACCENT: Record<string, string> = {
-  sports: "hsl(25 95% 50%)",
-  markets: "hsl(142 65% 42%)",
-  news: "hsl(220 90% 52%)",
-  media: "hsl(340 78% 50%)",
-};
-
-/** Counters worth surfacing per domain, in display order. Anything else in the
- *  stats payload (errors, notes, ok, skipped) is handled separately. */
-const COUNTER_LABELS: Record<string, string> = {
-  leagues_processed: "Leagues",
-  news_inserted: "News",
-  scores_inserted: "Scores",
-  season_scores: "Season scores",
-  standings_rows: "Standings",
-  stocks_processed: "Tickers",
-  quotes_inserted: "Quotes",
-  market_news_inserted: "Market news",
-  sentiment_upserted: "Sentiment",
-  economic_rows_upserted: "Econ rows",
-  sections_processed: "Sections",
-  articles_inserted: "Articles",
-  youtube_videos: "Videos",
-};
-
-function parseDomains(stats: unknown): Record<string, DomainOutcome> {
-  const out: Record<string, DomainOutcome> = {};
-  if (!stats || typeof stats !== "object") return out;
-  for (const [domain, raw] of Object.entries(stats as Record<string, unknown>)) {
-    if (!raw || typeof raw !== "object") continue;
-    const s = raw as Record<string, unknown>;
-    const counters = Object.entries(COUNTER_LABELS)
-      .filter(([k]) => typeof s[k] === "number")
-      .map(([k, label]) => ({ label, count: s[k] as number }));
-    const skipped = s.skipped === true;
-    // Runs recorded before the orchestrator persisted an explicit `ok` flag
-    // have to be inferred: no error and at least one row written. Falling back
-    // to "no error field" alone would read a domain that wrote nothing — the
-    // exact shape of a media failure — as a success.
-    const ok =
-      s.ok === undefined ? !s.error && counters.some((c) => (c.count ?? 0) > 0) : s.ok === true;
-    out[domain] = {
-      state: skipped ? "skipped" : ok ? "ok" : "failed",
-      error: typeof s.error === "string" ? s.error : null,
-      errors: Array.isArray(s.errors) ? (s.errors as string[]) : [],
-      notes: Array.isArray(s.notes) ? (s.notes as string[]) : [],
-      counters,
-    };
-  }
-  return out;
-}
 
 /** Kept wider than the history list renders: per-domain freshness is derived
  *  from the newest run in which that domain actually succeeded, which can be
@@ -110,26 +38,18 @@ async function getRuns(): Promise<EtlRun[]> {
     .limit(RUN_LOOKBACK);
 
   /* eslint-disable @typescript-eslint/no-explicit-any */
-  return (data ?? []).map((r: any) => {
-    const cleanup = r.cleanup && typeof r.cleanup === "object" ? r.cleanup : null;
-    const cleanupTotal = cleanup
-      ? Object.entries(cleanup)
-          .filter(([k, v]) => k !== "ran_at" && k !== "error" && typeof v === "number")
-          .reduce((sum, [, v]) => sum + (v as number), 0)
-      : null;
-    return {
-      id: r.id,
-      status: r.status,
-      tier: r.tier,
-      triggered_by: r.triggered_by,
-      started_at: r.started_at,
-      finished_at: r.finished_at,
-      duration_seconds: r.duration_seconds == null ? null : Number(r.duration_seconds),
-      errors: Array.isArray(r.errors) ? r.errors : [],
-      domains: parseDomains(r.stats),
-      cleanupTotal,
-    };
-  });
+  return (data ?? []).map((r: any) => ({
+    id: r.id,
+    status: r.status,
+    tier: r.tier,
+    triggered_by: r.triggered_by,
+    started_at: r.started_at,
+    finished_at: r.finished_at,
+    duration_seconds: r.duration_seconds == null ? null : Number(r.duration_seconds),
+    errors: Array.isArray(r.errors) ? r.errors : [],
+    domains: parseDomains(r.stats),
+    cleanupTotal: cleanupTotal(r.cleanup),
+  }));
   /* eslint-enable @typescript-eslint/no-explicit-any */
 }
 
@@ -213,24 +133,6 @@ async function getDomainStats(runs: EtlRun[]): Promise<DomainStat[]> {
   ];
 }
 
-function syncAge(isoDate: string | null): string {
-  if (!isoDate) return "never";
-  const diffMs = Date.now() - new Date(isoDate).getTime();
-  const mins = Math.floor(diffMs / 60_000);
-  if (mins < 1) return "just now";
-  if (mins < 60) return `${mins} min ago`;
-  const hrs = Math.floor(mins / 60);
-  if (hrs < 24) return `${hrs} h ago`;
-  return `${Math.floor(hrs / 24)} d ago`;
-}
-
-function clockTime(isoDate: string): string {
-  return new Date(isoDate).toLocaleTimeString("en-US", {
-    hour: "2-digit",
-    minute: "2-digit",
-  });
-}
-
 function StatusPill({ status }: { status: string }) {
   const color = STATUS_COLOR[status] ?? "hsl(0 0% 50%)";
   return (
@@ -242,18 +144,6 @@ function StatusPill({ status }: { status: string }) {
     </span>
   );
 }
-
-const STATE_LABEL: Record<DomainOutcome["state"], string> = {
-  ok: "OK",
-  skipped: "SKIP",
-  failed: "FAIL",
-};
-
-const STATE_COLOR: Record<DomainOutcome["state"], string> = {
-  ok: "hsl(142 65% 42%)",
-  skipped: "hsl(45 90% 52%)",
-  failed: "hsl(0 72% 50%)",
-};
 
 /** Panel chrome shared with the profile page's SectionCard. */
 function Panel({
@@ -293,11 +183,10 @@ export default async function DashboardPage() {
   const stats = await getDomainStats(runs);
 
   const latest = runs[0] ?? null;
-  const todayRuns = runs.filter(
-    (r) => new Date(r.started_at).toDateString() === new Date().toDateString(),
-  );
+  // "Today" is the Eastern calendar day — toDateString() used the server's zone,
+  // so on UTC hosting the count rolled over at 8pm ET.
+  const todayRuns = runs.filter((r) => isTodayEastern(r.started_at));
   const history = runs.slice(0, HISTORY_SHOWN);
-  const domainOrder = ["sports", "markets", "news", "media"];
 
   return (
     <div className="px-3 sm:px-6 py-3 sm:py-4 space-y-3">
@@ -322,7 +211,7 @@ export default async function DashboardPage() {
                 Last run
               </p>
               <p className="text-[10px] font-mono mt-0.5">
-                {latest ? syncAge(latest.finished_at ?? latest.started_at) : "never"}
+                {formatAge(latest?.finished_at ?? latest?.started_at ?? null)}
               </p>
             </div>
             <div>
@@ -361,7 +250,7 @@ export default async function DashboardPage() {
                 <span className="flex items-center gap-2 text-[9px] font-mono text-muted-foreground tracking-wider">
                   <span className="uppercase">{latest.tier} · {latest.triggered_by}</span>
                   <span className="tabular-nums">
-                    {clockTime(latest.started_at)}
+                    {formatTime(latest.started_at, true)}
                     {latest.duration_seconds != null && ` · ${latest.duration_seconds}s`}
                   </span>
                   <StatusPill status={latest.status} />
@@ -374,102 +263,11 @@ export default async function DashboardPage() {
                 No ETL run has been recorded yet.
               </p>
             ) : (
-              <div className="divide-y divide-border">
-                {domainOrder.map((key) => {
-                  const d = latest.domains[key];
-                  if (!d) {
-                    return (
-                      <div
-                        key={key}
-                        className="px-3 py-1.5 flex items-center gap-2 border-l-[3px]"
-                        style={{ borderLeftColor: "hsl(0 0% 50%)" }}
-                      >
-                        <span className="text-[10px] font-mono uppercase tracking-wider font-bold w-16 shrink-0">
-                          {key}
-                        </span>
-                        <span className="text-[10px] font-mono text-muted-foreground">
-                          not part of this run
-                        </span>
-                      </div>
-                    );
-                  }
-                  return (
-                    <div
-                      key={key}
-                      className="px-3 py-1.5 border-l-[3px]"
-                      style={{ borderLeftColor: DOMAIN_ACCENT[key] }}
-                    >
-                      <div className="flex items-center gap-2 flex-wrap">
-                        <span className="text-[10px] font-mono uppercase tracking-wider font-bold w-16 shrink-0">
-                          {key}
-                        </span>
-                        <span
-                          className="text-[9px] font-mono tracking-widest font-bold shrink-0"
-                          style={{ color: STATE_COLOR[d.state] }}
-                        >
-                          {STATE_LABEL[d.state]}
-                        </span>
-                        <span className="flex items-center gap-3 flex-wrap min-w-0">
-                          {d.counters.map((c) => (
-                            <span key={c.label} className="text-[10px] font-mono text-muted-foreground">
-                              {c.label}{" "}
-                              <span className="text-foreground font-bold tabular-nums">
-                                {c.count?.toLocaleString() ?? "—"}
-                              </span>
-                            </span>
-                          ))}
-                        </span>
-                      </div>
-
-                      {d.error && (
-                        <p className="mt-1 text-[10px] font-mono" style={{ color: "hsl(0 72% 50%)" }}>
-                          ↳ {d.error}
-                        </p>
-                      )}
-                      {d.notes.map((n) => (
-                        <p key={n} className="mt-1 text-[10px] font-mono text-muted-foreground">
-                          ↳ {n}
-                        </p>
-                      ))}
-                      {d.errors.slice(0, 4).map((e) => (
-                        <p
-                          key={e}
-                          className="mt-1 text-[10px] font-mono break-words"
-                          style={{ color: "hsl(45 90% 45%)" }}
-                        >
-                          ↳ {e}
-                        </p>
-                      ))}
-                      {d.errors.length > 4 && (
-                        <p className="mt-1 text-[10px] font-mono text-muted-foreground">
-                          ↳ … and {d.errors.length - 4} more
-                        </p>
-                      )}
-                    </div>
-                  );
-                })}
-
-                <div className="px-3 py-1.5 flex items-center justify-between gap-3">
-                  <span className="text-[10px] font-mono text-muted-foreground tracking-wider uppercase">
-                    {latest.errors?.length
-                      ? `${latest.errors.length} error${latest.errors.length === 1 ? "" : "s"} recorded`
-                      : "No errors recorded"}
-                  </span>
-                  {latest.cleanupTotal != null && (
-                    <span className="text-[10px] font-mono text-muted-foreground">
-                      Retention pruned{" "}
-                      <span className="text-foreground font-bold tabular-nums">
-                        {latest.cleanupTotal.toLocaleString()}
-                      </span>{" "}
-                      rows
-                    </span>
-                  )}
-                </div>
-              </div>
+              <EtlRunBreakdown run={latest} />
             )}
           </Panel>
 
-          {/* ── Stored data: row counts and true freshness per domain ── */}
+          {/* ── Stored data: row counts and per-domain freshness ── */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             {stats.map((s) => (
               <Panel
@@ -478,7 +276,7 @@ export default async function DashboardPage() {
                 accent={s.accent}
                 meta={
                   <span className="text-[9px] font-mono text-muted-foreground tracking-wider">
-                    {syncAge(s.lastFetch)}
+                    {formatAge(s.lastFetch)}
                   </span>
                 }
               >
@@ -508,54 +306,17 @@ export default async function DashboardPage() {
           </Panel>
         </div>
 
-        {/* ── Run history rail ── */}
+        {/* ── Run history rail — each row expands into its own breakdown ── */}
         <Panel
           title="Run History"
           accent="hsl(220 90% 52%)"
           meta={
             <span className="text-[9px] font-mono text-muted-foreground tracking-wider">
-              last {history.length}
+              last {history.length} · click to expand
             </span>
           }
         >
-          {history.length === 0 ? (
-            <p className="px-3 py-4 text-[11px] font-mono text-muted-foreground">No runs recorded.</p>
-          ) : (
-            <div className="divide-y divide-border">
-              {history.map((r) => (
-                <div
-                  key={r.id}
-                  className="px-3 py-1.5 flex items-center gap-2 border-l-[3px]"
-                  style={{ borderLeftColor: STATUS_COLOR[r.status] ?? "hsl(0 0% 50%)" }}
-                >
-                  <span className="text-[10px] font-mono tabular-nums shrink-0">
-                    {clockTime(r.started_at)}
-                  </span>
-                  <span className="text-[9px] font-mono uppercase tracking-wider text-muted-foreground shrink-0">
-                    {r.tier}
-                  </span>
-                  <span
-                    className="text-[9px] font-mono uppercase tracking-wider font-bold shrink-0"
-                    style={{ color: STATUS_COLOR[r.status] ?? undefined }}
-                  >
-                    {r.status}
-                  </span>
-                  <span className="text-[10px] font-mono text-muted-foreground tabular-nums ml-auto shrink-0">
-                    {r.duration_seconds != null ? `${r.duration_seconds}s` : "—"}
-                  </span>
-                  {!!r.errors?.length && (
-                    <span
-                      className="text-[9px] font-mono tabular-nums shrink-0"
-                      style={{ color: "hsl(45 90% 45%)" }}
-                      title={`${r.errors.length} errors`}
-                    >
-                      {r.errors.length}⚠
-                    </span>
-                  )}
-                </div>
-              ))}
-            </div>
-          )}
+          <EtlRunHistory runs={history} />
         </Panel>
       </div>
     </div>

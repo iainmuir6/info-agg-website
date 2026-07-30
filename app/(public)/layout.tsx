@@ -15,6 +15,7 @@ import {
   TICKER_ETFS,
   type TickerItem,
 } from "@/components/news-ticker-client";
+import { APP_TIME_ZONE } from "@/lib/format-date";
 
 // Initial ticker snapshot — cached and revalidated by the ETL webhook
 // (POST /api/revalidate); the client component then polls on its own.
@@ -119,7 +120,7 @@ export default async function PublicLayout({ children }: { children: React.React
       year: "numeric",
       month: "long",
       day: "numeric",
-      timeZone: "America/New_York",
+      timeZone: APP_TIME_ZONE,
     })
     .toUpperCase();
 

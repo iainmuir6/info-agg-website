@@ -1,5 +1,6 @@
 import { createClient } from "@/lib/supabase/server";
 import { LineChart, type ChartPoint } from "@/components/line-chart";
+import { formatDateOnly, formatDateOnlyLong, formatMonthOnly } from "@/lib/format-date";
 
 // ── Config ────────────────────────────────────────────────────────────────────
 
@@ -39,12 +40,29 @@ type EconRow = { indicator_name: string; date: string; value: number };
 export default async function EconomyPage() {
   const supabase = await createClient();
 
-  const { data } = await supabase
-    .from("economic_indicators")
-    .select("indicator_name, date, value")
-    .order("date", { ascending: true });
+  // Paged: PostgREST caps a response at 1000 rows, and economic_indicators is
+  // past that (1,895 and growing by ~655/day). An unpaged select returned the
+  // OLDEST 1000 rows, so every series on this page — and the "as of" date —
+  // stopped four months short of the data actually in the table. `limit()`
+  // cannot lift the cap; only ranged requests can.
+  //
+  // The order key is (date, indicator_name): date alone has ~16 rows per value,
+  // so ties could shuffle between pages and drop or duplicate rows.
+  const PAGE_SIZE = 1000;
+  const raw: { indicator_name: string; date: string; value: unknown }[] = [];
+  for (let from = 0; ; from += PAGE_SIZE) {
+    const { data, error } = await supabase
+      .from("economic_indicators")
+      .select("indicator_name, date, value")
+      .order("date", { ascending: true })
+      .order("indicator_name", { ascending: true })
+      .range(from, from + PAGE_SIZE - 1);
+    if (error || !data || data.length === 0) break;
+    raw.push(...data);
+    if (data.length < PAGE_SIZE) break;
+  }
 
-  const rows: EconRow[] = (data ?? []).map((r) => ({
+  const rows: EconRow[] = raw.map((r) => ({
     indicator_name: r.indicator_name,
     date: r.date,
     value: parseFloat(String(r.value)),
@@ -68,7 +86,7 @@ export default async function EconomyPage() {
   const twoYByDate = new Map((byIndicator["treasury_2y"] ?? []).map((r) => [r.date, r.value]));
   const spreadRows = tenY.filter((r) => twoYByDate.has(r.date));
   const spreadPoints: ChartPoint[] = spreadRows.map((r) => ({
-    label: new Date(r.date).toLocaleDateString("en-US", { month: "short", day: "numeric" }),
+    label: formatDateOnly(r.date),
     value: r.value - (twoYByDate.get(r.date) as number),
   }));
   const spreadSeries = spreadPoints.map((p) => p.value);
@@ -88,7 +106,7 @@ export default async function EconomyPage() {
           </h2>
           {curveDate && (
             <span className="text-xs font-mono text-muted-foreground">
-              as of {new Date(curveDate).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}
+              as of {formatDateOnlyLong(curveDate)}
             </span>
           )}
         </div>
@@ -183,7 +201,7 @@ export default async function EconomyPage() {
                   const series = byIndicator[key];
                   const latest = series[series.length - 1];
                   const history: ChartPoint[] = series.slice(-40).map((r) => ({
-                    label: new Date(r.date).toLocaleDateString("en-US", { month: "short", year: "2-digit" }),
+                    label: formatMonthOnly(r.date),
                     value: r.value,
                   }));
                   return (
@@ -193,7 +211,7 @@ export default async function EconomyPage() {
                           {cfg.label}
                         </span>
                         <span className="text-[8px] font-mono text-muted-foreground">
-                          {new Date(latest.date).toLocaleDateString("en-US", { month: "short", year: "2-digit" })}
+                          {formatMonthOnly(latest.date)}
                         </span>
                       </div>
                       <p className="text-xl font-black font-mono tabular-nums mb-2">

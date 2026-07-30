@@ -5,6 +5,7 @@ import { leagueBySlug, espnGameUrl, espnTeamUrl } from "@/lib/leagues";
 import { formatGameTime } from "@/lib/sports-status";
 import { FavoriteTeamButton } from "@/components/favorite-team-button";
 import { GameResultsChart, type GameResultBar } from "@/components/game-results-chart";
+import { formatDate } from "@/lib/format-date";
 
 type Score = {
   id: string;
@@ -171,7 +172,7 @@ export default async function TeamPage({
     const lost = state === "final" && own != null && opp != null && own < opp;
     const url = g.event_id ? espnGameUrl(meta!.slug, g.event_id) : null;
     const when = g.game_date
-      ? new Date(g.game_date).toLocaleDateString("en-US", { month: "short", day: "numeric" })
+      ? formatDate(g.game_date)
       : "";
     const tip = formatGameTime(g.game_date);
 

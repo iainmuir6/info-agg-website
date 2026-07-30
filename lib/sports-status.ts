@@ -1,9 +1,11 @@
+import { APP_TIME_ZONE, easternDayKey, isTodayEastern } from "@/lib/format-date";
+
 /** Game start time in Eastern, tight-packed with no space before AM/PM
  *  ("7:30 PM" → "7:30PM") — saves width in narrow score-row cells. */
 export function formatGameTime(dateStr: string | null | undefined): string {
   if (!dateStr) return "";
   return new Date(dateStr)
-    .toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", timeZone: "America/New_York" })
+    .toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", timeZone: APP_TIME_ZONE })
     .replace(" ", "");
 }
 
@@ -12,18 +14,13 @@ export function formatGameTime(dateStr: string | null | undefined): string {
  *  a 11pm ET game and a same-day midnight UTC read don't drift a day apart. */
 export function isGameToday(dateStr: string | null | undefined): boolean {
   if (!dateStr) return true;
-  const asEasternDateString = (d: Date) =>
-    d.toLocaleDateString("en-US", { timeZone: "America/New_York" });
-  return asEasternDateString(new Date(dateStr)) === asEasternDateString(new Date());
+  return isTodayEastern(dateStr);
 }
 
 /** Sortable Eastern calendar-day key ("2026-07-29") — en-CA gives ISO order,
  *  and Eastern matches the timezone every game date is rendered in. */
 export function easternDay(dateStr: string | null | undefined): string {
-  if (!dateStr) return "";
-  const t = new Date(dateStr);
-  if (Number.isNaN(t.getTime())) return "";
-  return t.toLocaleDateString("en-CA", { timeZone: "America/New_York" });
+  return easternDayKey(dateStr);
 }
 
 /**
@@ -67,7 +64,7 @@ export function formatGameDateShort(dateStr: string | null | undefined): string 
   return new Date(dateStr).toLocaleDateString("en-US", {
     month: "numeric",
     day: "numeric",
-    timeZone: "America/New_York",
+    timeZone: APP_TIME_ZONE,
   });
 }
 

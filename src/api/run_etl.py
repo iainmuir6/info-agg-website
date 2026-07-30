@@ -24,6 +24,7 @@ if _API_DIR not in sys.path:
 
 from etl_lib import (
     get_logger,
+    et_now,
     chunked_upsert,
     db_call,
     preflight_env,
@@ -426,7 +427,7 @@ def run_full_etl(
     Quote backfill (OHLCV history) is not part of the daily run — use run_db_seed.py.
     Profile updates: --refresh-profiles (FMP) or --scrape-etf-info (ETFdb).
     """
-    start_time = datetime.now()
+    start_time = et_now()
 
     # Sentiment on <2 distinct AV keys trips the 5/min limiter into a ~60s
     # sleep and blows the <60s run budget — skip it and say so.
@@ -471,11 +472,11 @@ def run_full_etl(
     domain_elapsed: Dict[str, float] = {}
 
     def _timed(domain: str, fn) -> Dict[str, Any]:
-        t0 = datetime.now()
+        t0 = et_now()
         try:
             return fn()
         finally:
-            domain_elapsed[domain] = (datetime.now() - t0).total_seconds()
+            domain_elapsed[domain] = (et_now() - t0).total_seconds()
 
     if domain_fns:
         with ThreadPoolExecutor(max_workers=len(domain_fns)) as executor:
@@ -507,7 +508,7 @@ def run_full_etl(
                         }
                         print(f"  [FAIL] {domain:<8}  timed out")
 
-    end_time = datetime.now()
+    end_time = et_now()
     duration = (end_time - start_time).total_seconds()
     results['completed_at'] = end_time.isoformat()
     results['duration_seconds'] = duration

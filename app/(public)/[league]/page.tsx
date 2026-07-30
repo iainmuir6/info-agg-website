@@ -6,6 +6,7 @@ import { FavoriteStar } from "@/components/favorite-star";
 import { LEAGUES, leagueBySlug, espnGameUrl } from "@/lib/leagues";
 import { compactStatus, formatGameTime } from "@/lib/sports-status";
 import { latestSeasonOnly, groupStandings, type StandingRow } from "@/lib/standings";
+import { formatDate } from "@/lib/format-date";
 
 // Top-level league routes: /nba, /wnba, /mlb … Static routes (/news, /markets,
 // /economy …) take precedence over this dynamic segment; anything not in the
@@ -147,7 +148,7 @@ export default async function LeaguePage({
     const awayWon = state === "final" && (g.away_score ?? 0) > (g.home_score ?? 0);
     const homeWon = state === "final" && (g.home_score ?? 0) > (g.away_score ?? 0);
     const when = g.game_date
-      ? new Date(g.game_date).toLocaleDateString("en-US", { month: "short", day: "numeric" })
+      ? formatDate(g.game_date)
       : "";
     const tip = formatGameTime(g.game_date);
     const liveStatus = compactStatus(g.status_detail);

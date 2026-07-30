@@ -5,6 +5,7 @@ import { createPortal } from "react-dom";
 import Link from "next/link";
 import { createClient } from "@/lib/supabase/client";
 import { LineChart, type ChartPoint } from "@/components/line-chart";
+import { formatDate } from "@/lib/format-date";
 
 type Cached = {
   points: ChartPoint[];
@@ -87,10 +88,7 @@ export function TickerHoverChart({
           (a, b) => new Date(a.fetched_at).getTime() - new Date(b.fetched_at).getTime(),
         );
       const points: ChartPoint[] = quotes.slice(-40).map((q) => ({
-        label: new Date(q.fetched_at).toLocaleDateString("en-US", {
-          month: "short",
-          day: "numeric",
-        }),
+        label: formatDate(q.fetched_at),
         value: parseFloat(String(q.current_price)),
       }));
       const last = quotes[quotes.length - 1];

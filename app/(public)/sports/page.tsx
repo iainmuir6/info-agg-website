@@ -5,6 +5,7 @@ import { FavoriteStar } from "@/components/favorite-star";
 import Link from "next/link";
 import { teamNickname } from "@/lib/sports-status";
 import { espnGameUrl } from "@/lib/leagues";
+import { APP_TIME_ZONE, formatWeekdayDateTime, formatDate as formatDateShort } from "@/lib/format-date";
 
 type League = { id: number; sport: string; league: string; display_name: string };
 type Score = {
@@ -65,18 +66,7 @@ function getStatusBadge(status: string | null) {
 }
 
 function formatDate(dateStr: string | null) {
-  if (!dateStr) return "";
-  try {
-    return new Date(dateStr).toLocaleDateString("en-US", {
-      weekday: "short",
-      month: "short",
-      day: "numeric",
-      hour: "2-digit",
-      minute: "2-digit",
-    });
-  } catch {
-    return "";
-  }
+  return formatWeekdayDateTime(dateStr);
 }
 
 async function getSportsData(supabase: Awaited<ReturnType<typeof createClient>>) {
@@ -382,7 +372,7 @@ export default async function SportsPage() {
                                       day: "numeric",
                                       hour: "numeric",
                                       minute: "2-digit",
-                                      timeZone: "America/New_York",
+                                      timeZone: APP_TIME_ZONE,
                                     })
                                   : ""}
                               </span>
@@ -423,12 +413,7 @@ export default async function SportsPage() {
                                 {article.title}
                               </p>
                               <p className="text-[10px] font-mono text-muted-foreground mt-0.5">
-                                {article.published_at
-                                  ? new Date(article.published_at).toLocaleDateString("en-US", {
-                                      month: "short",
-                                      day: "numeric",
-                                    })
-                                  : ""}
+                                {formatDateShort(article.published_at)}
                               </p>
                             </div>
                           </a>

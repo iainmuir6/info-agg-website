@@ -22,7 +22,7 @@ load_dotenv()
 _PARENT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _PARENT not in sys.path:
     sys.path.insert(0, _PARENT)
-from etl_lib import get_http_session, MinInterval
+from etl_lib import get_http_session, et_today, MinInterval
 
 # FMP_BASE_V3 = "https://financialmodelingprep.com/api/v3"
 FMP_BASE_STABLE = "https://financialmodelingprep.com/stable"
@@ -55,7 +55,7 @@ def _fmp_rate_check() -> None:
         if _FMP_DISABLED_DUE_TO_429:
             raise RuntimeError("FMP disabled for remainder of this ETL run due to 429")
 
-        today = date.today()
+        today = et_today()
         if _FMP_DAILY_DATE != today:
             _FMP_DAILY_COUNT = 0
             _FMP_DAILY_DATE = today
@@ -440,8 +440,9 @@ def fetch_historical_prices(
     if api_key is None:
         api_key = get_fmp_api_key()
 
-    from_date = (date.today() - timedelta(days=days_back)).isoformat()
-    to_date = date.today().isoformat()
+    today = et_today()
+    from_date = (today - timedelta(days=days_back)).isoformat()
+    to_date = today.isoformat()
 
     url = f"{FMP_BASE_STABLE}/historical-price-full/{ticker}"
     params = {'from': from_date, 'to': to_date, 'apikey': api_key}

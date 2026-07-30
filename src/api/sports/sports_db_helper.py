@@ -29,7 +29,7 @@ except ImportError:
 _PARENT = os.path.dirname(_HERE)
 if _PARENT not in sys.path:
     sys.path.insert(0, _PARENT)
-from etl_lib import chunked_upsert, db_call
+from etl_lib import chunked_upsert, db_call, et_now, et_today
 
 
 def get_supabase_client() -> Client:
@@ -287,7 +287,7 @@ def sync_season_schedules(
         stats['errors'].append(f"Failed to load leagues: {e}")
         return stats
 
-    now = datetime.now()
+    now = et_now()
     window_start = now - timedelta(days=days_back)
     window_end = now + timedelta(days=days_forward)
 
@@ -438,7 +438,7 @@ def backfill_sports_scores(
         'errors': [],
     }
 
-    today = datetime.now().date()
+    today = et_today()
     dates = [today - timedelta(days=d) for d in range(days_back, 0, -1)]  # oldest → newest
 
     for date in dates:

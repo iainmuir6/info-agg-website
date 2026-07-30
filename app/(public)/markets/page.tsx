@@ -3,6 +3,7 @@ import { getFavorites, favoritesFirst } from "@/lib/favorites";
 import { FavoriteStar } from "@/components/favorite-star";
 import Link from "next/link";
 import { TickerHoverChart } from "@/components/ticker-hover-chart";
+import { formatDate, formatTime } from "@/lib/format-date";
 
 type StockWithQuote = {
   id: number;
@@ -160,12 +161,7 @@ export default async function MarketsPage() {
               {latestFetchedAt && (
                 <span className="normal-case tracking-normal text-muted-foreground/70">
                   {" "}· as of{" "}
-                  {new Date(latestFetchedAt).toLocaleTimeString("en-US", {
-                    hour: "numeric",
-                    minute: "2-digit",
-                    timeZone: "America/New_York",
-                    timeZoneName: "short",
-                  })}
+                  {formatTime(latestFetchedAt, true)}
                 </span>
               )}
             </p>
@@ -343,10 +339,7 @@ export default async function MarketsPage() {
                         )}
                         {article.published_at && (
                           <span className="text-[10px] font-mono text-muted-foreground ml-auto">
-                            {new Date(article.published_at).toLocaleDateString("en-US", {
-                              month: "short",
-                              day: "numeric",
-                            })}
+                            {formatDate(article.published_at)}
                           </span>
                         )}
                       </div>

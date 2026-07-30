@@ -2,6 +2,7 @@
 
 import { useMemo, useState } from "react";
 import { LineChart, type ChartPoint } from "@/components/line-chart";
+import { formatDate } from "@/lib/format-date";
 
 type QuotePoint = {
   current_price: number;
@@ -25,7 +26,7 @@ export function StockChartPanel({ quotes, fill = false }: { quotes: QuotePoint[]
     const days = RANGE_DAYS[range];
     const windowed = quotes.slice(-days);
     const points: ChartPoint[] = windowed.map((q) => ({
-      label: new Date(q.quote_timestamp).toLocaleDateString("en-US", { month: "short", day: "numeric" }),
+      label: formatDate(q.quote_timestamp),
       value: parseFloat(String(q.current_price)),
     }));
     let pct: number | null = null;
@@ -35,7 +36,7 @@ export function StockChartPanel({ quotes, fill = false }: { quotes: QuotePoint[]
       if (first) pct = ((last - first) / first) * 100;
     }
     const label = windowed.length > 0
-      ? `${new Date(windowed[0].quote_timestamp).toLocaleDateString("en-US", { month: "short", day: "numeric" })} – ${new Date(windowed[windowed.length - 1].quote_timestamp).toLocaleDateString("en-US", { month: "short", day: "numeric" })}`
+      ? `${formatDate(windowed[0].quote_timestamp)} – ${formatDate(windowed[windowed.length - 1].quote_timestamp)}`
       : "";
     return { chartPoints: points, rangePct: pct, windowLabel: label };
   }, [quotes, range]);

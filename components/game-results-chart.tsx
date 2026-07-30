@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { APP_TIME_ZONE } from "@/lib/format-date";
 
 export type GameResultBar = {
   id: string;
@@ -29,11 +30,11 @@ function easternParts(iso: string | null) {
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return null;
   // en-CA → "2026-07-29", sortable and unambiguous
-  const key = d.toLocaleDateString("en-CA", { timeZone: "America/New_York" });
+  const key = d.toLocaleDateString("en-CA", { timeZone: APP_TIME_ZONE });
   return {
     monthKey: key.slice(0, 7),
-    monthLabel: d.toLocaleDateString("en-US", { month: "short", timeZone: "America/New_York" }),
-    dayLabel: d.toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: "America/New_York" }),
+    monthLabel: d.toLocaleDateString("en-US", { month: "short", timeZone: APP_TIME_ZONE }),
+    dayLabel: d.toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: APP_TIME_ZONE }),
   };
 }
 
