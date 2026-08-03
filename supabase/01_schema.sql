@@ -53,16 +53,14 @@ SET search_path = '';
 DROP FUNCTION IF EXISTS info_agg.cleanup_daily(integer, integer, integer, integer, integer);
 
 CREATE OR REPLACE FUNCTION info_agg.cleanup_daily(
-    p_news_days          integer DEFAULT 7,    -- news_articles, company_news, market_news, sports_news
+    p_news_days          integer DEFAULT 30,   -- news_articles, company_news, market_news, sports_news
     p_scores_days        integer DEFAULT NULL, -- sports_scores; NULL = keep everything (see below)
     p_youtube_days       integer DEFAULT 30,  -- youtube_videos
     p_quote_history_days integer DEFAULT 400, -- EOD stock_quotes history cap
     p_etl_runs_days      integer DEFAULT 90,  -- etl_runs
-    -- news_sentiment is kept far longer than the other news tables: it is the
-    -- only one with analytical value over time (scored sentiment per ticker),
-    -- and at ~320 rows/day it is the largest single table by volume, so this
-    -- is the one retention knob worth revisiting if the DB gets tight.
-    p_sentiment_days     integer DEFAULT 365
+    -- news_sentiment has its own knob: at ~320 rows/day and ~1.2 kB/row it is
+    -- the largest table by volume, so it is the one worth tuning separately.
+    p_sentiment_days     integer DEFAULT 90
 ) RETURNS jsonb
 LANGUAGE plpgsql
 SECURITY DEFINER
@@ -101,31 +99,34 @@ BEGIN
     GET DIAGNOSTICS v_count = ROW_COUNT;
     v_report := v_report || jsonb_build_object('stock_quotes_history', v_count);
 
-    -- ── news-type tables: drop stories older than p_news_days ──
+    -- ── news-type tables: drop stories held longer than p_news_days ──
+    -- Keyed on fetched_at (how long WE have held the story), not published_at
+    -- (how old the story is). The old rule deleted articles the ETL had just
+    -- fetched and the site was still showing, purely because the publisher
+    -- dated them earlier — news_articles held rows published as far back as
+    -- 2016 that were re-fetched and re-deleted every single day.
     DELETE FROM info_agg.news_articles
-    WHERE coalesce(published_at, fetched_at) < now() - make_interval(days => p_news_days);
+    WHERE coalesce(fetched_at, published_at) < now() - make_interval(days => p_news_days);
     GET DIAGNOSTICS v_count = ROW_COUNT;
     v_report := v_report || jsonb_build_object('news_articles', v_count);
 
     DELETE FROM info_agg.company_news
-    WHERE coalesce(published_at, fetched_at) < now() - make_interval(days => p_news_days);
+    WHERE coalesce(fetched_at, published_at) < now() - make_interval(days => p_news_days);
     GET DIAGNOSTICS v_count = ROW_COUNT;
     v_report := v_report || jsonb_build_object('company_news', v_count);
 
     DELETE FROM info_agg.market_news
-    WHERE coalesce(published_at, fetched_at) < now() - make_interval(days => p_news_days);
+    WHERE coalesce(fetched_at, published_at) < now() - make_interval(days => p_news_days);
     GET DIAGNOSTICS v_count = ROW_COUNT;
     v_report := v_report || jsonb_build_object('market_news', v_count);
 
-    -- sports_news has no fetched_at/created_at column; null published_at rows
-    -- are conservatively kept.
     DELETE FROM info_agg.sports_news
-    WHERE published_at < now() - make_interval(days => p_news_days);
+    WHERE coalesce(fetched_at, published_at) < now() - make_interval(days => p_news_days);
     GET DIAGNOSTICS v_count = ROW_COUNT;
     v_report := v_report || jsonb_build_object('sports_news', v_count);
 
     DELETE FROM info_agg.news_sentiment
-    WHERE coalesce(published_at, fetched_at) < now() - make_interval(days => p_sentiment_days);
+    WHERE coalesce(fetched_at, published_at) < now() - make_interval(days => p_sentiment_days);
     GET DIAGNOSTICS v_count = ROW_COUNT;
     v_report := v_report || jsonb_build_object('news_sentiment', v_count);
 

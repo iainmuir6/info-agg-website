@@ -84,6 +84,11 @@ ALTER TABLE info_agg.sports_scores ADD COLUMN IF NOT EXISTS away_logo TEXT;
 -- fetched before this column existed, treated as regular season.
 ALTER TABLE info_agg.sports_scores ADD COLUMN IF NOT EXISTS season_type INTEGER;
 
+-- Retention keys on fetched_at across every news table; sports_news was the
+-- one without it, so it could only prune on story age.
+ALTER TABLE info_agg.sports_news
+    ADD COLUMN IF NOT EXISTS fetched_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW();
+
 
 -- ============================================================
 -- SPORTS — sports_standings

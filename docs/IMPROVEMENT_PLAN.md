@@ -244,11 +244,11 @@ The policy:
 | Table | Timestamp used | Policy |
 |---|---|---|
 | `stock_quotes` | `quote_timestamp` | **Collapse intraday → EOD:** for days before today (ET), keep only the latest quote per `(stock_id, day)`, delete the rest. Optionally cap history at ~400 days. |
-| `news_articles` | `coalesce(published_at, fetched_at)` | delete > 7 days |
-| `company_news` | same | delete > 7 days (fetcher only looks back 7 days, so nothing older is ever re-fetched) |
-| `market_news` | same | delete > 7 days |
-| `news_sentiment` | same | delete > 7 days (sentiment is news-tied) |
-| `sports_news` | same | delete > 7 days |
+| `news_articles` | `coalesce(fetched_at, published_at)` | delete > 30 days |
+| `company_news` | same | delete > 30 days (fetcher only looks back 7 days, so nothing older is ever re-fetched) |
+| `market_news` | same | delete > 30 days |
+| `news_sentiment` | same | delete > 90 days (own knob `p_sentiment_days`: ~320 rows/day at ~1.2 kB is the largest table by volume) |
+| `sports_news` | same | delete > 30 days |
 | `reddit_posts` | `coalesce(posted_at, fetched_at)` | delete > 3 days (hot posts stale within hours) |
 | `sports_scores` | `game_date` | keep forever (small rows; team pages compute season records from them, and a 30-day window silently truncated every record) |
 | `spotify_releases` | `release_date` | keep 30 days |
