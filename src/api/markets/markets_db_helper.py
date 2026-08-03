@@ -979,7 +979,6 @@ def insert_news_sentiment(
             'source': article.get('source'),
             'source_domain': article.get('source_domain'),
             'summary': article.get('summary'),
-            'banner_image': article.get('banner_image'),
             'published_at': published_at,
             'topics': topic_strings,
             'overall_sentiment_score': article.get('overall_sentiment_score'),

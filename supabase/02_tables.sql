@@ -241,7 +241,6 @@ CREATE TABLE IF NOT EXISTS info_agg.news_sentiment (
     source                  TEXT,
     source_domain           TEXT,
     summary                 TEXT,
-    banner_image            TEXT,
     published_at            TIMESTAMP WITH TIME ZONE,
     topics                  TEXT[],
     overall_sentiment_score DECIMAL(6,4),
@@ -325,3 +324,8 @@ CREATE TABLE IF NOT EXISTS info_agg.etl_runs (
     errors           JSONB,  -- flattened error strings
     cleanup          JSONB   -- cleanup_daily() report, when run
 );
+
+-- news_sentiment.banner_image dropped: it was ~9% of the widest row in the
+-- schema and nothing read it. Sentiment is stored for the score, and a feed
+-- renders fine from title + url.
+ALTER TABLE info_agg.news_sentiment DROP COLUMN IF EXISTS banner_image;
