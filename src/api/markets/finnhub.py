@@ -21,7 +21,10 @@ load_dotenv()
 _PARENT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _PARENT not in sys.path:
     sys.path.insert(0, _PARENT)
-from etl_lib import get_http_session, et_today, utc_now
+from etl_lib import (
+    get_http_session, et_today, utc_now,
+    breaker, EndpointUnavailable, HTTP_TIMEOUT,
+)
 
 FINNHUB_BASE_URL = "https://finnhub.io/api/v1"
 
@@ -124,10 +127,12 @@ def fetch_stock_quote(ticker: str, api_key: Optional[str] = None) -> Optional[Di
     params = {'symbol': ticker, 'token': api_key}
 
     try:
+        breaker.check('finnhub:quote')
         _fh_rate_limit(api_key)
-        response = get_http_session().get(url, params=params, timeout=10)
+        response = get_http_session().get(url, params=params, timeout=HTTP_TIMEOUT)
         response.raise_for_status()
         data = response.json()
+        breaker.record_success('finnhub:quote')
 
         if data.get('s') == 'no_data':
             return None
@@ -145,7 +150,10 @@ def fetch_stock_quote(ticker: str, api_key: Optional[str] = None) -> Optional[Di
             'fetched_at': utc_now().isoformat()
         }
 
+    except EndpointUnavailable:
+        raise
     except requests.exceptions.RequestException as e:
+        breaker.record_failure('finnhub:quote', e)
         print(f"Error fetching quote for {ticker}: {e}")
         return None
     except Exception as e:
@@ -202,7 +210,7 @@ def fetch_company_profile(ticker: str, api_key: Optional[str] = None) -> Optiona
 
     try:
         _fh_rate_limit(api_key)
-        response = get_http_session().get(url, params=params, timeout=10)
+        response = get_http_session().get(url, params=params, timeout=HTTP_TIMEOUT)
         response.raise_for_status()
         data = response.json()
 
@@ -246,7 +254,7 @@ def fetch_etf_profile(ticker: str, api_key: Optional[str] = None) -> Optional[Di
 
     try:
         _fh_rate_limit(api_key)
-        response = get_http_session().get(url, params=params, timeout=10)
+        response = get_http_session().get(url, params=params, timeout=HTTP_TIMEOUT)
         response.raise_for_status()
         data = response.json()
 
@@ -300,10 +308,12 @@ def fetch_company_news(
     }
 
     try:
+        breaker.check('finnhub:company-news')
         _fh_rate_limit(api_key)
-        response = get_http_session().get(url, params=params, timeout=10)
+        response = get_http_session().get(url, params=params, timeout=HTTP_TIMEOUT)
         response.raise_for_status()
         data = response.json()
+        breaker.record_success('finnhub:company-news')
 
         articles = []
         for article in data:
@@ -320,12 +330,18 @@ def fetch_company_news(
 
         return articles
 
+    except EndpointUnavailable:
+        raise
     except requests.exceptions.RequestException as e:
-        print(f"Error fetching company news for {ticker}: {e}")
-        return []
+        # Raise, don't return []. Swallowing this made a total outage of the
+        # endpoint indistinguishable from a quiet news day: company news went
+        # 1847 -> 0 while etl_runs recorded zero errors and the domain
+        # reported OK. The caller records it in stats['errors'].
+        breaker.record_failure('finnhub:company-news', e)
+        raise RuntimeError(f"finnhub company-news failed for {ticker}: {e}") from e
     except Exception as e:
-        print(f"Error parsing company news for {ticker}: {e}")
-        return []
+        breaker.record_failure('finnhub:company-news', e)
+        raise RuntimeError(f"finnhub company-news parse failed for {ticker}: {e}") from e
 
 
 def fetch_market_news(category: str = 'general', min_id: int = 0, api_key: Optional[str] = None) -> List[Dict[str, Any]]:
@@ -337,10 +353,12 @@ def fetch_market_news(category: str = 'general', min_id: int = 0, api_key: Optio
     params = {'category': category, 'minId': min_id, 'token': api_key}
 
     try:
+        breaker.check('finnhub:market-news')
         _fh_rate_limit(api_key)
-        response = get_http_session().get(url, params=params, timeout=10)
+        response = get_http_session().get(url, params=params, timeout=HTTP_TIMEOUT)
         response.raise_for_status()
         data = response.json()
+        breaker.record_success('finnhub:market-news')
 
         articles = []
         for article in data:
@@ -357,12 +375,14 @@ def fetch_market_news(category: str = 'general', min_id: int = 0, api_key: Optio
 
         return articles
 
+    except EndpointUnavailable:
+        raise
     except requests.exceptions.RequestException as e:
-        print(f"Error fetching market news: {e}")
-        return []
+        breaker.record_failure('finnhub:market-news', e)
+        raise RuntimeError(f"finnhub market-news failed for {category}: {e}") from e
     except Exception as e:
-        print(f"Error parsing market news: {e}")
-        return []
+        breaker.record_failure('finnhub:market-news', e)
+        raise RuntimeError(f"finnhub market-news parse failed for {category}: {e}") from e
 
 
 def fetch_recommendation_trends(ticker: str, api_key: Optional[str] = None) -> List[Dict[str, Any]]:
@@ -375,7 +395,7 @@ def fetch_recommendation_trends(ticker: str, api_key: Optional[str] = None) -> L
 
     try:
         _fh_rate_limit(api_key)
-        response = get_http_session().get(url, params=params, timeout=10)
+        response = get_http_session().get(url, params=params, timeout=HTTP_TIMEOUT)
         response.raise_for_status()
         data = response.json()
 
@@ -411,7 +431,7 @@ def fetch_country_metadata(api_key: Optional[str] = None) -> List[Dict[str, Any]
 
     try:
         _fh_rate_limit(api_key)
-        response = get_http_session().get(url, params=params, timeout=10)
+        response = get_http_session().get(url, params=params, timeout=HTTP_TIMEOUT)
         response.raise_for_status()
         data = response.json()
 
@@ -447,7 +467,7 @@ def fetch_usa_spending(api_key: Optional[str] = None) -> Optional[Dict[str, Any]
 
     try:
         _fh_rate_limit(api_key)
-        response = get_http_session().get(url, params=params, timeout=10)
+        response = get_http_session().get(url, params=params, timeout=HTTP_TIMEOUT)
         response.raise_for_status()
         return {'data': response.json(), 'fetched_at': utc_now().isoformat()}
 

@@ -23,7 +23,10 @@ load_dotenv()
 _PARENT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _PARENT not in sys.path:
     sys.path.insert(0, _PARENT)
-from etl_lib import get_http_session, MinInterval
+from etl_lib import (
+    get_http_session, MinInterval,
+    breaker, EndpointUnavailable, HTTP_TIMEOUT,
+)
 
 
 ESPN_BASE_URL = "https://site.api.espn.com/apis/site/v2/sports"
@@ -87,7 +90,7 @@ def fetch_espn_news(sport: str, league: str, limit: int = 20) -> List[Dict[str, 
 
     try:
         _espn_min_interval()
-        response = get_http_session().get(url, timeout=10)
+        response = get_http_session().get(url, timeout=HTTP_TIMEOUT)
         response.raise_for_status()
         data = response.json()
 
@@ -139,7 +142,7 @@ def fetch_espn_teams(sport: str, league: str) -> List[Dict[str, Any]]:
 
     try:
         _espn_min_interval()
-        response = get_http_session().get(url, timeout=10)
+        response = get_http_session().get(url, timeout=HTTP_TIMEOUT)
         response.raise_for_status()
         data = response.json()
 
@@ -286,9 +289,11 @@ def fetch_espn_scores(
         params['limit'] = limit
 
     try:
+        breaker.check('espn:scoreboard')
         _espn_min_interval()
-        response = get_http_session().get(url, params=params, timeout=10)
+        response = get_http_session().get(url, params=params, timeout=HTTP_TIMEOUT)
         response.raise_for_status()
+        breaker.record_success('espn:scoreboard')
         data = response.json()
 
         games = []
@@ -332,7 +337,11 @@ def fetch_espn_scores(
 
         return games
 
+    except EndpointUnavailable as e:
+        print(f"ESPN scoreboard skipped for {sport}/{league}: {e}")
+        return []
     except requests.exceptions.RequestException as e:
+        breaker.record_failure('espn:scoreboard', e)
         print(f"Error fetching scores for {sport}/{league}: {e}")
         return []
     except (KeyError, IndexError) as e:
@@ -410,7 +419,7 @@ def fetch_espn_standings(sport: str, league: str) -> List[Dict[str, Any]]:
 
     try:
         _espn_standings_pacer.wait()
-        response = get_http_session().get(url, timeout=10)
+        response = get_http_session().get(url, timeout=HTTP_TIMEOUT)
         response.raise_for_status()
         data = response.json()
     except requests.exceptions.RequestException as e:
@@ -500,7 +509,7 @@ def fetch_soccer_scores():
 
     try:
         _espn_min_interval()
-        response = get_http_session().get(url, headers=headers, timeout=10)
+        response = get_http_session().get(url, headers=headers, timeout=HTTP_TIMEOUT)
         response.raise_for_status()
         data = response.json()
 

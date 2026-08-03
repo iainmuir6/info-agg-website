@@ -21,7 +21,10 @@ load_dotenv()
 _PARENT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _PARENT not in sys.path:
     sys.path.insert(0, _PARENT)
-from etl_lib import get_http_session, MinInterval
+from etl_lib import (
+    get_http_session, MinInterval,
+    breaker, EndpointUnavailable, HTTP_TIMEOUT, HTTP_TIMEOUT_SLOW,
+)
 
 ROOT_DIR = os.getenv('ROOT_DIR')
 
@@ -113,12 +116,15 @@ def fetch_nyt_top_stories(section: str = 'home', api_key: Optional[str] = None) 
     }
 
     try:
+        breaker.check('nyt:topstories')
         _nyt_min_interval()
-        response = get_http_session().get(url, params=params, timeout=10)
+        response = get_http_session().get(url, params=params, timeout=HTTP_TIMEOUT)
         if response.status_code == 429:
+            # Handled by key rotation, not an endpoint fault — do not trip.
             _nyt_disable_key(api_key)
             return None
         response.raise_for_status()
+        breaker.record_success('nyt:topstories')
         data = response.json()
 
         # Check for API error
@@ -176,7 +182,11 @@ def fetch_nyt_top_stories(section: str = 'home', api_key: Optional[str] = None) 
             'fetched_at': datetime.now().isoformat()
         }
 
+    except EndpointUnavailable as e:
+        print(f"NYT top stories skipped for {section}: {e}")
+        return None
     except requests.exceptions.RequestException as e:
+        breaker.record_failure('nyt:topstories', e)
         print(f"Error fetching NYT top stories for section {section}: {e}")
         return None
     except Exception as e:
@@ -213,7 +223,7 @@ def fetch_nyt_most_popular(
 
     try:
         _nyt_min_interval()
-        response = get_http_session().get(url, params=params, timeout=10)
+        response = get_http_session().get(url, params=params, timeout=HTTP_TIMEOUT)
         if response.status_code == 429:
             _nyt_disable_key(api_key)
             return None
@@ -357,7 +367,7 @@ def fetch_nyt_archive(
 
     try:
         _nyt_min_interval()
-        response = get_http_session().get(url, params=params, timeout=30)
+        response = get_http_session().get(url, params=params, timeout=HTTP_TIMEOUT_SLOW)
         if response.status_code == 429:
             _nyt_disable_key(api_key)
             return []

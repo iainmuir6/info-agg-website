@@ -89,7 +89,13 @@ def get_http_session() -> requests.Session:
             retry = Retry(
                 total=3,
                 connect=3,
-                read=2,
+                # read=0: a read timeout means the server accepted the
+                # connection and then hung, so a retry pays the full timeout
+                # again for the same answer. Finnhub's company-news endpoint
+                # hanging turned 13 tickers into 3 attempts x 10s each = 240s,
+                # 4x the whole run budget. Connection errors are still worth
+                # retrying; hung reads are not.
+                read=0,
                 backoff_factor=1,          # 0s, 2s, 4s between attempts
                 status_forcelist=[500, 502, 503, 504],
                 allowed_methods=['GET', 'POST'],
@@ -102,6 +108,74 @@ def get_http_session() -> requests.Session:
             s.mount('http://', adapter)
             _session = s
         return _session
+
+
+# ── HTTP timeouts ────────────────────────────────────────────────────────────
+# (connect, read). Connect sits just above 3s so a single dropped SYN gets one
+# TCP retransmit; read is bounded tightly because nothing this pipeline fetches
+# is legitimately slow, and an unbounded read is what lets one sick endpoint
+# eat the whole run budget.
+HTTP_TIMEOUT = (3.05, 8.0)
+HTTP_TIMEOUT_SLOW = (3.05, 20.0)   # bulk endpoints: AV time-series, NYT archive
+
+
+# ── Per-endpoint circuit breaker ─────────────────────────────────────────────
+
+class EndpointUnavailable(RuntimeError):
+    """Raised instead of calling an endpoint that has already failed repeatedly
+    this run. Callers should record it and move on — it is a real error, not a
+    quiet 'no data' result."""
+
+
+class EndpointBreaker:
+    """Stop calling an endpoint that has failed N times in a row this run.
+
+    A dead endpoint costs a full timeout per call, and the pipeline fans out
+    over dozens of tickers/sections against the same URL. Without this, one
+    outage is paid for once per item: Finnhub's company-news endpoint going
+    down cost 240s against a 60s budget, and every ticker paid the same toll
+    to learn the same fact.
+
+    Process-lifetime (one ETL run) by design — the next run starts clean and
+    re-probes. Counters reset on any success, so a single blip does not
+    disable an endpoint that is merely flaky.
+    """
+
+    def __init__(self, threshold: int = 3):
+        self.threshold = threshold
+        self._fails: Dict[str, int] = {}
+        self._reason: Dict[str, str] = {}
+        self._lock = threading.Lock()
+
+    def check(self, endpoint: str) -> None:
+        """Raise EndpointUnavailable if this endpoint is already tripped."""
+        with self._lock:
+            if self._fails.get(endpoint, 0) >= self.threshold:
+                reason = self._reason.get(endpoint, 'repeated failures')
+                raise EndpointUnavailable(
+                    f"{endpoint}: skipped after {self.threshold} consecutive "
+                    f"failures this run ({reason})"
+                )
+
+    def record_failure(self, endpoint: str, exc: Any) -> None:
+        with self._lock:
+            self._fails[endpoint] = self._fails.get(endpoint, 0) + 1
+            self._reason[endpoint] = str(exc)[:120]
+
+    def record_success(self, endpoint: str) -> None:
+        with self._lock:
+            if endpoint in self._fails:
+                del self._fails[endpoint]
+                self._reason.pop(endpoint, None)
+
+    def tripped(self, endpoint: str) -> bool:
+        with self._lock:
+            return self._fails.get(endpoint, 0) >= self.threshold
+
+
+# Shared across fetchers so every caller of the same endpoint benefits from
+# what the others already learned.
+breaker = EndpointBreaker()
 
 
 # ── Pacing primitive ─────────────────────────────────────────────────────────

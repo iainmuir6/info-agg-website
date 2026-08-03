@@ -22,7 +22,7 @@ load_dotenv()
 _PARENT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _PARENT not in sys.path:
     sys.path.insert(0, _PARENT)
-from etl_lib import get_http_session, et_today, MinInterval
+from etl_lib import get_http_session, et_today, MinInterval, HTTP_TIMEOUT
 
 # FMP_BASE_V3 = "https://financialmodelingprep.com/api/v3"
 FMP_BASE_STABLE = "https://financialmodelingprep.com/stable"
@@ -108,7 +108,7 @@ def fetch_company_profile(ticker: str, api_key: Optional[str] = None) -> Optiona
 
     try:
         _fmp_rate_check()
-        response = get_http_session().get(url, params=params, timeout=10)
+        response = get_http_session().get(url, params=params, timeout=HTTP_TIMEOUT)
         if response.status_code == 429:
             _fmp_disable_due_to_429()
             raise RuntimeError("FMP disabled for remainder of this ETL run due to 429")
@@ -178,7 +178,7 @@ def fetch_etf_info(ticker: str, api_key: Optional[str] = None) -> Optional[Dict[
 
     try:
         _fmp_rate_check()
-        response = get_http_session().get(url, params=params, timeout=10)
+        response = get_http_session().get(url, params=params, timeout=HTTP_TIMEOUT)
         if response.status_code == 429:
             _fmp_disable_due_to_429()
             raise RuntimeError("FMP disabled for remainder of this ETL run due to 429")
@@ -244,7 +244,7 @@ def fetch_etf_holdings(ticker: str, api_key: Optional[str] = None) -> List[Dict[
 
     try:
         _fmp_rate_check()
-        response = get_http_session().get(url, params=params, timeout=10)
+        response = get_http_session().get(url, params=params, timeout=HTTP_TIMEOUT)
         if response.status_code == 429:
             _fmp_disable_due_to_429()
             raise RuntimeError("FMP disabled for remainder of this ETL run due to 429")
@@ -293,7 +293,7 @@ def fetch_fmp_quote(symbol: str, api_key: Optional[str] = None) -> Optional[Dict
 
     try:
         _fmp_rate_check()
-        response = get_http_session().get(url, params=params, timeout=10)
+        response = get_http_session().get(url, params=params, timeout=HTTP_TIMEOUT)
         if response.status_code == 429:
             _fmp_disable_due_to_429()
             raise RuntimeError("FMP disabled for remainder of this ETL run due to 429")
@@ -357,7 +357,7 @@ def fetch_treasury_rates(api_key: Optional[str] = None) -> List[Dict[str, Any]]:
 
     try:
         _fmp_rate_check()
-        response = get_http_session().get(url, params=params, timeout=10)
+        response = get_http_session().get(url, params=params, timeout=HTTP_TIMEOUT)
         if response.status_code == 429:
             _fmp_disable_due_to_429()
             raise RuntimeError("FMP disabled for remainder of this ETL run due to 429")
@@ -402,7 +402,7 @@ def fetch_economic_indicator(name: str, api_key: Optional[str] = None) -> List[D
 
     try:
         _fmp_rate_check()
-        response = get_http_session().get(url, params=params, timeout=10)
+        response = get_http_session().get(url, params=params, timeout=HTTP_TIMEOUT)
         # Every other FMP call trips the circuit breaker on 429; this one did
         # not, so a rate-limited response fell through raise_for_status() into
         # the RequestException handler, returned [] silently, and let the
@@ -455,7 +455,7 @@ def fetch_historical_prices(
 
     try:
         _fmp_rate_check()
-        response = get_http_session().get(url, params=params, timeout=10)
+        response = get_http_session().get(url, params=params, timeout=HTTP_TIMEOUT)
         response.raise_for_status()
         data = response.json()
 
@@ -504,7 +504,7 @@ def fetch_income_statement(ticker: str, period: str = 'annual', api_key: Optiona
     params = {'period': period, 'apikey': api_key}
     try:
         _fmp_rate_check()
-        response = get_http_session().get(url, params=params, timeout=10)
+        response = get_http_session().get(url, params=params, timeout=HTTP_TIMEOUT)
         response.raise_for_status()
         return response.json() or []
     except RuntimeError:
@@ -522,7 +522,7 @@ def fetch_balance_sheet(ticker: str, period: str = 'annual', api_key: Optional[s
     params = {'period': period, 'apikey': api_key}
     try:
         _fmp_rate_check()
-        response = get_http_session().get(url, params=params, timeout=10)
+        response = get_http_session().get(url, params=params, timeout=HTTP_TIMEOUT)
         response.raise_for_status()
         return response.json() or []
     except RuntimeError:
@@ -540,7 +540,7 @@ def fetch_cash_flow(ticker: str, period: str = 'annual', api_key: Optional[str] 
     params = {'period': period, 'apikey': api_key}
     try:
         _fmp_rate_check()
-        response = get_http_session().get(url, params=params, timeout=10)
+        response = get_http_session().get(url, params=params, timeout=HTTP_TIMEOUT)
         response.raise_for_status()
         return response.json() or []
     except RuntimeError:
@@ -558,7 +558,7 @@ def fetch_key_metrics(ticker: str, period: str = 'annual', api_key: Optional[str
     params = {'period': period, 'apikey': api_key}
     try:
         _fmp_rate_check()
-        response = get_http_session().get(url, params=params, timeout=10)
+        response = get_http_session().get(url, params=params, timeout=HTTP_TIMEOUT)
         response.raise_for_status()
         return response.json() or []
     except RuntimeError:
@@ -576,7 +576,7 @@ def fetch_financial_ratios(ticker: str, period: str = 'annual', api_key: Optiona
     params = {'period': period, 'apikey': api_key}
     try:
         _fmp_rate_check()
-        response = get_http_session().get(url, params=params, timeout=10)
+        response = get_http_session().get(url, params=params, timeout=HTTP_TIMEOUT)
         response.raise_for_status()
         return response.json() or []
     except RuntimeError:
@@ -594,7 +594,7 @@ def fetch_analyst_estimates(ticker: str, api_key: Optional[str] = None) -> List[
     params = {'apikey': api_key}
     try:
         _fmp_rate_check()
-        response = get_http_session().get(url, params=params, timeout=10)
+        response = get_http_session().get(url, params=params, timeout=HTTP_TIMEOUT)
         response.raise_for_status()
         return response.json() or []
     except RuntimeError:
@@ -612,7 +612,7 @@ def fetch_insider_trades(ticker: str, api_key: Optional[str] = None) -> List[Dic
     params = {'apikey': api_key}
     try:
         _fmp_rate_check()
-        response = get_http_session().get(url, params=params, timeout=10)
+        response = get_http_session().get(url, params=params, timeout=HTTP_TIMEOUT)
         response.raise_for_status()
         return response.json() or []
     except RuntimeError:
@@ -630,7 +630,7 @@ def fetch_press_releases(ticker: str, limit: int = 10, api_key: Optional[str] = 
     params = {'limit': limit, 'apikey': api_key}
     try:
         _fmp_rate_check()
-        response = get_http_session().get(url, params=params, timeout=10)
+        response = get_http_session().get(url, params=params, timeout=HTTP_TIMEOUT)
         response.raise_for_status()
         return response.json() or []
     except RuntimeError:

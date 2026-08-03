@@ -21,7 +21,7 @@ load_dotenv()
 _PARENT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _PARENT not in sys.path:
     sys.path.insert(0, _PARENT)
-from etl_lib import get_http_session, et_today, utc_now
+from etl_lib import get_http_session, et_today, utc_now, HTTP_TIMEOUT, HTTP_TIMEOUT_SLOW
 
 ALPHA_VANTAGE_BASE_URL = "https://www.alphavantage.co/query"
 
@@ -169,7 +169,7 @@ def fetch_stock_candles_av(
             'apikey': key,
         }
         try:
-            response = get_http_session().get(ALPHA_VANTAGE_BASE_URL, params=params, timeout=15)
+            response = get_http_session().get(ALPHA_VANTAGE_BASE_URL, params=params, timeout=HTTP_TIMEOUT_SLOW)
             response.raise_for_status()
             data = response.json()
 
@@ -304,7 +304,7 @@ def fetch_crypto_candles_av(
             'apikey': key,
         }
         try:
-            response = get_http_session().get(ALPHA_VANTAGE_BASE_URL, params=params, timeout=15)
+            response = get_http_session().get(ALPHA_VANTAGE_BASE_URL, params=params, timeout=HTTP_TIMEOUT_SLOW)
             response.raise_for_status()
             data = response.json()
 
@@ -392,7 +392,7 @@ def fetch_index_constituents(symbol: str = 'VOO', api_key: Optional[str] = None)
 
         params = {'function': 'ETF_PROFILE', 'symbol': symbol, 'apikey': key}
         try:
-            response = get_http_session().get(ALPHA_VANTAGE_BASE_URL, params=params, timeout=10)
+            response = get_http_session().get(ALPHA_VANTAGE_BASE_URL, params=params, timeout=HTTP_TIMEOUT)
             response.raise_for_status()
             data = response.json()
 
@@ -498,7 +498,7 @@ def fetch_news_sentiment(
         params['topics'] = topic
 
     try:
-        response = get_http_session().get(ALPHA_VANTAGE_BASE_URL, params=params, timeout=15)
+        response = get_http_session().get(ALPHA_VANTAGE_BASE_URL, params=params, timeout=HTTP_TIMEOUT_SLOW)
         response.raise_for_status()
         data = response.json()
 
@@ -565,7 +565,7 @@ def fetch_top_gainers_losers(api_key: Optional[str] = None) -> Optional[Dict[str
     params = {'function': 'TOP_GAINERS_LOSERS', 'apikey': api_key}
 
     try:
-        response = get_http_session().get(ALPHA_VANTAGE_BASE_URL, params=params, timeout=10)
+        response = get_http_session().get(ALPHA_VANTAGE_BASE_URL, params=params, timeout=HTTP_TIMEOUT)
         response.raise_for_status()
         data = response.json()
 
@@ -597,7 +597,7 @@ def fetch_earnings_calendar(horizon: str = '3month', api_key: Optional[str] = No
     params = {'function': 'EARNINGS_CALENDAR', 'horizon': horizon, 'apikey': api_key}
 
     try:
-        response = get_http_session().get(ALPHA_VANTAGE_BASE_URL, params=params, timeout=10)
+        response = get_http_session().get(ALPHA_VANTAGE_BASE_URL, params=params, timeout=HTTP_TIMEOUT)
         response.raise_for_status()
         data = response.json()
 
@@ -644,7 +644,7 @@ def fetch_economic_indicator(
         params['maturity'] = maturity or '10year'
 
     try:
-        response = get_http_session().get(ALPHA_VANTAGE_BASE_URL, params=params, timeout=10)
+        response = get_http_session().get(ALPHA_VANTAGE_BASE_URL, params=params, timeout=HTTP_TIMEOUT)
         response.raise_for_status()
         data = response.json()
 

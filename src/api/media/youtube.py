@@ -19,7 +19,7 @@ load_dotenv()
 _PARENT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _PARENT not in sys.path:
     sys.path.insert(0, _PARENT)
-from etl_lib import get_http_session
+from etl_lib import get_http_session, HTTP_TIMEOUT_SLOW
 
 YOUTUBE_BASE_URL = "https://www.googleapis.com/youtube/v3"
 
@@ -73,7 +73,7 @@ def fetch_youtube_trending(
 
     try:
         response = get_http_session().get(
-            f"{YOUTUBE_BASE_URL}/videos", params=params, timeout=15
+            f"{YOUTUBE_BASE_URL}/videos", params=params, timeout=HTTP_TIMEOUT_SLOW
         )
         response.raise_for_status()
         data = response.json()
