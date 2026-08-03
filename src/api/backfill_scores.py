@@ -43,6 +43,7 @@ if _API_DIR not in sys.path:
 from supabase import create_client, Client, ClientOptions
 from dotenv import load_dotenv
 
+from etl_lib import et_today
 from sports.espn import SPORT_CONFIGS, fetch_espn_scores
 from sports.sports_db_helper import _sports_score_records, _upsert_sports_score_records
 

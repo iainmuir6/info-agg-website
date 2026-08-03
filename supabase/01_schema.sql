@@ -47,12 +47,22 @@ SET search_path = '';
 --                          $c$SELECT info_agg.cleanup_daily()$c$);
 -- Requires idx_stock_quotes_quote_timestamp (04_indexes.sql).
 -- ============================================================
+-- Signature note: adding a parameter to a plpgsql function creates an
+-- *overload* rather than replacing it, which would make the no-arg
+-- rpc('cleanup_daily') call ambiguous. The old 5-arg form is dropped first.
+DROP FUNCTION IF EXISTS info_agg.cleanup_daily(integer, integer, integer, integer, integer);
+
 CREATE OR REPLACE FUNCTION info_agg.cleanup_daily(
-    p_news_days          integer DEFAULT 7,   -- news_articles, company_news, market_news, sports_news, news_sentiment
-    p_scores_days        integer DEFAULT 30,  -- sports_scores
+    p_news_days          integer DEFAULT 7,    -- news_articles, company_news, market_news, sports_news
+    p_scores_days        integer DEFAULT NULL, -- sports_scores; NULL = keep everything (see below)
     p_youtube_days       integer DEFAULT 30,  -- youtube_videos
     p_quote_history_days integer DEFAULT 400, -- EOD stock_quotes history cap
-    p_etl_runs_days      integer DEFAULT 90   -- etl_runs
+    p_etl_runs_days      integer DEFAULT 90,  -- etl_runs
+    -- news_sentiment is kept far longer than the other news tables: it is the
+    -- only one with analytical value over time (scored sentiment per ticker),
+    -- and at ~320 rows/day it is the largest single table by volume, so this
+    -- is the one retention knob worth revisiting if the DB gets tight.
+    p_sentiment_days     integer DEFAULT 365
 ) RETURNS jsonb
 LANGUAGE plpgsql
 SECURITY DEFINER
@@ -115,14 +125,25 @@ BEGIN
     v_report := v_report || jsonb_build_object('sports_news', v_count);
 
     DELETE FROM info_agg.news_sentiment
-    WHERE coalesce(published_at, fetched_at) < now() - make_interval(days => p_news_days);
+    WHERE coalesce(published_at, fetched_at) < now() - make_interval(days => p_sentiment_days);
     GET DIAGNOSTICS v_count = ROW_COUNT;
     v_report := v_report || jsonb_build_object('news_sentiment', v_count);
 
-    -- ── sports_scores: keep recent history for team pages ──
-    DELETE FROM info_agg.sports_scores
-    WHERE game_date < now() - make_interval(days => p_scores_days);
-    GET DIAGNOSTICS v_count = ROW_COUNT;
+    -- ── sports_scores: full retention by default ──
+    -- Team pages compute season win/loss records from this table and the
+    -- daily run walks 150 days of schedule into it, so a short window
+    -- deleted the very history both were built to keep: a 30-day policy
+    -- was destroying ~1,070 rows per run, truncating every team record to
+    -- the last month. Rows are small and bounded by the real schedule, so
+    -- the default is now to keep everything. Pass an explicit
+    -- p_scores_days to prune on demand.
+    IF p_scores_days IS NOT NULL THEN
+        DELETE FROM info_agg.sports_scores
+        WHERE game_date < now() - make_interval(days => p_scores_days);
+        GET DIAGNOSTICS v_count = ROW_COUNT;
+    ELSE
+        v_count := 0;
+    END IF;
     v_report := v_report || jsonb_build_object('sports_scores', v_count);
 
     -- ── youtube_videos ──
@@ -143,6 +164,6 @@ END;
 $$;
 
 -- Only the ETL (service role) may run cleanup.
-REVOKE ALL ON FUNCTION info_agg.cleanup_daily(integer, integer, integer, integer, integer) FROM PUBLIC;
-REVOKE ALL ON FUNCTION info_agg.cleanup_daily(integer, integer, integer, integer, integer) FROM anon, authenticated;
-GRANT EXECUTE ON FUNCTION info_agg.cleanup_daily(integer, integer, integer, integer, integer) TO service_role;
+REVOKE ALL ON FUNCTION info_agg.cleanup_daily(integer, integer, integer, integer, integer, integer) FROM PUBLIC;
+REVOKE ALL ON FUNCTION info_agg.cleanup_daily(integer, integer, integer, integer, integer, integer) FROM anon, authenticated;
+GRANT EXECUTE ON FUNCTION info_agg.cleanup_daily(integer, integer, integer, integer, integer, integer) TO service_role;

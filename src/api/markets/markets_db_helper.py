@@ -918,9 +918,31 @@ def insert_news_sentiment(
     if not articles:
         return 0
 
-    # Build ticker → stock UUID map for primary_ticker_id resolution
-    stocks_result = supabase.table('stocks').select('id, ticker').execute()
-    ticker_to_id = {row['ticker']: row['id'] for row in (stocks_result.data or [])}
+    # Build ticker → stock UUID map for primary_ticker_id resolution.
+    #
+    # Look up only the tickers this batch actually mentions. An unfiltered
+    # select() is silently capped by PostgREST at 1000 rows, and with a few
+    # thousand stocks that truncated map left ~75% of sentiment rows with an
+    # unresolved primary_ticker_id despite AV returning ticker data for them.
+    wanted_tickers = sorted({
+        entry.get('ticker')
+        for article in articles
+        for entry in (article.get('ticker_sentiments') or [])
+        if entry.get('ticker')
+    })
+    ticker_to_id: Dict[str, str] = {}
+    for i in range(0, len(wanted_tickers), 200):
+        batch = wanted_tickers[i:i + 200]
+        try:
+            resp = db_call(
+                lambda b=batch: supabase.table('stocks').select('id, ticker').in_('ticker', b).execute(),
+                'sentiment ticker map',
+            )
+        except Exception as e:
+            if errors is not None:
+                errors.append(f"sentiment ticker map lookup failed: {e}")
+            continue
+        ticker_to_id.update({row['ticker']: row['id'] for row in (resp.data or [])})
 
     batch_data = []
     for article in articles:

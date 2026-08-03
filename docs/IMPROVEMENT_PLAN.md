@@ -250,7 +250,7 @@ The policy:
 | `news_sentiment` | same | delete > 7 days (sentiment is news-tied) |
 | `sports_news` | same | delete > 7 days |
 | `reddit_posts` | `coalesce(posted_at, fetched_at)` | delete > 3 days (hot posts stale within hours) |
-| `sports_scores` | `game_date` | keep 30 days (small rows; powers team pages) |
+| `sports_scores` | `game_date` | keep forever (small rows; team pages compute season records from them, and a 30-day window silently truncated every record) |
 | `spotify_releases` | `release_date` | keep 30 days |
 | `economic_indicators` | — | keep forever (tiny, historical value) |
 | `etl_runs` (0.2) | `started_at` | keep 90 days |

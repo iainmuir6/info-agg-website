@@ -161,12 +161,15 @@ def run_quick_refresh(tier: str, triggered_by: str = 'manual') -> Dict[str, Any]
     run_id = start_etl_run(supabase, triggered_by, tier)
 
     include_b = tier == 'b'
+    # One client per domain thread, matching run_etl.py. Sharing a single
+    # client across concurrent domains intermittently dropped lookups
+    # (TLT/XRP/EURUSD); the client is not safe to fan out this way.
     domain_fns = {
-        'sports':  lambda: run_quick_sports_etl(supabase, include_news=include_b),
-        'markets': lambda: run_quick_markets_etl(supabase, include_fmp_quotes=include_b),
+        'sports':  lambda: run_quick_sports_etl(get_supabase_client(), include_news=include_b),
+        'markets': lambda: run_quick_markets_etl(get_supabase_client(), include_fmp_quotes=include_b),
     }
     if include_b:
-        domain_fns['news'] = lambda: run_news_etl(supabase)
+        domain_fns['news'] = lambda: run_news_etl(get_supabase_client())
 
     results: Dict[str, Any] = {'started_at': start_time.isoformat()}
     domain_elapsed: Dict[str, float] = {}

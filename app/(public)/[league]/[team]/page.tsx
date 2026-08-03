@@ -23,6 +23,7 @@ type Score = {
   game_date: string | null;
   venue: string | null;
   broadcast: string | null;
+  season: number | null;
   season_type: number | null;
 };
 
@@ -57,7 +58,7 @@ export default async function TeamPage({
   const slug = raw.toUpperCase();
 
   const COLUMNS =
-    "id, event_id, home_team, away_team, home_abbrev, away_abbrev, home_logo, away_logo, home_score, away_score, status, status_detail, game_date, venue, broadcast, season_type";
+    "id, event_id, home_team, away_team, home_abbrev, away_abbrev, home_logo, away_logo, home_score, away_score, status, status_detail, game_date, venue, broadcast, season, season_type";
 
   // Filter by team in the query rather than pulling the league's most recent
   // games and filtering here — a busy league (MLB) would otherwise fill the
@@ -101,6 +102,19 @@ export default async function TeamPage({
   const teamName = isHomeSample ? sample.home_team : sample.away_team;
   const teamAbbrev = (isHomeSample ? sample.home_abbrev : sample.away_abbrev)?.toUpperCase() ?? slug;
 
+  // The current season is the season of the most recent completed game.
+  // sports_scores retains every season, so the tally must be scoped or last
+  // season's wins get added to this one's. Deriving it from the latest final
+  // (rather than max(season)) matters because ESPN publishes next season's
+  // fixtures months early — the highest season present is often one with no
+  // games played, which would read 0–0. `games` is already sorted newest
+  // first. Falls back to counting everything when season is null on legacy
+  // rows, which is the pre-existing behaviour.
+  const currentSeason =
+    games.find((g) => gameState(g.status) === "final" && g.season_type !== 1)?.season ?? null;
+
+  const inCurrentSeason = (g: Score) => currentSeason == null || g.season === currentSeason;
+
   // Record from completed games — preseason games (season_type === 1) are
   // excluded from the tally but still shown in Recent Results, flagged.
   let wins = 0;
@@ -108,6 +122,7 @@ export default async function TeamPage({
   for (const g of games) {
     if (gameState(g.status) !== "final") continue;
     if (g.season_type === 1) continue;
+    if (!inCurrentSeason(g)) continue;
     const home = matches(g, "home");
     const own = home ? g.home_score : g.away_score;
     const opp = home ? g.away_score : g.home_score;
@@ -120,9 +135,10 @@ export default async function TeamPage({
   const results = games.filter((g) => gameState(g.status) === "final").slice(0, 30);
 
   // Margin-of-victory strip: every completed game oldest-first, not just the 30
-  // in Recent Results. Preseason is excluded to match the W–L record above.
+  // in Recent Results. Preseason and prior seasons are excluded to match the
+  // W–L record above — this strip is the visual form of that record.
   const resultBars: GameResultBar[] = games
-    .filter((g) => gameState(g.status) === "final" && g.season_type !== 1)
+    .filter((g) => gameState(g.status) === "final" && g.season_type !== 1 && inCurrentSeason(g))
     .map((g) => {
       const home = matches(g, "home");
       const own = home ? g.home_score : g.away_score;
@@ -249,7 +265,9 @@ export default async function TeamPage({
           <div className="flex items-center gap-4">
             {(wins > 0 || losses > 0) && (
               <div className="text-right">
-                <p className="text-[9px] font-mono uppercase tracking-widest text-muted-foreground">Record</p>
+                <p className="text-[9px] font-mono uppercase tracking-widest text-muted-foreground">
+                  {currentSeason ? `${currentSeason} Record` : "Record"}
+                </p>
                 <p className="text-2xl font-black font-mono tabular-nums leading-none">
                   {wins}–{losses}
                 </p>

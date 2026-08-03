@@ -257,16 +257,24 @@ def sync_all_sports_data(
 
 def sync_season_schedules(
     supabase: Client,
-    days_back: int = 150,
+    days_back: int = 21,
     days_forward: int = 14,
     chunk_days: int = 14,
 ) -> Dict[str, Any]:
-    """Fetch the full season schedule for every in-season league.
+    """Refresh the recent + upcoming schedule for every in-season league.
 
     The daily scoreboard call only returns today's slate, so team pages
-    computed win/loss records from a handful of games. This walks the
-    season in date-range chunks (ESPN accepts dates=YYYYMMDD-YYYYMMDD) for
-    leagues that actually have games near today, so records are complete.
+    computed win/loss records from a handful of games. This walks a window
+    in date-range chunks (ESPN accepts dates=YYYYMMDD-YYYYMMDD) for leagues
+    that actually have games near today.
+
+    days_back only needs to cover recent corrections and a short run outage:
+    sports_scores is now fully retained, so history accumulates rather than
+    being re-fetched daily. It used to walk 150 days to rebuild season
+    records against a 30-day retention window that deleted them again every
+    run — ~35s of the daily budget spent re-fetching rows that were then
+    dropped. Use backfill_scores.py to repair anything older than this
+    window.
 
     Runs once per day (run_etl.py --season-schedules), not on the intraday
     tiers — it costs roughly (days_back / chunk_days) ESPN calls per league.
