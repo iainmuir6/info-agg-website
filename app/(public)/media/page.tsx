@@ -1,7 +1,14 @@
 import { createClient } from "@/lib/supabase/server";
-import { SPOTIFY_HOME_PLAYLISTS, spotifyShowEmbedUrl } from "@/lib/top-podcasts";
+import {
+  SPOTIFY_HOME_PLAYLISTS,
+  SPOTIFY_EMBED_ALLOW,
+  SPOTIFY_EMBED_CLASS,
+  spotifyShowEmbedUrl,
+  spotifyPlaylistEmbedUrl,
+} from "@/lib/top-podcasts";
 import { buildPodcastList } from "@/lib/podcast-list";
 import { FavoritePodcastButton } from "@/components/favorite-podcast-button";
+import { CollapsibleSection } from "@/components/collapsible-section";
 
 type YouTubeVideo = {
   id: string;
@@ -43,9 +50,6 @@ function formatDuration(iso: string | null) {
   const pad = (n: number) => n.toString().padStart(2, "0");
   return h > 0 ? `${h}:${pad(mi)}:${pad(s)}` : `${mi}:${pad(s)}`;
 }
-
-const SPOTIFY_EMBED_ALLOW =
-  "autoplay; clipboard-write; encrypted-media; fullscreen; picture-in-picture";
 
 export default async function MediaPage() {
   const supabase = await createClient();
@@ -94,24 +98,16 @@ export default async function MediaPage() {
         </div>
       ) : (
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-px bg-border">
-          {/* YouTube Trending */}
+          {/* YouTube Trending — a card grid rather than a stacked list: at 30
+              videos a single column ran far past the fold, and thumbnails are
+              the point of a video feed. */}
           {hasYouTube && (
-            <div className="bg-background lg:col-span-2">
-              <div
-                className="flex items-center gap-3 px-5 py-3 border-b border-border"
-                style={{ borderLeftWidth: "3px", borderLeftColor: "hsl(0 72% 50%)" }}
-              >
-                <span
-                  className="text-xs font-mono font-bold tracking-widest uppercase"
-                  style={{ color: "hsl(0 72% 50%)" }}
-                >
-                  ▶ YouTube — Trending
-                </span>
-                <span className="text-[10px] font-mono text-muted-foreground">
-                  {videos.length} videos
-                </span>
-              </div>
-              <div className="divide-y divide-border">
+            <CollapsibleSection
+              title="▶ YouTube — Trending"
+              accent="hsl(0 72% 50%)"
+              meta={`${videos.length} videos`}
+            >
+              <div className="p-4 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
                 {videos.map((v) => {
                   const views = formatCount(v.view_count);
                   const dur = formatDuration(v.duration);
@@ -121,10 +117,10 @@ export default async function MediaPage() {
                       href={`https://www.youtube.com/watch?v=${v.video_id}`}
                       target="_blank"
                       rel="noopener noreferrer"
-                      className="tap-row flex items-center gap-3 px-4 py-2.5 hover:bg-secondary transition-colors group"
+                      className="group flex flex-col border border-border hover:border-foreground transition-colors"
                     >
                       {v.thumbnail_url && (
-                        <div className="relative w-20 h-12 shrink-0 overflow-hidden bg-secondary">
+                        <div className="relative aspect-video w-full overflow-hidden bg-secondary">
                           {/* eslint-disable-next-line @next/next/no-img-element */}
                           <img
                             src={v.thumbnail_url}
@@ -133,17 +129,17 @@ export default async function MediaPage() {
                             loading="lazy"
                           />
                           {dur && (
-                            <span className="absolute bottom-0 right-0 bg-black/80 text-white text-[8px] font-mono px-1 leading-tight">
+                            <span className="absolute bottom-1 right-1 bg-black/80 text-white text-[9px] font-mono px-1 py-0.5 leading-none rounded-sm">
                               {dur}
                             </span>
                           )}
                         </div>
                       )}
-                      <div className="min-w-0 flex-1">
+                      <div className="p-2.5 flex-1">
                         <p className="text-xs font-semibold leading-snug line-clamp-2 group-hover:underline">
                           {v.title}
                         </p>
-                        <p className="text-[10px] font-mono text-muted-foreground mt-1 truncate">
+                        <p className="text-[10px] font-mono text-muted-foreground mt-1.5 truncate">
                           {v.channel_title}
                           {views && <span> · {views} views</span>}
                         </p>
@@ -152,60 +148,17 @@ export default async function MediaPage() {
                   );
                 })}
               </div>
-            </div>
+            </CollapsibleSection>
           )}
-
-          {/* Spotify — live playlist embeds */}
-          <div className="bg-background lg:col-span-2">
-            <div
-              className="flex items-center gap-3 px-5 py-3 border-b border-border"
-              style={{ borderLeftWidth: "3px", borderLeftColor: "hsl(340 78% 50%)" }}
-            >
-              <span
-                className="text-xs font-mono font-bold tracking-widest uppercase"
-                style={{ color: "hsl(340 78% 50%)" }}
-              >
-                ♫ Spotify
-              </span>
-            </div>
-            <div className="p-4 grid grid-cols-1 md:grid-cols-2 gap-4">
-              {SPOTIFY_HOME_PLAYLISTS.map((p) => (
-                <div key={p.playlistId}>
-                  <p className="text-[10px] font-mono text-muted-foreground uppercase tracking-wider mb-1.5">
-                    {p.name}
-                  </p>
-                  <iframe
-                    src={`https://open.spotify.com/embed/playlist/${p.playlistId}?utm_source=generator`}
-                    width="100%"
-                    height="352"
-                    allow={SPOTIFY_EMBED_ALLOW}
-                    loading="lazy"
-                    className="rounded-md border-0"
-                    title={`Spotify playlist: ${p.name}`}
-                  />
-                </div>
-              ))}
-            </div>
-          </div>
 
           {/* Top Podcasts — curated, live show embeds. Full-width + a
               multi-column grid packs far more shows into the same vertical
               space than a single stacked column would. */}
-          <div className="bg-background lg:col-span-2">
-            <div
-              className="flex items-center gap-3 px-5 py-3 border-b border-border"
-              style={{ borderLeftWidth: "3px", borderLeftColor: "hsl(142 65% 42%)" }}
-            >
-              <span
-                className="text-xs font-mono font-bold tracking-widest uppercase"
-                style={{ color: "hsl(142 65% 42%)" }}
-              >
-                🎙 Top Podcasts
-              </span>
-              <span className="text-[10px] font-mono text-muted-foreground">
-                {podcasts.length} shows
-              </span>
-            </div>
+          <CollapsibleSection
+            title="🎙 Top Podcasts"
+            accent="hsl(142 65% 42%)"
+            meta={`${podcasts.length} shows`}
+          >
             <div className="p-4 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
               {podcasts.map((p) => (
                 <div key={p.showId} className="relative">
@@ -225,13 +178,42 @@ export default async function MediaPage() {
                     height="152"
                     allow={SPOTIFY_EMBED_ALLOW}
                     loading="lazy"
-                    className="rounded-md border-0"
+                    className={SPOTIFY_EMBED_CLASS}
                     title={`Spotify podcast: ${p.name}`}
                   />
                 </div>
               ))}
             </div>
-          </div>
+          </CollapsibleSection>
+
+          {/* Spotify playlists last and collapsed: two 352px-tall embeds are
+              the heaviest, least-scanned block on the page. Collapsed also
+              means their iframes are never mounted until asked for. */}
+          <CollapsibleSection
+            title="♫ Spotify — Playlists"
+            accent="hsl(340 78% 50%)"
+            meta={`${SPOTIFY_HOME_PLAYLISTS.length} playlists`}
+            defaultOpen={false}
+          >
+            <div className="p-4 grid grid-cols-1 md:grid-cols-2 gap-4">
+              {SPOTIFY_HOME_PLAYLISTS.map((p) => (
+                <div key={p.playlistId}>
+                  <p className="text-[10px] font-mono text-muted-foreground uppercase tracking-wider mb-1.5">
+                    {p.name}
+                  </p>
+                  <iframe
+                    src={spotifyPlaylistEmbedUrl(p.playlistId)}
+                    width="100%"
+                    height="352"
+                    allow={SPOTIFY_EMBED_ALLOW}
+                    loading="lazy"
+                    className={SPOTIFY_EMBED_CLASS}
+                    title={`Spotify playlist: ${p.name}`}
+                  />
+                </div>
+              ))}
+            </div>
+          </CollapsibleSection>
         </div>
       )}
     </div>

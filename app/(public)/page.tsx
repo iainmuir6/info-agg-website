@@ -6,7 +6,12 @@ import { TickerHoverChart } from "@/components/ticker-hover-chart";
 import { compactStatus, formatGameTime, isGameToday, formatGameDateShort, leadingDaySlate } from "@/lib/sports-status";
 import { latestSeasonOnly, topNPerGroup, type StandingRow, type StandingsGroup } from "@/lib/standings";
 import { StandingsExpander } from "@/components/standings-expander";
-import { SPOTIFY_HOME_PLAYLISTS } from "@/lib/top-podcasts";
+import {
+  SPOTIFY_HOME_PLAYLISTS,
+  SPOTIFY_EMBED_ALLOW,
+  SPOTIFY_EMBED_CLASS,
+  spotifyPlaylistEmbedUrl,
+} from "@/lib/top-podcasts";
 import { buildPodcastList, type FavoritedPodcastRow } from "@/lib/podcast-list";
 import { FavoritePodcastButton } from "@/components/favorite-podcast-button";
 import {
@@ -1483,12 +1488,12 @@ export default async function CommandCenter() {
     cards.push({ section: "spotify", node: (
       <iframe
         key={p.playlistId}
-        src={`https://open.spotify.com/embed/playlist/${p.playlistId}?utm_source=generator`}
+        src={spotifyPlaylistEmbedUrl(p.playlistId)}
         width="100%"
         height="152"
-        allow="autoplay; clipboard-write; encrypted-media; fullscreen; picture-in-picture"
+        allow={SPOTIFY_EMBED_ALLOW}
         loading="lazy"
-        className="border-0 block"
+        className={SPOTIFY_EMBED_CLASS}
         title={`Spotify playlist: ${p.name}`}
       />
     )});

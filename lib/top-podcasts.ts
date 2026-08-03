@@ -34,9 +34,25 @@ export const TOP_PODCASTS: TopPodcast[] = [
   { name: "Good Hang with Amy Poehler", showId: "1z20EiwuKoDiftKxMVLde1" },
 ];
 
+// `theme=0` selects Spotify's dark embed variant. Without it the player
+// renders on a white card, which reads as a bright rectangle punched through
+// the page in dark mode. Both embed types take the same parameter, so route
+// every embed URL through these helpers rather than hand-building them.
 export function spotifyShowEmbedUrl(showId: string): string {
-  return `https://open.spotify.com/embed/show/${showId}?utm_source=generator`;
+  return `https://open.spotify.com/embed/show/${showId}?utm_source=generator&theme=0`;
 }
+
+export function spotifyPlaylistEmbedUrl(playlistId: string): string {
+  return `https://open.spotify.com/embed/playlist/${playlistId}?utm_source=generator&theme=0`;
+}
+
+/** Shared iframe classes: Spotify's own rounding, plus a dark placeholder.
+ *  An iframe paints white until its document loads, so lazily-loaded embeds
+ *  flash a white box in dark mode before Spotify's (dark) UI arrives. */
+export const SPOTIFY_EMBED_CLASS = "rounded-xl border-0 bg-[#121212] block";
+
+export const SPOTIFY_EMBED_ALLOW =
+  "autoplay; clipboard-write; encrypted-media; fullscreen; picture-in-picture";
 
 export type SpotifyPlaylist = { name: string; playlistId: string };
 
