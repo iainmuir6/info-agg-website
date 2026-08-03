@@ -41,6 +41,10 @@ jobs:
       ALPHA_VANTAGE_API_KEY_2:         ${{ secrets.ALPHA_VANTAGE_API_KEY_2 }}
       ALPHA_VANTAGE_API_KEY_3:         ${{ secrets.ALPHA_VANTAGE_API_KEY_3 }}
       YOUTUBE_API_KEY:                 ${{ secrets.YOUTUBE_API_KEY }}
+      # YouTube Data API v3 accepts a plain Google Cloud API key, so either
+      # secret works; get_youtube_api_key() falls back to this one. Whichever
+      # is absent resolves to empty and is simply ignored.
+      GOOGLE_API_KEY:                  ${{ secrets.GOOGLE_API_KEY }}
 
     steps:
       - name: Checkout repository

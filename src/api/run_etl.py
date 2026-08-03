@@ -289,10 +289,32 @@ def run_markets_etl(
 
         # Honest success: the daily run must always produce quotes. Zero
         # quotes written means the fetch pool or the upsert failed wholesale.
-        ok = total_stats['quotes_inserted'] > 0
+        #
+        # Beyond that, the dangerous case is a source that wrote nothing AND
+        # raised nothing — an outage then looks exactly like a quiet day. That
+        # is how a total loss of company news (1847 rows -> 0) was recorded as
+        # a successful run with zero errors. Every source below either returns
+        # rows or raises, so zero-with-no-errors means we failed to notice
+        # something. Only assert it when the error list is empty; once a
+        # source has reported a real error, the run is already honest about it.
+        silent: List[str] = []
+        if not total_stats['errors']:
+            if total_stats['market_news_inserted'] == 0:
+                silent.append('market_news')
+            if not skip_sentiment and total_stats['sentiment_upserted'] == 0:
+                silent.append('sentiment')
+            if total_stats['economic_rows_upserted'] == 0:
+                silent.append('economic_indicators')
+
+        ok = total_stats['quotes_inserted'] > 0 and not silent
         result: Dict[str, Any] = {'success': ok, 'stats': total_stats}
-        if not ok:
+        if total_stats['quotes_inserted'] == 0:
             result['error'] = 'markets wrote 0 quote rows'
+        elif silent:
+            result['error'] = (
+                f"silent zero from {', '.join(silent)} — wrote no rows and "
+                f"reported no error"
+            )
         return result
 
     except Exception as e:

@@ -21,7 +21,10 @@ load_dotenv()
 _PARENT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _PARENT not in sys.path:
     sys.path.insert(0, _PARENT)
-from etl_lib import get_http_session, et_today, utc_now, HTTP_TIMEOUT, HTTP_TIMEOUT_SLOW
+from etl_lib import (
+    get_http_session, et_today, utc_now, MinInterval,
+    HTTP_TIMEOUT, HTTP_TIMEOUT_SLOW,
+)
 
 ALPHA_VANTAGE_BASE_URL = "https://www.alphavantage.co/query"
 
@@ -58,44 +61,46 @@ def is_av_key_exhausted(api_key: str) -> bool:
 # AV also throttles bursts by IP, not just by key, answering with an
 # "Information: … 1 request per second" body instead of data. Pace every
 # request at least this far apart across all keys.
-_AV_MIN_GAP    = 1.1   # seconds
-_AV_GAP_LOCK = threading.Lock()
-_AV_LAST_CALL = 0.0
+#
+# 1.25s, not 1.1s: AV measures arrival, so network jitter on a 1.1s spacing
+# lands inside its 1s window often enough to matter. A run was still losing a
+# whole topic (~44 articles) to the "1 request per second" response.
+_AV_MIN_GAP = 1.25   # seconds
+
+# MinInterval *reserves* the next free slot under its lock and sleeps outside
+# it, so N concurrent workers get N distinct, strictly increasing slots. The
+# hand-rolled version this replaces computed a wait, slept, and re-checked —
+# no reservation, so woken workers raced for the same slot and the loser slept
+# again. Under contention that both wasted time and let bursts through.
+_av_gap = MinInterval(_AV_MIN_GAP)
+
 
 def _av_rate_limit(key: str) -> None:
-    """Block until a request may go out: 5 req/60 s per key, ≥1.1 s apart globally.
+    """Block until a request may go out: 5 req/60 s per key, ≥1.25 s apart globally.
 
     Never sleeps while holding a lock — a lock-held sleep serializes every
-    worker sharing it (the historical ETL hang)."""
-    global _AV_LAST_CALL
-
+    worker sharing it (the historical ETL hang; see CLAUDE.md)."""
     if key not in _AV_KEY_LOCKS:
         with _AV_INIT_LOCK:
             if key not in _AV_KEY_LOCKS:
                 _AV_CALL_TIMES[key] = deque()
                 _AV_KEY_LOCKS[key] = threading.Lock()
 
+    # Per-key sliding window: claim a slot in the 5-per-60s budget.
     while True:
         with _AV_KEY_LOCKS[key]:
             times = _AV_CALL_TIMES[key]
             now = time.time()
             while times and now - times[0] >= _AV_WINDOW:
                 times.popleft()
-            window_wait = (_AV_WINDOW - (now - times[0]) + 0.05
-                           if len(times) >= _AV_RATE_LIMIT else 0.0)
-        if window_wait > 0:
-            time.sleep(window_wait)
-            continue
+            if len(times) < _AV_RATE_LIMIT:
+                times.append(now)   # reserve it before releasing the lock
+                break
+            window_wait = _AV_WINDOW - (now - times[0]) + 0.05
+        time.sleep(max(window_wait, 0.05))   # sleep OUTSIDE the lock
 
-        with _AV_GAP_LOCK:
-            now = time.time()
-            gap_wait = _AV_MIN_GAP - (now - _AV_LAST_CALL)
-            if gap_wait <= 0:
-                _AV_LAST_CALL = now
-                with _AV_KEY_LOCKS[key]:
-                    _AV_CALL_TIMES[key].append(now)
-                return
-        time.sleep(gap_wait)
+    # Global inter-request gap, reserved rather than re-checked.
+    _av_gap.wait()
 
 
 def get_alphavantage_api_key() -> str:

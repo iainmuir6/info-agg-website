@@ -25,7 +25,15 @@ YOUTUBE_BASE_URL = "https://www.googleapis.com/youtube/v3"
 
 
 def get_youtube_api_key() -> Optional[str]:
-    return os.getenv('YOUTUBE_API_KEY')
+    """YOUTUBE_API_KEY, falling back to GOOGLE_API_KEY.
+
+    YouTube Data API v3 authenticates with an ordinary Google Cloud API key,
+    so a project's GOOGLE_API_KEY works here verbatim (verified against the
+    live mostPopular endpoint). The media domain had been writing nothing and
+    marking every run 'partial' purely because the key was configured under
+    the other name — a missing credential, not a missing capability.
+    """
+    return os.getenv('YOUTUBE_API_KEY') or os.getenv('GOOGLE_API_KEY')
 
 
 def _to_int(value: Any) -> Optional[int]:
