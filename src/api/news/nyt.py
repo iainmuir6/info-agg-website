@@ -67,7 +67,6 @@ def _nyt_is_key_disabled(api_key: str) -> bool:
 
 
 def _nyt_disable_key(api_key: str) -> None:
-    # Use the same lock as min-interval to keep state updates serialized.
     with _NYT_LOCK:
         _NYT_DISABLED_KEYS.add(api_key)
 

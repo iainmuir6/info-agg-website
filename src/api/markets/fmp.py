@@ -35,7 +35,6 @@ _FMP_WARN_THRESHOLD = 220
 
 _FMP_MIN_INTERVAL_S = 1.0
 _FMP_LOCK = threading.Lock()
-_FMP_LAST_CALL_TS: Optional[float] = None
 _FMP_DISABLED_DUE_TO_429: bool = False
 
 
@@ -404,6 +403,13 @@ def fetch_economic_indicator(name: str, api_key: Optional[str] = None) -> List[D
     try:
         _fmp_rate_check()
         response = get_http_session().get(url, params=params, timeout=10)
+        # Every other FMP call trips the circuit breaker on 429; this one did
+        # not, so a rate-limited response fell through raise_for_status() into
+        # the RequestException handler, returned [] silently, and let the
+        # remaining macro indicators each repeat the same wasted call.
+        if response.status_code == 429:
+            _fmp_disable_due_to_429()
+            raise RuntimeError("FMP disabled for remainder of this ETL run due to 429")
         response.raise_for_status()
         data = response.json()
 

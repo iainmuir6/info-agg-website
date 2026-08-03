@@ -8,7 +8,7 @@
 
 from typing import Dict, List, Optional, Any
 from collections import deque
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import requests
 import threading
 import os
@@ -21,7 +21,7 @@ load_dotenv()
 _PARENT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _PARENT not in sys.path:
     sys.path.insert(0, _PARENT)
-from etl_lib import get_http_session, et_today
+from etl_lib import get_http_session, et_today, utc_now
 
 ALPHA_VANTAGE_BASE_URL = "https://www.alphavantage.co/query"
 
@@ -188,11 +188,11 @@ def fetch_stock_candles_av(
                 print(f"  Alpha Vantage: no time-series data for {ticker}")
                 return None
 
-            cutoff = datetime.now() - timedelta(days=days_back)
+            cutoff = utc_now() - timedelta(days=days_back)
             opens, highs, lows, closes, volumes, timestamps = [], [], [], [], [], []
 
             for date_str in sorted(ts.keys(), reverse=True):
-                dt = datetime.strptime(date_str, '%Y-%m-%d')
+                dt = datetime.strptime(date_str, '%Y-%m-%d').replace(tzinfo=timezone.utc)
                 if dt < cutoff:
                     break
                 bar = ts[date_str]
@@ -216,7 +216,7 @@ def fetch_stock_candles_av(
                 'close': closes,
                 'volume': volumes,
                 'timestamps': timestamps,
-                'fetched_at': datetime.now().isoformat(),
+                'fetched_at': utc_now().isoformat(),
             }
 
         except requests.exceptions.RequestException as e:
@@ -269,7 +269,7 @@ def fetch_historical_quotes(
             'open_price': opens[i],
             'previous_close': prev_close,
             'timestamp': ts,
-            'fetched_at': datetime.now().isoformat()
+            'fetched_at': utc_now().isoformat()
         })
 
     return quotes
@@ -323,10 +323,10 @@ def fetch_crypto_candles_av(
                 print(f"  Alpha Vantage: no crypto time-series data for {symbol}")
                 return []
 
-            cutoff = datetime.now() - timedelta(days=days_back)
+            cutoff = utc_now() - timedelta(days=days_back)
             rows = []
             for date_str in sorted(ts.keys(), reverse=True):
-                dt = datetime.strptime(date_str, '%Y-%m-%d')
+                dt = datetime.strptime(date_str, '%Y-%m-%d').replace(tzinfo=timezone.utc)
                 if dt < cutoff:
                     break
                 bar = ts[date_str]
@@ -357,7 +357,7 @@ def fetch_crypto_candles_av(
                     'previous_close': prev_close,
                     'volume': vol,
                     'timestamp': ts_val,
-                    'fetched_at': datetime.now().isoformat(),
+                    'fetched_at': utc_now().isoformat(),
                 })
 
             return quotes
@@ -543,7 +543,7 @@ def fetch_news_sentiment(
                 'overall_sentiment_score': article.get('overall_sentiment_score', 0),
                 'overall_sentiment_label': article.get('overall_sentiment_label', 'Neutral'),
                 'ticker_sentiments': ticker_sentiments,
-                'fetched_at': datetime.now().isoformat()
+                'fetched_at': utc_now().isoformat()
             })
 
         return articles
@@ -578,7 +578,7 @@ def fetch_top_gainers_losers(api_key: Optional[str] = None) -> Optional[Dict[str
             'top_gainers': data.get('top_gainers', []),
             'top_losers': data.get('top_losers', []),
             'most_actively_traded': data.get('most_actively_traded', []),
-            'fetched_at': datetime.now().isoformat()
+            'fetched_at': utc_now().isoformat()
         }
 
     except requests.exceptions.RequestException as e:
@@ -608,7 +608,7 @@ def fetch_earnings_calendar(horizon: str = '3month', api_key: Optional[str] = No
         return {
             'horizon': horizon,
             'earnings': data if isinstance(data, list) else data.get('earnings', []),
-            'fetched_at': datetime.now().isoformat()
+            'fetched_at': utc_now().isoformat()
         }
 
     except requests.exceptions.RequestException as e:
@@ -667,7 +667,7 @@ def fetch_economic_indicator(
             'maturity': maturity if function == 'TREASURY_YIELD' else None,
             'data': data_points,
             'raw_data': data,
-            'fetched_at': datetime.now().isoformat()
+            'fetched_at': utc_now().isoformat()
         }
 
     except requests.exceptions.RequestException as e:
@@ -697,7 +697,7 @@ if __name__ == "__main__":
     print("=" * 60)
 
     print("\n--- News Sentiment (topic=earnings) ---")
-    sentiment = fetch_news_sentiment(topic='earnings')
+    sentiment = fetch_news_sentiment(get_alphavantage_api_keys()[0], topic='earnings')
     print(f"  {len(sentiment)} articles")
     if sentiment:
         print(f"  First: {sentiment[0]['title'][:60]}")

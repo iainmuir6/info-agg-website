@@ -152,10 +152,13 @@ def insert_nyt_articles(
 
 def get_nyt_api_keys() -> List[str]:
     """Get New York Times API keys from environment variables."""
+    # Deduplicated: the 5-calls-per-key blocking below treats each entry as an
+    # independent quota, so a value repeated across _1/_2 would silently spend
+    # one key's 500/day twice as fast and invite a 429.
     keys: List[str] = []
     for suffix in ['_1', '_2', '_3']:
         key = os.getenv(f'NYT_API_KEY{suffix}')
-        if key:
+        if key and key not in keys:
             keys.append(key)
     return keys
 

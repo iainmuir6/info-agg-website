@@ -8,7 +8,7 @@
 
 from typing import Dict, List, Optional, Any
 from collections import deque
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import requests
 import threading
 import sys
@@ -21,9 +21,23 @@ load_dotenv()
 _PARENT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _PARENT not in sys.path:
     sys.path.insert(0, _PARENT)
-from etl_lib import get_http_session
+from etl_lib import get_http_session, et_today, utc_now
 
 FINNHUB_BASE_URL = "https://finnhub.io/api/v1"
+
+
+def _epoch_to_iso(ts: Any) -> Optional[str]:
+    """Finnhub timestamps are Unix epochs (UTC). Convert them tz-aware.
+
+    datetime.fromtimestamp(ts) without a tz returns machine-local *naive*
+    time, which Postgres then reads as UTC — silently shifting every
+    published_at by the runner's UTC offset. CI runs on UTC and was
+    unaffected; local runs wrote rows 4-5 hours early, so the news tables
+    ended up holding a mix of correct and shifted timestamps.
+    """
+    if not ts:
+        return None
+    return datetime.fromtimestamp(ts, tz=timezone.utc).isoformat()
 
 STOCK_INDICES = {
     'sp500': '^GSPC',
@@ -128,7 +142,7 @@ def fetch_stock_quote(ticker: str, api_key: Optional[str] = None) -> Optional[Di
             'open_price': data.get('o'),
             'previous_close': data.get('pc'),
             'timestamp': data.get('t'),
-            'fetched_at': datetime.now().isoformat()
+            'fetched_at': utc_now().isoformat()
         }
 
     except requests.exceptions.RequestException as e:
@@ -207,7 +221,7 @@ def fetch_company_profile(ticker: str, api_key: Optional[str] = None) -> Optiona
             'logo': data.get('logo'),
             'website': data.get('weburl'),
             'industry': data.get('finnhubIndustry'),
-            'fetched_at': datetime.now().isoformat()
+            'fetched_at': utc_now().isoformat()
         }
 
     except requests.exceptions.RequestException as e:
@@ -251,7 +265,7 @@ def fetch_etf_profile(ticker: str, api_key: Optional[str] = None) -> Optional[Di
             'logo': data.get('logo'),
             'website': data.get('website'),
             'industry': data.get('asset_class'),  # e.g. "Equity"
-            'fetched_at': datetime.now().isoformat()
+            'fetched_at': utc_now().isoformat()
         }
 
     except requests.exceptions.RequestException as e:
@@ -271,7 +285,10 @@ def fetch_company_news(
     if api_key is None:
         api_key = get_finnhub_api_key()
 
-    end_date = datetime.now().date()
+    # ET calendar day, not the runner's local date: on a UTC runner at
+    # 00:07 UTC (8:07pm ET the previous evening) date.today() is already
+    # tomorrow in the market's own timezone.
+    end_date = et_today()
     start_date = end_date - timedelta(days=days_back)
 
     url = f"{FINNHUB_BASE_URL}/company-news"
@@ -297,8 +314,8 @@ def fetch_company_news(
                 'url': article.get('url'),
                 'image_url': article.get('image'),
                 'source': article.get('source'),
-                'published_at': datetime.fromtimestamp(article.get('datetime', 0)).isoformat() if article.get('datetime') else None,
-                'fetched_at': datetime.now().isoformat()
+                'published_at': _epoch_to_iso(article.get('datetime')),
+                'fetched_at': utc_now().isoformat()
             })
 
         return articles
@@ -334,8 +351,8 @@ def fetch_market_news(category: str = 'general', min_id: int = 0, api_key: Optio
                 'url': article.get('url'),
                 'image_url': article.get('image'),
                 'source': article.get('source'),
-                'published_at': datetime.fromtimestamp(article.get('datetime', 0)).isoformat() if article.get('datetime') else None,
-                'fetched_at': datetime.now().isoformat()
+                'published_at': _epoch_to_iso(article.get('datetime')),
+                'fetched_at': utc_now().isoformat()
             })
 
         return articles
@@ -371,7 +388,7 @@ def fetch_recommendation_trends(ticker: str, api_key: Optional[str] = None) -> L
                 'hold': trend.get('hold', 0),
                 'sell': trend.get('sell', 0),
                 'strong_sell': trend.get('strongSell', 0),
-                'fetched_at': datetime.now().isoformat()
+                'fetched_at': utc_now().isoformat()
             }
             for trend in data
         ]
@@ -404,7 +421,7 @@ def fetch_country_metadata(api_key: Optional[str] = None) -> List[Dict[str, Any]
                 'country': c.get('country'),
                 'currency': c.get('currency'),
                 'market': c.get('market'),
-                'fetched_at': datetime.now().isoformat()
+                'fetched_at': utc_now().isoformat()
             }
             for c in data
         ]
@@ -432,7 +449,7 @@ def fetch_usa_spending(api_key: Optional[str] = None) -> Optional[Dict[str, Any]
         _fh_rate_limit(api_key)
         response = get_http_session().get(url, params=params, timeout=10)
         response.raise_for_status()
-        return {'data': response.json(), 'fetched_at': datetime.now().isoformat()}
+        return {'data': response.json(), 'fetched_at': utc_now().isoformat()}
 
     except requests.exceptions.RequestException as e:
         print(f"Error fetching USA spending: {e}")

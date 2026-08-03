@@ -72,8 +72,17 @@ _session_lock = threading.Lock()
 
 def get_http_session() -> requests.Session:
     """Shared thread-safe Session: 3 retries with exponential backoff on
-    429/5xx and connection errors, honoring Retry-After. Callers keep their
-    own explicit timeouts."""
+    5xx and connection errors. Callers keep their own explicit timeouts.
+
+    429 is deliberately NOT retried here. Every rate-limited API in this
+    pipeline handles quota itself and far better than a blind retry can:
+    Finnhub and Alpha Vantage rotate to the next key, NYT disables the
+    offending key for the run, FMP trips a circuit breaker for the whole
+    run. Retrying inside the session ran 0s/2s/4s of backoff — or whatever
+    Retry-After asked for, unbounded — *before* any of that logic saw the
+    429, delaying the very handoff it exists to trigger and spending
+    seconds against the <60s run budget (CLAUDE.md). Let 429 through to the
+    caller immediately."""
     global _session
     with _session_lock:
         if _session is None:
@@ -82,7 +91,7 @@ def get_http_session() -> requests.Session:
                 connect=3,
                 read=2,
                 backoff_factor=1,          # 0s, 2s, 4s between attempts
-                status_forcelist=[429, 500, 502, 503, 504],
+                status_forcelist=[500, 502, 503, 504],
                 allowed_methods=['GET', 'POST'],
                 respect_retry_after_header=True,
                 raise_on_status=False,      # deliver the final response; callers raise_for_status()
