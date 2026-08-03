@@ -63,11 +63,23 @@ export default async function TeamPage({
   // Filter by team in the query rather than pulling the league's most recent
   // games and filtering here — a busy league (MLB) would otherwise fill the
   // row limit with ~2 weeks of games and the record would miss the season.
+  //
+  // The 400 cap is newest-first, so it always covers the current season and
+  // trims the oldest. That is safe today, but sports_scores is now retained
+  // forever: a long-lived MLB team accrues ~200 rows a season, so within a
+  // couple of years the cap would start biting into the season the page is
+  // actually about. Bounding the fetch by game_date keeps this correct
+  // regardless of how much history accumulates behind it — 18 months covers
+  // the longest split-year season plus next season's published fixtures.
+  const HISTORY_WINDOW_DAYS = 550;
+  const since = new Date(Date.now() - HISTORY_WINDOW_DAYS * 24 * 3600 * 1000).toISOString();
+
   const byTeam = () =>
     supabase
       .from("sports_scores")
       .select(COLUMNS)
       .eq("league_id", leagueRow.id)
+      .gte("game_date", since)
       .order("game_date", { ascending: false })
       .limit(400);
 

@@ -119,6 +119,51 @@ HTTP_TIMEOUT = (3.05, 8.0)
 HTTP_TIMEOUT_SLOW = (3.05, 20.0)   # bulk endpoints: AV time-series, NYT archive
 
 
+# ── Run deadline ─────────────────────────────────────────────────────────────
+
+class RunDeadline:
+    """A cooperative wall-clock budget for one ETL run.
+
+    The circuit breaker handles an endpoint that *fails*. This handles one that
+    is merely *slow*: every call succeeding at 7s trips nothing, yet still
+    walks the run past its budget. There is no way to enforce this preemptively
+    — as_completed(timeout=) stops waiting but cannot cancel a running future,
+    and ThreadPoolExecutor's context manager blocks on exit until its threads
+    finish, so DOMAIN_TIMEOUT_S bounds nothing at all. The only real lever is
+    for fan-out loops to stop *starting* new work once the budget is spent.
+
+    Callers must record what they skipped. A silent cap is worse than a slow
+    run: it reads as "covered everything" when it did not.
+
+    Unset by default, so anything importing this module outside a run (tests,
+    backfills, one-off scripts) is unbounded.
+    """
+
+    def __init__(self) -> None:
+        self._end: Optional[float] = None
+
+    def start(self, budget_seconds: float) -> None:
+        self._end = time.monotonic() + budget_seconds
+
+    def clear(self) -> None:
+        self._end = None
+
+    def remaining(self) -> float:
+        if self._end is None:
+            return float('inf')
+        return self._end - time.monotonic()
+
+    def expired(self) -> bool:
+        return self.remaining() <= 0
+
+    def skip_note(self, what: str, remaining_items: int) -> str:
+        return (f"deadline: budget spent, skipped {remaining_items} remaining "
+                f"{what} (data written so far is kept)")
+
+
+run_deadline = RunDeadline()
+
+
 # ── Per-endpoint circuit breaker ─────────────────────────────────────────────
 
 class EndpointUnavailable(RuntimeError):

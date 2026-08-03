@@ -29,7 +29,7 @@ except ImportError:
 _PARENT = os.path.dirname(_HERE)
 if _PARENT not in sys.path:
     sys.path.insert(0, _PARENT)
-from etl_lib import chunked_upsert, db_call, et_now, et_today
+from etl_lib import chunked_upsert, db_call, et_now, et_today, run_deadline
 
 
 def get_supabase_client() -> Client:
@@ -217,7 +217,11 @@ def sync_all_sports_data(
     all_news_records: List[Dict[str, Any]] = []
     all_score_records: List[Dict[str, Any]] = []
 
-    for sport, league in SPORT_CONFIGS:
+    for idx, (sport, league) in enumerate(SPORT_CONFIGS):
+        if run_deadline.expired():
+            stats['errors'].append(
+                run_deadline.skip_note('league(s)', len(SPORT_CONFIGS) - idx))
+            break
         try:
             league_id = league_id_map.get((sport, league))
             if not league_id:
@@ -299,7 +303,11 @@ def sync_season_schedules(
     window_start = now - timedelta(days=days_back)
     window_end = now + timedelta(days=days_forward)
 
-    for row in league_rows:
+    for idx, row in enumerate(league_rows):
+        if run_deadline.expired():
+            stats['errors'].append(
+                run_deadline.skip_note('league(s) in season walk', len(league_rows) - idx))
+            break
         sport, league, league_id = row['sport'], row['league'], row['id']
 
         # In-season check: any game within +/-10 days of today?
@@ -324,6 +332,11 @@ def sync_season_schedules(
 
         cursor = window_start
         while cursor < window_end:
+            if run_deadline.expired():
+                stats['errors'].append(
+                    f"deadline: budget spent mid-season-walk for {league}; "
+                    f"stopped at {cursor.date()} (data written so far is kept)")
+                break
             chunk_end = min(cursor + timedelta(days=chunk_days - 1), window_end)
             date_range = f"{cursor.strftime('%Y%m%d')}-{chunk_end.strftime('%Y%m%d')}"
             try:
@@ -405,7 +418,11 @@ def sync_standings(supabase: Client) -> Dict[str, Any]:
         stats['errors'].append(f"Failed to prefetch league IDs: {e}")
         return stats
 
-    for sport, league in SPORT_CONFIGS:
+    for idx, (sport, league) in enumerate(SPORT_CONFIGS):
+        if run_deadline.expired():
+            stats['errors'].append(
+                run_deadline.skip_note('league standings', len(SPORT_CONFIGS) - idx))
+            break
         league_id = league_id_map.get((sport, league))
         if not league_id:
             stats['errors'].append(f"League ID not found for {sport}/{league}")

@@ -32,6 +32,7 @@ from dotenv import load_dotenv
 from etl_lib import (
     get_logger,
     et_now,
+    run_deadline,
     start_etl_run,
     finish_etl_run,
     collect_domain_errors,
@@ -157,6 +158,9 @@ def run_quick_sports_etl(supabase, include_news: bool) -> Dict[str, Any]:
 def run_quick_refresh(tier: str, triggered_by: str = 'manual') -> Dict[str, Any]:
     """Run a tiered refresh: tier 'a' (15-min) or 'b' (hourly)."""
     start_time = et_now()
+    # Tighter than the daily run: this fires every 15 minutes and must never
+    # pile up behind itself.
+    run_deadline.start(120.0)
     supabase = get_supabase_client()
     run_id = start_etl_run(supabase, triggered_by, tier)
 
@@ -200,6 +204,8 @@ def run_quick_refresh(tier: str, triggered_by: str = 'manual') -> Dict[str, Any]
                         'success': False,
                         'error': f'domain exceeded {DOMAIN_TIMEOUT_S}s timeout',
                     }
+
+    run_deadline.clear()
 
     end_time = et_now()
     duration = (end_time - start_time).total_seconds()

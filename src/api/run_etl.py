@@ -25,6 +25,7 @@ if _API_DIR not in sys.path:
 from etl_lib import (
     get_logger,
     et_now,
+    run_deadline,
     chunked_upsert,
     db_call,
     preflight_env,
@@ -177,6 +178,8 @@ def run_markets_etl(
         stock_id_map: Dict[str, str] = {r['ticker']: r['id'] for r in (stock_rows.data or [])}
 
         def _fetch_ticker(ticker: str) -> tuple:
+            if run_deadline.expired():
+                raise RuntimeError(f"deadline: skipped {ticker} (budget spent)")
             at = asset_type_map.get(ticker, 'stock')
             # persist=False: no Supabase in workers; stubs + batch writes on main thread
             result = sync_stock_data(
@@ -196,7 +199,11 @@ def run_markets_etl(
         all_pending_news: List[Dict[str, Any]] = []
         all_pending_quotes: List[Dict[str, Any]] = []
         with ThreadPoolExecutor(max_workers=2) as executor:  # 2 Finnhub keys → 2 concurrent workers
-            futures = {executor.submit(_fetch_ticker, t): t for t in watchlist}
+            submitted = [t for t in watchlist if not run_deadline.expired()]
+            if len(submitted) < len(watchlist):
+                total_stats['errors'].append(
+                    run_deadline.skip_note('ticker(s)', len(watchlist) - len(submitted)))
+            futures = {executor.submit(_fetch_ticker, t): t for t in submitted}
             for future in as_completed(futures):
                 t = futures[future]
                 # One bad ticker must not discard every other ticker's
@@ -442,6 +449,7 @@ def run_full_etl(
     triggered_by: str = 'manual',
     run_cleanup: bool = False,
     season_schedules: bool = False,
+    budget_seconds: float = 50.0,
 ) -> Dict[str, Any]:
     """
     Run the full ETL pipeline for all data sources.
@@ -450,6 +458,13 @@ def run_full_etl(
     Profile updates: --refresh-profiles (FMP) or --scrape-etf-info (ETFdb).
     """
     start_time = et_now()
+
+    # Arm the cooperative wall-clock budget. Fan-out loops stop starting new
+    # work once it is spent and record what they skipped; nothing already
+    # fetched is discarded. This is the only real bound on run duration --
+    # DOMAIN_TIMEOUT_S cannot cancel a running future (see CLAUDE.md's <60s
+    # requirement).
+    run_deadline.start(budget_seconds)
 
     # Sentiment on <2 distinct AV keys trips the 5/min limiter into a ~60s
     # sleep and blows the <60s run budget — skip it and say so.
@@ -542,6 +557,8 @@ def run_full_etl(
                         }
                         print(f"  [FAIL] {domain:<8}  timed out")
 
+    run_deadline.clear()   # cleanup + run recording are not part of the budget
+
     end_time = et_now()
     duration = (end_time - start_time).total_seconds()
     results['completed_at'] = end_time.isoformat()
@@ -603,9 +620,10 @@ def run_full_etl(
     def _stat_str(domain: str, result: Dict[str, Any]) -> str:
         s = result.get('stats', {})
         if domain == 'sports':
+            season = (f"  season={s['season_scores']}" if s.get('season_scores') is not None else "")
             return (f"leagues={s.get('leagues_processed',0)}  "
                     f"news={s.get('news_inserted',0)}  "
-                    f"scores={s.get('scores_inserted',0)}")
+                    f"scores={s.get('scores_inserted',0)}{season}")
         if domain == 'markets':
             return (f"tickers={s.get('stocks_processed',0)}  "
                     f"cnews={s.get('news_inserted',0)}  "
@@ -686,6 +704,11 @@ def main():
     parser.add_argument('--triggered-by', default='manual',
                         choices=['manual', 'cron', 'dispatch'],
                         help='Recorded in etl_runs (workflows pass cron/dispatch)')
+    parser.add_argument('--budget-seconds', type=float, default=50.0,
+                        help='Cooperative wall-clock budget for the domain phase. '
+                             'Fan-out loops stop starting new work once spent and '
+                             'record what they skipped (default 50, inside the 60s '
+                             'requirement in CLAUDE.md)')
     parser.add_argument('--cleanup', action='store_true',
                         help='Run info_agg.cleanup_daily() retention after the ETL completes')
     parser.add_argument('--season-schedules', action='store_true',
@@ -736,6 +759,7 @@ def main():
         triggered_by=args.triggered_by,
         run_cleanup=args.cleanup,
         season_schedules=args.season_schedules,
+        budget_seconds=args.budget_seconds,
     )
 
     if args.output:

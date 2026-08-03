@@ -25,7 +25,7 @@ if _HERE not in sys.path:
 _PARENT = os.path.dirname(_HERE)
 if _PARENT not in sys.path:
     sys.path.insert(0, _PARENT)
-from etl_lib import chunked_upsert, db_call
+from etl_lib import chunked_upsert, db_call, run_deadline
 
 try:
     from .finnhub import (
@@ -1037,7 +1037,11 @@ def sync_news_sentiment(
 
     def _worker(key: str, assigned_topics: List[str]) -> List[Dict[str, Any]]:
         collected: List[Dict[str, Any]] = []
-        for topic in assigned_topics:
+        for i, topic in enumerate(assigned_topics):
+            if run_deadline.expired():
+                stats['errors'].append(
+                    run_deadline.skip_note('sentiment topic(s)', len(assigned_topics) - i))
+                break
             try:
                 articles = fetch_news_sentiment(api_key=key, tickers=tickers, topic=topic)
                 collected.extend(articles)

@@ -25,7 +25,7 @@ if _HERE not in sys.path:
 _PARENT = os.path.dirname(_HERE)
 if _PARENT not in sys.path:
     sys.path.insert(0, _PARENT)
-from etl_lib import chunked_upsert
+from etl_lib import chunked_upsert, run_deadline
 
 try:
     from .nyt import (
@@ -207,7 +207,11 @@ def sync_nyt_data(supabase: Client, sections: List[str]) -> Dict[str, Any]:
         # Worker uses its starting key, but if that key gets disabled due to 429
         # we will switch to the first available non-disabled key.
         current_key = api_key
-        for section in assigned_sections:
+        for i, section in enumerate(assigned_sections):
+            if run_deadline.expired():
+                section_errors.append(
+                    run_deadline.skip_note('NYT section(s)', len(assigned_sections) - i))
+                break
             # If the current key is disabled, switch to the first active key.
             if is_nyt_key_disabled(current_key):
                 active_keys = [k for k in keys if not is_nyt_key_disabled(k)]
