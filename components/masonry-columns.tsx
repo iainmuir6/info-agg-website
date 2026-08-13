@@ -2,9 +2,10 @@
 
 import { Children, ReactNode, useEffect, useRef, useState } from "react";
 
-/** Never let a card get narrower than this. Below ~280px the score rows
- *  (two team abbreviations, two scores, separator and status) start clipping. */
-const MIN_CARD_PX = 300;
+/** Never let a card get narrower than this. Must stay >= the 340px container-query
+ *  breakpoint in globals.css (`.score-grid` two-up threshold) — otherwise cards land
+ *  in a dead zone where score rows stack even though there's room for two columns. */
+const MIN_CARD_PX = 340;
 const GAP_PX = 12;   // gap-3
 const MAX_COLS = 8;  // sanity ceiling for ultrawide displays
 
