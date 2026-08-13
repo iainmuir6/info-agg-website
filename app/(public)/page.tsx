@@ -883,10 +883,11 @@ function ScoreCell({
 
   return (
     /* One grid across the whole row so the container allocates the width.
-       The two team columns are minmax(0,1fr): they absorb slack evenly and
-       truncate under pressure instead of pushing the row past the card edge,
-       which fixed ch widths did at narrow masonry column widths. */
-    <div className={`tap-row relative grid items-center gap-x-2 md:gap-x-0.5 px-1.5 py-1.5 border-b border-border hover:bg-secondary/50 transition-colors text-[9px] font-mono leading-tight overflow-hidden [grid-template-columns:minmax(3.5ch,1fr)_auto_auto_auto_minmax(3.5ch,1fr)_2.3rem]${favorite ? " favorite-cell" : ""}`}>
+       `.score-row` sizes this row's font as a fraction of its own (fixed)
+       width — every other length below is `em`, so the entire row scales as
+       a rigid shape and is guaranteed to fit without truncating, scrolling,
+       or ever dropping to one column. See `.score-row` in globals.css. */
+    <div className={`score-row tap-row relative grid items-center gap-x-[0.89em] md:gap-x-[0.22em] px-[0.67em] py-[0.67em] border-b border-border hover:bg-secondary/50 transition-colors font-mono leading-tight whitespace-nowrap [grid-template-columns:minmax(0,1fr)_auto_auto_auto_minmax(0,1fr)_auto]${favorite ? " favorite-cell" : ""}`}>
       {/* Stretched link: the row body opens the ESPN game page; team links sit above it */}
       {espnUrl && (
         <a
@@ -900,57 +901,55 @@ function ScoreCell({
       <Link
         href={`/${leagueSlug}/${awayAbbr}`}
         title={game.away_team}
-        className={`relative z-10 flex items-center justify-end gap-1 ${teamCls(awayWon)} text-right truncate`}
+        className={`relative z-10 flex items-center justify-end gap-[0.44em] ${teamCls(awayWon)} text-right`}
       >
         {game.away_logo && (
           // eslint-disable-next-line @next/next/no-img-element
-          <img src={game.away_logo} alt="" className="w-3 h-3 shrink-0 object-contain" />
+          <img src={game.away_logo} alt="" className="w-[1.33em] h-[1.33em] shrink-0 object-contain" />
         )}
-        <span className="truncate">{awayAbbr}</span>
+        <span>{awayAbbr}</span>
       </Link>
       <span className={`${scoreCls(awayWon)} text-right tabular-nums`}>
         {isScheduled ? "" : awayN ?? ""}
       </span>
-      <span className="text-[7px] text-muted-foreground/50 text-center px-0">{isScheduled ? "@" : "–"}</span>
+      <span className="text-[0.78em] text-muted-foreground/50 text-center px-0">{isScheduled ? "@" : "–"}</span>
       <span className={`${scoreCls(homeWon)} text-left tabular-nums`}>
         {isScheduled ? "" : homeN ?? ""}
       </span>
       <Link
         href={`/${leagueSlug}/${homeAbbr}`}
         title={game.home_team}
-        className={`relative z-10 flex items-center justify-start gap-1 ${teamCls(homeWon)} text-left truncate`}
+        className={`relative z-10 flex items-center justify-start gap-[0.44em] ${teamCls(homeWon)} text-left`}
       >
-        <span className="truncate">{homeAbbr}</span>
+        <span>{homeAbbr}</span>
         {game.home_logo && (
           // eslint-disable-next-line @next/next/no-img-element
-          <img src={game.home_logo} alt="" className="w-3 h-3 shrink-0 object-contain" />
+          <img src={game.home_logo} alt="" className="w-[1.33em] h-[1.33em] shrink-0 object-contain" />
         )}
       </Link>
       {isLive ? (
         /* Two short lines instead of one truncated one: "1:21 - 1st Quarter"
            reads as 1:21 / 1st rather than being clipped to "1:21 -". */
         <span
-          className="flex flex-col items-end justify-center leading-none text-[7px]"
+          className="flex flex-col items-end justify-center leading-none text-[0.78em]"
           style={{ color: "hsl(142 65% 42%)" }}
           title={game.status_detail ?? "Live"}
         >
-          <span className="truncate max-w-full">{liveStatus.top}</span>
-          {liveStatus.bottom && (
-            <span className="truncate max-w-full">{liveStatus.bottom}</span>
-          )}
+          <span>{liveStatus.top}</span>
+          {liveStatus.bottom && <span>{liveStatus.bottom}</span>}
         </span>
       ) : gameDate ? (
         /* Not today — stack the date above the time instead of cramming
-           both into one line that would just truncate. */
+           both into one line. */
         <span
-          className="flex flex-col items-end justify-center leading-none text-[7px] text-muted-foreground uppercase"
+          className="flex flex-col items-end justify-center leading-none text-[0.78em] text-muted-foreground uppercase"
           title={`${gameDate} ${tipOff ?? ""}`.trim()}
         >
-          <span className="truncate max-w-full">{gameDate}</span>
-          <span className="truncate max-w-full">{tipOff}</span>
+          <span>{gameDate}</span>
+          <span>{tipOff}</span>
         </span>
       ) : (
-        <span className="text-[8px] leading-none text-muted-foreground uppercase text-right truncate">
+        <span className="text-[0.89em] leading-none text-muted-foreground uppercase text-right">
           {isFinal ? "Final" : tipOff ?? "Sched"}
         </span>
       )}
@@ -1212,7 +1211,7 @@ export default async function CommandCenter() {
         accent="hsl(25 95% 50%)" href={`/${snap.league.league}`}
         count={games.length || undefined} summary={sportsSummary}
       >
-        <div className="card-cq">
+        <div>
           {games.length > 0 && (
             <div className="score-grid border-b border-border">
               {games.map((g, i) => (

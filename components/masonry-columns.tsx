@@ -2,10 +2,11 @@
 
 import { Children, ReactNode, useEffect, useRef, useState } from "react";
 
-/** Never let a card get narrower than this. Must stay >= the 340px container-query
- *  breakpoint in globals.css (`.score-grid` two-up threshold) — otherwise cards land
- *  in a dead zone where score rows stack even though there's room for two columns. */
-const MIN_CARD_PX = 340;
+/** Never let a card get narrower than this — general readability floor for card
+ *  content (titles, tickers, score rows). Score rows themselves are always two-up
+ *  regardless of width (see `.score-grid` in globals.css); they truncate their own
+ *  text under pressure rather than depending on this value. */
+const MIN_CARD_PX = 300;
 const GAP_PX = 12;   // gap-3
 const MAX_COLS = 8;  // sanity ceiling for ultrawide displays
 

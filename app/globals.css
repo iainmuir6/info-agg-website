@@ -255,26 +255,30 @@
 }
 
 
-/* Score cells sit two-up only when their CARD is wide enough.
-   `min-[380px]:grid-cols-2` was a viewport query, so on any desktop the cells
-   went 2-up no matter how narrow the column was — at a 240px column each cell
-   got ~120px against a ~127px minimum, and the row clipped. A container query
-   measures the card itself, so this can no longer depend on column count. */
-.card-cq {
-  container-type: inline-size;
-}
-
+/* Score cells are always exactly two-up, at a fixed 50/50 split — never
+   content-sized, so there is nothing here for the grid to overflow or need
+   to scroll. Fitting the content is each row's own job: `.score-row` sizes
+   its font as a fraction of ITS OWN column, which is exactly half of this
+   element's width — so this is the query container (`.score-row` can't
+   query itself; container query units are invalid on the element that
+   establishes the container, per spec, which is why an earlier version of
+   this quietly always fell back to the 9px cap). */
 .score-grid {
+  container-type: inline-size;
   display: grid;
-  grid-template-columns: minmax(0, 1fr);
+  grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
-@container (min-width: 340px) {
-  .score-grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-  /* Divider belongs only between the pair, never above a stacked row. */
-  .score-grid > *:nth-child(even) {
-    border-left: 1px solid hsl(var(--border));
-  }
+/* Every other length in the row (logo size, gaps, padding, the smaller
+   status/date text) is set in `em`, so the whole row scales as one rigid
+   shape: worst-case content needs ~19x its font-size in width, and this
+   column is half of `.score-grid`'s width, so 2.5cqw (< the 2.63cqw
+   break-even) always leaves headroom, at any container width. Capped at
+   9px so wide columns keep today's compact look instead of ballooning. */
+.score-row {
+  font-size: min(2.5cqw, 9px);
+}
+
+.score-grid > *:nth-child(even) {
+  border-left: 1px solid hsl(var(--border));
 }
