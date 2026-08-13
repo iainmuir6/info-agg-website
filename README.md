@@ -19,7 +19,7 @@ A single-page dashboard that pulls together news, sports scores, market data, an
 
 | Layer | Tech |
 |---|---|
-| Frontend | Next.js 15 (App Router, Turbopack) |
+| Frontend | Next.js 16 (App Router, Turbopack) |
 | UI | shadcn/ui, Tailwind CSS |
 | Auth | Supabase Auth (PKCE flow) |
 | Database | Supabase (PostgreSQL, `info_agg` schema) |
