@@ -2,11 +2,26 @@
 
 import { Children, ReactNode, useEffect, useRef, useState } from "react";
 
+/** Never let a card get narrower than this. Below ~280px the score rows
+ *  (two team abbreviations, two scores, separator and status) start clipping. */
+const MIN_CARD_PX = 300;
+const GAP_PX = 12;   // gap-3
+const MAX_COLS = 8;  // sanity ceiling for ultrawide displays
+
+/**
+ * Column count derived from available width rather than fixed breakpoints.
+ * The old version jumped to 5 columns at exactly 1280px, which made each
+ * column ~240px — narrower than a score row needs — so a 1280-1440px laptop
+ * showed clipped text. Deriving the count keeps every card >= MIN_CARD_PX and
+ * lets very wide screens add columns instead of just stretching.
+ */
 function getColCount(): number {
   if (typeof window === "undefined") return 1;
-  if (window.innerWidth >= 1280) return 5;
-  if (window.innerWidth >= 768) return 3;
-  return 1;
+  const w = window.innerWidth;
+  const pad = w >= 768 ? 32 : 24;            // px-4 from md, px-3 below
+  const usable = w - pad + GAP_PX;           // +GAP: n cards have n-1 gaps
+  const cols = Math.floor(usable / (MIN_CARD_PX + GAP_PX));
+  return Math.min(MAX_COLS, Math.max(1, cols));
 }
 
 /**

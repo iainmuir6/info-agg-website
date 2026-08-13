@@ -1212,9 +1212,9 @@ export default async function CommandCenter() {
         accent="hsl(25 95% 50%)" href={`/${snap.league.league}`}
         count={games.length || undefined} summary={sportsSummary}
       >
-        <div>
+        <div className="card-cq">
           {games.length > 0 && (
-            <div className="grid grid-cols-1 min-[380px]:grid-cols-2 min-[380px]:divide-x divide-border border-b border-border">
+            <div className="score-grid border-b border-border">
               {games.map((g, i) => (
                 <ScoreCell key={i} game={g} leagueSlug={snap.league!.league} favorite={isFav(g)} />
               ))}
