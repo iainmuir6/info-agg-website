@@ -1,10 +1,22 @@
 # ETL Runbook
 
-Two distinct operating modes: **Initial Seed** (run once per environment) and **Daily Run** (automated via Vercel Cron or manual trigger).
+Two distinct operating modes existed at one point: **Initial Seed** (run once per environment)
+and **Daily Run** (now automated via GitHub Actions, not Vercel Cron — see below). The Initial
+Seed path is currently broken; see the notice under that heading before reading further.
 
 ---
 
-## Initial Seed
+## Initial Seed — ARCHIVED, currently broken (reference only)
+
+> `run_db_seed.py` was moved to `src/api/archive/` and no longer runs: it calls
+> `run_sports_etl(supabase, backfill_days=...)` and `run_news_etl(supabase, backfill_days=...)`,
+> but the current `run_etl.py` versions of those functions don't accept a `backfill_days`
+> kwarg — it would raise `TypeError` immediately. There is presently no working path to
+> backfill historical quotes or news. `backfill_scores.py` (documented in the repo root
+> `CLAUDE.md` and `src/api/README.md`) is the one backfill tool that still works, and it only
+> covers ESPN scores. Everything below describes the old design as it was intended to work,
+> kept for whoever eventually repairs or replaces it — do not run these commands expecting
+> them to succeed today.
 
 Run once when setting up a new environment:
 
@@ -138,24 +150,21 @@ source _agg_venv/bin/activate   # from repo root
 python src/api/run_etl.py
 ```
 
-Runs all four domains sequentially: **sports → markets → news → media**.
+Runs all four domains **in parallel** (`ThreadPoolExecutor`, one thread per domain) — this
+replaced the old sequential design specifically so the whole run finishes well under 60s; see
+the ETL Performance Requirement in the repo root `CLAUDE.md`. Wall time is set by the slowest
+domain (markets), not the sum of all four. Each domain phase also has its own cooperative
+`--budget-seconds` ceiling (default 50s) — it stops starting new work once spent rather than
+running unbounded. See `src/api/docs/EXECUTION_ORDER.md` for the per-domain breakdown.
 
-### Expected run time — Daily Run (no backfill)
-
-| Domain | Work performed | Est. duration |
-|--------|---------------|---------------|
-| Sports | ESPN: news + scores for ~10 leagues | ~10–15s |
-| Markets | Finnhub: 36 quotes + 36 company-news + 4 market-news; AV: 5 sentiment topics | ~90–120s |
-| News | NYT Top Stories: 9 sections × >=1s pacing + 1 most-popular call | ~90–120s |
-| Media | YouTube (1 call) | ~1–2s |
-| **Total** | | **~5–7 min** |
-
-> **Vercel Cron note:** The Hobby plan enforces a 60-second serverless function limit.
-> A full daily run (~5–7 min) exceeds this. The Vercel Cron route at `/api/cron/etl`
-> uses a 55s exec timeout; partial completion is logged. If full coverage is needed,
-> run domain-specific crons or upgrade to a Pro plan (300s limit).
-> To stay within 60s: `--sports-only` (~15s) or `--markets-only` (~2–3 min, still over).
-> The safest sub-60s option is a subset: `--skip-news --skip-markets` (~30s).
+> **Scheduling — GitHub Actions, not Vercel Cron.** `.github/workflows/daily-etl.yml` runs
+> `python src/api/run_etl.py --triggered-by cron --cleanup --season-schedules` on a schedule
+> (`cron: '43 10 * * *'` UTC) and revalidates the site's cache afterward. It can also be
+> triggered manually — either from the GitHub Actions UI (`workflow_dispatch`) or from the
+> `/dashboard` admin page's trigger button, which calls `POST /api/etl`. That route exists at
+> all because Vercel's serverless runtime has no Python interpreter — it can only ask GitHub
+> Actions to run the pipeline, never run it in-process. There is no Vercel Cron route in this
+> project; an older `/api/cron/etl` route referenced by previous docs no longer exists.
 
 ### What each domain does on a daily run
 
@@ -171,12 +180,12 @@ Per ticker:
 | commodity | Fetch latest quote | FMP `/stable/quote` | `stock_quotes` |
 | stock | Fetch company news (7-day window) | Finnhub `/company-news` | `company_news` |
 
-Then once (not per-ticker):
+Then once, run in parallel with each other since each hits a different API:
 
 | Action | Source | Table |
 |--------|--------|-------|
 | Fetch market news (4 categories) | Finnhub `/news` | `market_news` |
-| Fetch AV sentiment (5 topics) | AV `NEWS_SENTIMENT` | `news_sentiment` |
+| Fetch AV sentiment (all 10 topics — no partial-topic mode) | AV `NEWS_SENTIMENT` | `news_sentiment` |
 | Treasury rates + 7 macro indicators | FMP `/stable/treasury-rates`, `/stable/economic-indicators` | `economic_indicators` |
 
 Stub **missing-profile backfill** (FMP profile for `name IS NULL` stocks) was **removed from the daily ETL**; `backfill_missing_profiles()` in `markets_db_helper.py` is deprecated for one-off use only.
@@ -185,7 +194,8 @@ Profile/info updates are **not** run daily — trigger manually with FMP (`run_f
 
 #### Sports / News / Media
 
-Same as seed — always fetches the current snapshot (scores, news, releases, posts).
+Same current-snapshot fetch the (now-broken) seed used to also do: scores, news, releases,
+posts — just without the seed's historical backfill.
 
 ---
 
@@ -195,9 +205,6 @@ Same as seed — always fetches the current snapshot (scores, news, releases, po
 # Skip slow domains when iterating on markets
 python src/api/run_etl.py --markets-only
 
-# Expanded AV sentiment (all 10 topics, ~2× AV budget)
-python src/api/run_etl.py --all-sentiment-topics
-
 # Scrape ETF info + holdings from etfdb.com (manual trigger)
 python src/api/run_etl.py --scrape-etf-info
 
@@ -205,8 +212,10 @@ python src/api/run_etl.py --scrape-etf-info
 python src/api/run_etl.py --skip-sentiment
 ```
 
-> **Quote backfill removed from daily run.** OHLCV history is AV-expensive (1 call/ticker/run).
-> Use `run_db_seed.py --backfill-quotes N` for any historical backfill needs.
+> **Quote backfill has no working path right now.** OHLCV history is AV-expensive (1
+> call/ticker/run) and was intentionally kept out of the daily run for that reason. It used to
+> live in `run_db_seed.py --backfill-quotes N`, but that script is archived and broken (see the
+> notice at the top of this doc) — there's currently no substitute.
 
 ---
 
@@ -214,35 +223,39 @@ python src/api/run_etl.py --skip-sentiment
 
 ```
 New environment?
-  └─ YES → python src/api/run_db_seed.py
-  └─ NO  → python src/api/run_etl.py
+  └─ There's no working seed path today (see "Initial Seed" notice above).
+     python src/api/run_etl.py will populate current-snapshot data (quotes, news,
+     scores) fine; historical OHLCV/news backfill needs the seed path repaired first.
 
-Need to backfill missed OHLCV history?
-  └─ python src/api/run_db_seed.py --backfill-quotes N  (run_etl.py no longer supports this)
+Already seeded — routine operation?
+  └─ python src/api/run_etl.py  (or let .github/workflows/daily-etl.yml run it on schedule)
 
-Daily Run — budget constraints?
-  ├─ AV budget tight      → omit --all-sentiment-topics (default 5 topics)
-  └─ AV budget very tight → add --skip-sentiment (0 AV calls)
+Missed some ESPN score history (outage, late backfill)?
+  └─ python src/api/backfill_scores.py --season current  (safe to re-run, upserts by event)
 
-Running on Vercel Cron (60s limit)?
-  ├─ Full run exceeds limit — partial completion is normal
-  └─ For guaranteed completion: use --sports-only or --skip-news --skip-markets
+Daily Run — AV budget constraints?
+  └─ AV budget tight → add --skip-sentiment (0 AV calls; sentiment is otherwise always
+     all 10 topics, there's no partial-topic flag)
+
+Need faster-than-daily updates between full runs?
+  └─ python src/api/run_quick_refresh.py --tier a   (every 15 min, no daily budget spent)
+  └─ python src/api/run_quick_refresh.py --tier b   (hourly, adds NYT + ESPN news + FMP)
 ```
 
 ---
 
 ## Key Differences: Seed vs. Daily
 
-| Behaviour | Seed (`run_db_seed.py`) | Daily (`run_etl.py`) |
+| Behaviour | Seed (`run_db_seed.py`, **archived/broken**) | Daily (`run_etl.py`) |
 |-----------|------------------------|----------------------|
-| Entry point | `run_db_seed.py` | `run_etl.py` |
-| Quote history depth | N days (default 30) via `--backfill-quotes` | Today's quote only — no backfill |
+| Entry point | `archive/run_db_seed.py` — does not run | `run_etl.py` |
+| Domain execution | Interleaved with AV backfill batches, one domain at a time | All 4 domains in parallel (`ThreadPoolExecutor`) |
+| Quote history depth | N days (default 30) via `--backfill-quotes`, when it worked | Today's quote only — no backfill |
 | AV key selection | Round-robin per ticker | Round-robin per call |
-| AV rate limiting | Interleaved with domain ETL (no explicit sleep) | Per-key sliding-window deque |
+| AV rate limiting | Interleaved with domain ETL (no explicit sleep) | `MinInterval` slot reservation (>=1.25s gap), reserves under lock then sleeps outside it |
 | Company news | Skipped during backfill; fetched in Phase 9 | Always fetched (7-day window) |
 | ETF holdings | AV `ETF_PROFILE` — full upsert (Phase 2) | Not run (manual only) |
 | Economic indicators | FMP full history — Phase 10 (~8 calls) | ~8 calls/day (incremental) |
-| AV sentiment | All 10 topics (Phase 8) | 5 topics (10 with `--all-sentiment-topics`) |
-| AV calls per run | ~36 (backfill) + 23 (holdings) + 10 (sentiment) = 69 | 5–10 (sentiment only) — no backfill |
-| Typical duration (3 AV keys) | ~12–18 min | ~5–7 min |
-| Vercel Cron compatible? | No (too long) | No (exceeds 60s limit) |
+| AV sentiment | All 10 topics (Phase 8) | All 10 topics (no partial-topic mode) |
+| Typical duration | ~12–18 min with 3 AV keys, when it worked | Well under 60s (target; cooperative 50s budget default) |
+| Scheduling | Manual only, when it worked | `.github/workflows/daily-etl.yml` (cron `43 10 * * *` UTC) + manual `workflow_dispatch` from `/dashboard` |
