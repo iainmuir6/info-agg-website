@@ -5,11 +5,16 @@ Proposal based on a full audit of the ETL pipeline (`src/api/`) and the Next.js 
 reliably scheduled; P1 makes the site feel alive (auto-refresh, freshness); P2 is design,
 density, and cleanup.
 
+> **Status update:** most of Phase 0, plus §1.1, §1.2, and §1.7, shipped within days of this
+> plan being written and are marked `[DONE]` inline below with the commit that landed them.
+> Phase 2 has not been revisited since this doc was written — treat those items as still open
+> unless you've verified otherwise against current code.
+
 ---
 
 ## Phase 0 — One scheduler, honest failures (the "bulletproof" core)
 
-### 0.1 Kill the Vercel cron; make GitHub Actions the single scheduler
+### 0.1 [DONE — `cb53b10`] Kill the Vercel cron; make GitHub Actions the single scheduler
 Today **two crons fire 5 minutes apart at the same hour** against the same APIs and tables:
 `vercel.json` (`0 12 * * *` → `/api/cron/etl`) and `.github/workflows/daily-etl.yml`
 (`5 12 * * *`). The Vercel path cannot ever succeed:
@@ -23,7 +28,7 @@ Today **two crons fire 5 minutes apart at the same hour** against the same APIs 
 and treat `daily-etl.yml` as the only scheduler. Add a `concurrency:` group to the workflow so
 a manual dispatch can't overlap the cron.
 
-### 0.2 Add an `etl_runs` table (run metadata + observability)
+### 0.2 [DONE — `68f208c`] Add an `etl_runs` table (run metadata + observability)
 Nothing about a run currently survives it — no run table, the in-memory `results` dict is only
 written with `--output` (which the workflow doesn't pass), and ~460 `print()` calls with no
 timestamps are the only trace.
@@ -37,7 +42,7 @@ finished_at, status (running|success|partial|failed), per-domain jsonb stats, er
 - "last updated N min ago" stamps across the site,
 - a cheap concurrency lock (skip if a `running` row is younger than N minutes).
 
-### 0.3 Make exit codes and domain stats honest
+### 0.3 [DONE — `68f208c`] Make exit codes and domain stats honest
 - `run_markets_etl` returns `success: True` no matter how full `total_stats['errors']` is
   (`run_etl.py:244`) — a run where **every ticker failed still exits 0** and CI goes green.
 - Sports write failures never reach `stats['errors']` (`sports_db_helper.py:213–223` — the
@@ -47,7 +52,7 @@ finished_at, status (running|success|partial|failed), per-domain jsonb stats, er
 active domain"; propagate write failures into stats; exit 1 on partial failure so the workflow
 turns red when the data is actually bad.
 
-### 0.4 Fix the markets fan-out data-loss bug
+### 0.4 [DONE] Fix the markets fan-out data-loss bug
 `run_etl.py:166` calls `future.result()` unwrapped inside the ticker loop. One ticker raising
 escapes to the outer `except`, and **all already-collected quotes and news for every other
 ticker are discarded** before the Phase 2/3 upserts run. Same pattern in
@@ -59,7 +64,7 @@ Also: the chunked `upsert_daily_stock_quotes_batch` (100-row batches) is importe
 the entire table at `:175` and `:208` instead, so one rejected payload loses everything.
 Use the chunked helpers everywhere; standardize batch size.
 
-### 0.5 Retries with backoff on every HTTP call
+### 0.5 [DONE] Retries with backoff on every HTTP call
 Grep confirms **zero retry logic in the entire pipeline** — every fetcher does raw
 `requests.get` (timeouts are set, which is good). One transient 5xx or connection reset drops
 that ticker/section/subreddit for a full day.
@@ -69,7 +74,11 @@ backoff, retry on 429/5xx/connection errors, honor `Retry-After`). Adopt in all 
 While there: give Finnhub/AV real 429 handling (currently a server-side 429 is printed and
 swallowed; AV rotates keys but never retries the original request).
 
-### 0.6 Structured logging + CI failure visibility
+### 0.6 [PARTIALLY DONE] Structured logging + CI failure visibility
+`etl_lib.get_logger()` and the `etl-report.json` upload/artifact step exist. Not verified: the
+`if: failure()` issue/email step, and whether the `_KEY_3` workflow secret gap was closed —
+recheck `daily-etl.yml`'s `env:` block before treating this as fully done.
+
 **Action:**
 - Replace `print()` with the `logging` module (timestamps, levels, per-domain logger names).
 - Workflow: pass `--output etl-report.json`, upload it with `actions/upload-artifact`, and add
@@ -79,7 +88,7 @@ swallowed; AV rotates keys but never retries the original request).
   `NYT_API_KEY_3`, but `daily-etl.yml` doesn't pass them — quota is silently smaller in CI
   than locally.
 
-### 0.7 Preflight validation + consistent degradation
+### 0.7 [DONE] Preflight validation + consistent degradation
 Missing keys behave inconsistently: NYT/Finnhub/FMP/Spotify raise `ValueError` (NYT's kills the
 whole news domain), Alpha Vantage degrades gracefully.
 
@@ -87,7 +96,7 @@ whole news domain), Alpha Vantage degrades gracefully.
 and lets each domain degrade gracefully (skip the affected source, mark the run `partial`)
 instead of dying.
 
-### 0.8 Orchestrator hygiene
+### 0.8 [DONE] Orchestrator hygiene
 - Add `timeout=` to the domain-level `as_completed` (`run_etl.py:405`) — currently the only
   wall clock is the workflow's 30-minute cap.
 - Use `with ThreadPoolExecutor(...)` (the pool at `run_etl.py:400` is never shut down).
@@ -144,7 +153,7 @@ responses) and `reddit=0` (403 kill-switch tripped), both reported as `[ OK ]`.
 
 ## Phase 1 — Scheduling cadence + a site that refreshes itself
 
-### 1.1 Tiered refresh schedule, driven by per-API budgets
+### 1.1 [DONE — `cb53b10`, `run_quick_refresh.py` + `.github/workflows/intraday-refresh.yml`] Tiered refresh schedule, driven by per-API budgets
 Real data cadence today is ~24h. Which sources can refresh often is dictated by daily caps
 (from `docs/RATE_LIMITS.md`, verified against the fetcher code):
 
@@ -171,7 +180,9 @@ Real data cadence today is ~24h. Which sources can refresh often is dictated by 
   250 cap after econ's 8. **These 13 FMP calls must stay out of Tier A** — at 15-min cadence
   they'd need ~1,250/day. `run_quick_refresh.py` currently includes them (it quotes every
   basket ticker); add an asset-type filter.
-- Reddit hot posts: 8 calls (after moving to OAuth; skip until then)
+- ~~Reddit hot posts: 8 calls (after moving to OAuth; skip until then)~~ — moot: the Reddit
+  fetcher was removed entirely (`2f36005`, the day after this section was written), not just
+  paused pending OAuth.
 
 **Tier C — daily (the existing job, unchanged cadence):**
 - AV sentiment (10 calls), FMP economic indicators (8), Spotify new releases (2),
@@ -182,7 +193,7 @@ Implementation: parameterize the quick-refresh entry point by tier
 the daily job, and per-tier rows in `etl_runs`. Tier A keeps the site's quotes and scores at
 most 15 minutes stale — which is what makes the auto-refreshing ticker (1.3) meaningful.
 
-### 1.2 Rework the admin ETL trigger (it can't work on Vercel either)
+### 1.2 [DONE — `cb53b10`] Rework the admin ETL trigger (it can't work on Vercel either)
 `POST /api/etl` also spawns Python via `execFile` — same fundamental problem as the cron route.
 
 **Action:** the button should call the GitHub API (`workflow_dispatch` on `daily-etl.yml` /
@@ -236,10 +247,10 @@ growth problems: news-type tables accumulate forever, and once Tier A ships, `st
 goes from 1 row/ticker/day to ~40 (each 15-min fetch gets a new `quote_timestamp`, so the
 `(stock_id, quote_timestamp)` upsert inserts rather than replaces).
 
-**Status: built** — `supabase/07_retention.sql` defines `info_agg.cleanup_daily()`, which
-applies the retention policy and returns a jsonb report of rows deleted per table. What
-remains is wiring the invocation (workflow step / RPC call) per the scheduling note below.
-The policy:
+**Status: [DONE]** — `info_agg.cleanup_daily()` is defined in `supabase/01_schema.sql` (not the
+separate `07_retention.sql` this section originally pointed at — that file was folded in and
+deleted, `f4a413d`, same day). It applies the retention policy and returns a jsonb report of
+rows deleted per table, and is wired into `daily-etl.yml` via `--cleanup`. The policy:
 
 | Table | Timestamp used | Policy |
 |---|---|---|
@@ -249,9 +260,7 @@ The policy:
 | `market_news` | same | delete > 30 days |
 | `news_sentiment` | same | delete > 90 days (own knob `p_sentiment_days`: ~320 rows/day at ~1.2 kB is the largest table by volume) |
 | `sports_news` | same | delete > 30 days |
-| `reddit_posts` | `coalesce(posted_at, fetched_at)` | delete > 3 days (hot posts stale within hours) |
 | `sports_scores` | `game_date` | keep forever (small rows; team pages compute season records from them, and a 30-day window silently truncated every record) |
-| `spotify_releases` | `release_date` | keep 30 days |
 | `economic_indicators` | — | keep forever (tiny, historical value) |
 | `etl_runs` (0.2) | `started_at` | keep 90 days |
 
@@ -324,9 +333,10 @@ deletes stay index-backed as the table grows under the intraday cadence.
   shared density scale — the homepage runs 7–10px mono type while domain pages run
   `text-sm`/`px-6 py-6`; pick intentional "dense" vs "reading" registers.
 - Active-route highlighting in the nav (currently hover-only underline).
-- Sparklines in the markets table rows and homepage stock cards — `SparklineChart` already
-  exists and is used on exactly one page; give it a no-data fallback (it currently returns
-  `null`).
+- Sparklines in the markets table rows and homepage stock cards — `SparklineChart` exists but
+  now has **zero usages anywhere** in `app/`/`components/` (worse than "used on exactly one
+  page" — it's since been removed from that page too); give it a no-data fallback (it
+  currently returns `null`) if it gets wired back in.
 
 ### 2.4 Mobile + accessibility
 - Only 34 breakpoint utilities exist in the whole codebase; the nav relies on `overflow-x-auto`
@@ -343,9 +353,12 @@ deletes stay index-backed as the table grows under the intraday cadence.
   the three quote-row shapers, fix the mutable default arg in `sync_market_news`, dedupe
   `sports_scores` rows before upsert (only table not deduped against its conflict key),
   paginate the unbounded `stocks` read in `insert_news_sentiment`.
-- Fix doc drift: RUNBOOK points at moved/renamed files (`run_db_seed.py` → `archive/`),
-  documents a nonexistent `--all-sentiment-topics` flag, says domains run "sequentially"
-  (they're parallel), and README references `sports_fetcher.py` (actual file: `espn.py`).
+- ~~Fix doc drift: RUNBOOK points at moved/renamed files...~~ — `[DONE]` as of the doc audit
+  that updated `CLAUDE.md`, `README.md`, `src/api/README.md`, and everything under
+  `src/api/docs/` to match current code (parallel execution, GitHub Actions scheduling,
+  archived/broken seed script, current flag set, corrected function/line references in
+  `DEDUPLICATION.md`). Re-audit periodically — this class of drift recurs whenever code moves
+  without a doc pass.
 
 ---
 
