@@ -4,14 +4,21 @@ This directory contains logos and images for different information sources.
 
 ## Structure
 
-- `logos/news/` - News source logos (NYT, BBC, CNN, Reuters, etc.)
-- `logos/sports/` - Sports source logos (ESPN, NFL, NBA, etc.)
-- `logos/markets/` - Financial source logos (Robinhood, Yahoo Finance, etc.)
-- `logos/media/` - Media source logos (YouTube, Spotify, etc.)
+- `logos/news/` — `nyt.svg`/`nyt.png`, `wsj.svg`
+- `logos/sports/` — `espn.svg`, `dk.svg` (DraftKings)
+- `logos/markets/` — `robinhood.svg`, `fmp.svg`, `alpha_vantage.png`
+- `logos/media/` — `youtube.svg`, `spotify.svg`, `x.svg`
+- `website_logos/` — this app's own logo (`info_agg.svg`/`.png`), not a source logo
+- `misc/weather-icons/` — a full weather-condition icon set (clear/cloudy/rain/snow/thunder ×
+  day/night variants, etc.) for a weather widget
 
 ## Usage
 
-These logos will be used as headers for expandable sections in each tab, replacing the current text-based headers.
+**Not currently wired into the UI.** No file in this directory is referenced by `app/`,
+`components/`, or `lib/` (verified by grepping for `/assets/` and each filename above) — these
+were staged ahead of building expandable-section headers and a weather widget, neither of
+which currently render a logo or icon from here. Treat this as available assets, not evidence
+of what's live.
 
 ## File Formats
 
@@ -21,12 +28,10 @@ These logos will be used as headers for expandable sections in each tab, replaci
 
 ## Naming Convention
 
-Use lowercase with hyphens for file names:
-- `new-york-times.svg`
-- `espn.svg`
-- `robinhood.svg`
-- `youtube.svg`
+Lowercase, matching the source's common short name — not always hyphenated (see `nyt.svg`,
+`fmp.svg`, `dk.svg` above rather than spelled-out names like `new-york-times.svg`).
 
 ## Integration
 
-The logos will be integrated into the expandable sections using Next.js Image component for optimization.
+When these are wired in, use `next/image` for optimization (per the mobile/accessibility notes
+in `docs/IMPROVEMENT_PLAN.md` §2.4 — the app currently uses raw `<img>` for external images).
