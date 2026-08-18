@@ -32,7 +32,10 @@ type QuoteRow = {
   name?: string | null;
   asset_type: string;
   market_cap: number | null;
-  quote: { current_price: number; percent_change: number } | null;
+  // All the DECIMAL columns on stock_quotes are nullable (supabase/02_tables.sql),
+  // and the consumers below already guard with `?? 0` / `!= null` — the type was
+  // the only thing claiming otherwise.
+  quote: { current_price: number | null; percent_change: number | null } | null;
 };
 
 type CompanyNewsItem = {
@@ -324,6 +327,21 @@ const TEAM_ABBREVS: Record<string, string> = {
 
 // ─── Data fetchers ────────────────────────────────────────────────────────────
 
+/** A core stocks row with its embedded quotes, as PostgREST returns it.
+ *  market_cap is a BIGINT, which comes back as a string to avoid precision
+ *  loss above 2^53 — see the normalisation in the mapper below. */
+type CoreAssetRow = {
+  ticker: string;
+  name: string | null;
+  asset_type: string | null;
+  market_cap: string | number | null;
+  stock_quotes: {
+    current_price: number | null;
+    percent_change: number | null;
+    quote_timestamp: string;
+  }[] | null;
+};
+
 async function getCoreAssetsByType(supabase: Awaited<ReturnType<typeof createClient>>) {
   try {
     const { data } = await supabase
@@ -332,15 +350,15 @@ async function getCoreAssetsByType(supabase: Awaited<ReturnType<typeof createCli
       .eq("is_core", true)
       .eq("is_active", true);
 
-    const withQuote = (data ?? [])
-      .map((s: any) => {
+    const withQuote = ((data ?? []) as CoreAssetRow[])
+      .map((s) => {
         // Sort by quote_timestamp (what trading day/moment the quote is
         // FOR), not fetched_at (when we happened to pull it) — a historical
         // backfill run after today's live quote stamps every backfilled row
         // with a fresher fetched_at than the live quote, which would
         // otherwise make an old closing price outrank the real current one.
         const quotes = (s.stock_quotes ?? []).sort(
-          (a: any, b: any) =>
+          (a, b) =>
             new Date(b.quote_timestamp).getTime() - new Date(a.quote_timestamp).getTime()
         );
         return {
@@ -957,32 +975,6 @@ function ScoreCell({
   );
 }
 
-/**
- * Flat list of NYT article links.
- * showSection=true (NYT Today): show the section as a hub cap.
- * showSection=false (US / World): no hub cap — the card header already tells you the context.
- */
-function NytList({ articles, showSection }: { articles: NyTimesArticle[]; showSection: boolean }) {
-  return (
-    <div>
-      {articles.map((a) => (
-        <a
-          key={a.id}
-          href={a.url}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="tap-row flex items-center min-h-[30px] gap-1.5 px-2 py-0.5 border-b border-border last:border-0 hover:bg-secondary/50 transition-colors group"
-        >
-          {showSection && a.section && <HubCap label={a.section} />}
-          <p className="text-[10px] font-semibold leading-tight line-clamp-2 group-hover:underline">
-            {a.title}
-          </p>
-        </a>
-      ))}
-    </div>
-  );
-}
-
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
 export default async function CommandCenter() {
@@ -1080,7 +1072,6 @@ export default async function CommandCenter() {
   // ── Crypto combined ───────────────────────────────────────────────────────
   const hasCryptoQuotes = assets.crypto.length > 0;
   const hasCryptoHeadlines = cryptoHeadlines.length > 0;
-  const cryptoItemCount = assets.crypto.length + cryptoHeadlines.length;
 
   // ── Sports ────────────────────────────────────────────────────────────────
   const SPORTS_LABEL: Record<string, string> = {
@@ -1174,6 +1165,10 @@ export default async function CommandCenter() {
 
     // In-season gate: hide leagues with no games within ±10 days
     const IN_SEASON_WINDOW_MS = 10 * 24 * 3600 * 1000;
+    // Server Component: renders once per request and must read the wall clock.
+    // The purity rule targets client components the compiler may memoise;
+    // there is no pure way to ask "what time is it now" on the server.
+    // eslint-disable-next-line react-hooks/purity
     const nowMs = Date.now();
     const inSeason = [...snap.recentGames, ...snap.upcomingGames].some((g) => {
       const t = g.game_date ? new Date(g.game_date).getTime() : NaN;

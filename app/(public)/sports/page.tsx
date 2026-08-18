@@ -163,6 +163,10 @@ export default async function SportsPage() {
             // In-season gate: hide leagues whose games all fall outside the
             // last/next 10 days (same rule as the Command Center cards).
             const IN_SEASON_WINDOW_MS = 10 * 24 * 3600 * 1000;
+            // Server Component: renders once per request and must read the wall clock.
+            // The purity rule targets client components the compiler may memoise;
+            // there is no pure way to ask "what time is it now" on the server.
+            // eslint-disable-next-line react-hooks/purity
             const nowMs = Date.now();
             const inSeason = leagueScores.some((s) => {
               const t = s.game_date ? new Date(s.game_date).getTime() : NaN;

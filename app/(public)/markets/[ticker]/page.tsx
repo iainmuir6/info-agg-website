@@ -6,6 +6,17 @@ import { ViewportFillRow } from "@/components/viewport-fill-row";
 import { FavoriteStockButton } from "@/components/favorite-stock-button";
 import { formatDate, formatDateTime, easternDayKey } from "@/lib/format-date";
 
+/** A company_news row, matching the select list in the query above. */
+type CompanyNews = {
+  id: number;
+  headline: string;
+  url: string;
+  source: string | null;
+  published_at: string | null;
+  related_tickers: string[] | null;
+  summary: string | null;
+};
+
 type QuoteHistory = {
   current_price: number;
   change_amount: number | null;
@@ -97,7 +108,7 @@ export default async function StockDetailPage({
   ]);
 
   const quotes = latestPerDay(((quotesRes.data ?? []) as QuoteHistory[]).slice().reverse());
-  const news = newsRes.data ?? [];
+  const news = (newsRes.data ?? []) as CompanyNews[];
   const favorited = !!favoriteRes?.data;
 
   // Latest quote is the most recent (last in ascending array)
@@ -306,7 +317,7 @@ export default async function StockDetailPage({
             Related News — {news.length} articles
           </p>
           <div className="space-y-px bg-border">
-            {news.slice(0, 8).map((article: any) => (
+            {news.slice(0, 8).map((article) => (
               <a
                 key={article.id}
                 href={article.url}

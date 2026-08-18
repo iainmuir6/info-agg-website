@@ -5,6 +5,20 @@ import Link from "next/link";
 import { TickerHoverChart } from "@/components/ticker-hover-chart";
 import { formatDate, formatTime } from "@/lib/format-date";
 
+/** One embedded quote row, matching the stock_quotes select list below. */
+type StockQuote = {
+  current_price: number | null;
+  change_amount: number | null;
+  percent_change: number | null;
+  high_price: number | null;
+  low_price: number | null;
+  open_price: number | null;
+  previous_close: number | null;
+  fetched_at: string;
+  quote_timestamp: string;
+};
+
+/** A stocks row with its embedded quote history, as PostgREST returns it. */
 type StockWithQuote = {
   id: number;
   ticker: string;
@@ -12,18 +26,14 @@ type StockWithQuote = {
   exchange: string | null;
   industry: string | null;
   logo_url: string | null;
-  stock_quotes: {
-    current_price: number;
-    change_amount: number;
-    percent_change: number;
-    high_price: number;
-    low_price: number;
-    open_price: number;
-    previous_close: number;
-    fetched_at: string;
-    quote_timestamp: string;
-  }[];
+  stock_quotes: StockQuote[] | null;
 };
+
+/** The same row after collapsing the history down to its newest quote. */
+type StockRow = StockWithQuote & { quote: StockQuote | null };
+
+/** A row proven to have a quote, so the table can read it without guards. */
+type QuotedStock = StockRow & { quote: StockQuote };
 
 type MarketNews = {
   id: number;
@@ -74,11 +84,12 @@ async function getMarketsData(supabase: Awaited<ReturnType<typeof createClient>>
   // trading day/moment it's FOR), not fetched_at (when we pulled it); a
   // historical backfill run after today's live quote would otherwise
   // outrank it since every backfilled row gets a fresh fetched_at.
-  const stocks = (stocksRes.data ?? []).map((s: any) => ({
+  const stocks: StockRow[] = ((stocksRes.data ?? []) as StockWithQuote[]).map((s) => ({
     ...s,
-    quote: s.stock_quotes?.sort(
-      (a: any, b: any) => new Date(b.quote_timestamp).getTime() - new Date(a.quote_timestamp).getTime()
-    )[0] ?? null,
+    quote:
+      s.stock_quotes?.sort(
+        (a, b) => new Date(b.quote_timestamp).getTime() - new Date(a.quote_timestamp).getTime()
+      )[0] ?? null,
   }));
 
   return {
@@ -92,14 +103,6 @@ function formatNum(n: number | null | undefined, digits = 2) {
   return n.toFixed(digits);
 }
 
-function formatMarketCap(n: number | null | undefined) {
-  if (!n) return null;
-  if (n >= 1e12) return `${(n / 1e12).toFixed(1)}T`;
-  if (n >= 1e9) return `${(n / 1e9).toFixed(1)}B`;
-  if (n >= 1e6) return `${(n / 1e6).toFixed(1)}M`;
-  return n.toString();
-}
-
 export default async function MarketsPage() {
   const supabase = await createClient();
   const { data: claimsData } = await supabase.auth.getClaims();
@@ -111,15 +114,15 @@ export default async function MarketsPage() {
   // Favorites float to the top of the table, keeping the ticker sort within
   // each band.
   const stocksWithQuotes = favoritesFirst(
-    stocks.filter((s: any) => s.quote),
-    (s: any) => favorites.tickers.has(String(s.ticker).toUpperCase()),
+    stocks.filter((s): s is QuotedStock => s.quote !== null),
+    (s) => favorites.tickers.has(String(s.ticker).toUpperCase()),
   );
   const latestFetchedAt = stocksWithQuotes.reduce(
-    (max: string | null, s: any) =>
+    (max: string | null, s) =>
       !max || (s.quote.fetched_at && s.quote.fetched_at > max) ? s.quote.fetched_at : max,
     null as string | null,
   );
-  const stocksNoQuote = stocks.filter((s: any) => !s.quote);
+  const stocksNoQuote = stocks.filter((s) => !s.quote);
   const hasData = stocks.length > 0;
 
   return (
@@ -195,9 +198,9 @@ export default async function MarketsPage() {
             </div>
 
             <div className="space-y-px bg-border">
-              {stocksWithQuotes.map((stock: any, i: number) => {
+              {stocksWithQuotes.map((stock, i) => {
                 const q = stock.quote;
-                const pct = parseFloat(q.percent_change ?? 0);
+                const pct = Number(q.percent_change ?? 0);
                 const isPos = pct >= 0;
                 const changeColor = isPos ? "hsl(142 65% 42%)" : "hsl(0 72% 50%)";
                 const fav = favorites.tickers.has(String(stock.ticker).toUpperCase());
@@ -283,7 +286,7 @@ export default async function MarketsPage() {
               })}
 
               {/* Stocks without quotes (just registered) */}
-              {stocksNoQuote.map((stock: any) => (
+              {stocksNoQuote.map((stock) => (
                 <div key={stock.id} className="bg-background px-4 py-3 flex items-center justify-between opacity-40">
                   <span className="text-sm font-mono font-black">{stock.ticker}</span>
                   <span className="text-xs font-mono text-muted-foreground">Awaiting quote</span>

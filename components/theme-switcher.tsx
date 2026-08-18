@@ -10,16 +10,22 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Laptop, Moon, Sun } from "lucide-react";
 import { useTheme } from "next-themes";
-import { useEffect, useState } from "react";
+import { useSyncExternalStore } from "react";
+
+/** "Have we hydrated yet" is external state, not derived state, so it is read
+ *  through useSyncExternalStore: the server snapshot is false and the client
+ *  snapshot is true, which renders nothing until hydration without the extra
+ *  mount-then-setState render an effect would cost. Nothing to subscribe to,
+ *  so subscribe is a no-op returning a no-op unsubscribe. */
+const NO_OP_SUBSCRIBE = () => () => {};
 
 const ThemeSwitcher = () => {
-  const [mounted, setMounted] = useState(false);
   const { theme, setTheme } = useTheme();
-
-  // useEffect only runs on the client, so now we can safely show the UI
-  useEffect(() => {
-    setMounted(true);
-  }, []);
+  const mounted = useSyncExternalStore(
+    NO_OP_SUBSCRIBE,
+    () => true,
+    () => false,
+  );
 
   if (!mounted) {
     return null;

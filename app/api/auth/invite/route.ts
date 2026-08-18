@@ -37,7 +37,7 @@ export async function POST(request: Request) {
     const redirectTo = `${siteUrl}/auth/callback?next=${encodeURIComponent("/auth/update-password")}`;
 
     const admin = createServiceRoleClient();
-    const { data: inviteData, error: inviteError } =
+    const { error: inviteError } =
       await admin.auth.admin.inviteUserByEmail(email, {
         redirectTo,
         data: { app_url: siteUrl },

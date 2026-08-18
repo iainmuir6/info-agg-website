@@ -72,6 +72,10 @@ export default async function TeamPage({
   // regardless of how much history accumulates behind it — 18 months covers
   // the longest split-year season plus next season's published fixtures.
   const HISTORY_WINDOW_DAYS = 550;
+  // Server Component: renders once per request and must read the wall clock.
+  // The purity rule targets client components the compiler may memoise;
+  // there is no pure way to ask "what time is it now" on the server.
+  // eslint-disable-next-line react-hooks/purity
   const since = new Date(Date.now() - HISTORY_WINDOW_DAYS * 24 * 3600 * 1000).toISOString();
 
   const byTeam = () =>
@@ -143,6 +147,10 @@ export default async function TeamPage({
     else if (own < opp) losses++;
   }
 
+  // Server Component: renders once per request and must read the wall clock.
+  // The purity rule targets client components the compiler may memoise;
+  // there is no pure way to ask "what time is it now" on the server.
+  // eslint-disable-next-line react-hooks/purity
   const now = Date.now();
   const results = games.filter((g) => gameState(g.status) === "final").slice(0, 30);
 

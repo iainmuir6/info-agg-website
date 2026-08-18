@@ -1,6 +1,6 @@
 "use client";
 
-import { Children, ReactNode, useEffect, useRef, useState } from "react";
+import { Children, ReactNode, useSyncExternalStore } from "react";
 
 /** Never let a card get narrower than this — general readability floor for card
  *  content (titles, tickers, score rows). Score rows themselves are always two-up
@@ -33,20 +33,17 @@ function getColCount(): number {
  * When a card above collapses, the card directly below slides up smoothly
  * because they share a flex-col container.
  */
-export function MasonryColumns({ children }: { children: ReactNode }) {
-  const [cols, setCols] = useState(1);
-  // Track whether we've mounted so SSR (cols=1) and first client render match
-  const mounted = useRef(false);
+/** Width is external state, so it is read through useSyncExternalStore rather
+ *  than mirrored into useState from an effect: that keeps SSR (1 column) and
+ *  the first client render in sync without the extra mount-then-setState pass,
+ *  and drops the resize listener automatically on unmount. */
+function subscribeToResize(onStoreChange: () => void) {
+  window.addEventListener("resize", onStoreChange);
+  return () => window.removeEventListener("resize", onStoreChange);
+}
 
-  useEffect(() => {
-    if (!mounted.current) {
-      mounted.current = true;
-      setCols(getColCount());
-    }
-    const onResize = () => setCols(getColCount());
-    window.addEventListener("resize", onResize);
-    return () => window.removeEventListener("resize", onResize);
-  }, []);
+export function MasonryColumns({ children }: { children: ReactNode }) {
+  const cols = useSyncExternalStore(subscribeToResize, getColCount, () => 1);
 
   const items = Children.toArray(children).filter(Boolean);
 
