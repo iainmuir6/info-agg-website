@@ -5,8 +5,10 @@
 # Every fetcher and orchestrator imports from here — keep this module
 # dependency-light (stdlib + requests only; supabase is passed in).
 
+import json
 import logging
 import os
+import re
 import threading
 import time
 from datetime import date, datetime, timezone
@@ -400,6 +402,23 @@ def preflight_env() -> Tuple[List[str], List[str]]:
 
 log = get_logger('etl_runs')
 
+# Fetchers authenticate by query param, and requests puts the full request URL
+# — query string and all — into its exception strings. Those strings get
+# appended to a domain's `errors` and land in etl_runs, which anon can read.
+# That is how live Finnhub keys ended up publicly readable; redact here, at the
+# single point where stats/errors are persisted, so no fetcher can reintroduce it.
+_SECRET_RE = re.compile(r'((?:token|apikey|api_key|api-key|key)=)[A-Za-z0-9_-]{8,}', re.I)
+
+
+def _redact(obj: Any) -> Any:
+    """Strip API keys out of anything bound for etl_runs. Best-effort: a payload
+    that will not round-trip through JSON is dropped rather than stored raw."""
+    try:
+        return json.loads(_SECRET_RE.sub(r'\1[REDACTED]', json.dumps(obj, default=str)))
+    except (TypeError, ValueError) as e:
+        log.warning('could not redact run payload, omitting it: %s', e)
+        return None
+
 
 def start_etl_run(supabase: Any, triggered_by: str, tier: str) -> Optional[str]:
     try:
@@ -431,9 +450,9 @@ def finish_etl_run(
             'status': status,
             'finished_at': datetime.now(timezone.utc).isoformat(),
             'duration_seconds': round(duration_seconds, 1),
-            'stats': stats,
-            'errors': errors[:100],   # bound the payload
-            'cleanup': cleanup,
+            'stats': _redact(stats),
+            'errors': _redact(errors[:100]),   # bound the payload
+            'cleanup': _redact(cleanup),
         }).eq('id', run_id).execute()
     except Exception as e:
         log.warning('could not record run finish: %s', e)

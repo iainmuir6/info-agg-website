@@ -126,6 +126,14 @@ All tables live in the `info_agg` schema. Apply migrations in order:
 6. `06_user_prefs.sql` — watchlist tables (`watchlist_stocks`, `watchlist_leagues`, `watchlist_teams`) + `user_home_prefs`
 7. `07_grants.sql` — explicit `INSERT/UPDATE/DELETE` grants for the tables `06` creates (RLS alone isn't enough — see comment in the file; Postgres checks table-level privileges before RLS runs)
 8. `08_watchlist_podcasts.sql` — `watchlist_podcasts` (favorited Spotify shows) + its own grants
+9. `09_security_hardening.sql` — anon least-privilege pass: scrubs API keys leaked into `etl_runs`,
+   restricts `etl_runs` to three health columns for `anon` (full row = `super_admin` only), drops
+   anon's unused SELECT on the `watchlist_*`/`user_home_prefs` tables, and removes the
+   `ALTER DEFAULT PRIVILEGES … GRANT SELECT TO anon` in `01` that made every new `info_agg` table
+   world-readable by default. **New public tables now need an explicit `GRANT SELECT`.**
+
+> This Supabase project is shared with other apps, separated by schema. Keep `info_agg` migrations
+> scoped to `info_agg` — do not modify `public` or another app's schema from this repo.
 
 **Key tables:**
 - Sports: `leagues`, `sports_news`, `sports_scores`, `sports_standings`
@@ -136,6 +144,61 @@ All tables live in the `info_agg` schema. Apply migrations in order:
 - Ops: `etl_runs` — one row per ETL run (status, tier, timing, per-domain stats/errors), read by `/dashboard`
 
 The ETL uses `SUPABASE_SERVICE_ROLE_KEY` with `ClientOptions(schema='info_agg')` for writes. The frontend uses the publishable key targeting the same schema.
+
+### Sharing `info_agg` data with another app in this project
+
+This Supabase project is shared by several apps, separated by schema. The 14
+`info_agg` data tables (`stocks`, `stock_quotes`, `sports_*`, `*_news`,
+`news_articles`, `news_sentiment`, `economic_indicators`, `etf_*`,
+`youtube_videos`, `leagues`) are already `SELECT`-able by `anon` and
+`authenticated` — this is a public site, so reading them from another schema
+adds **no new exposure**. Access is granted per table, so the restricted ones
+stay restricted: `watchlist_*` and `user_home_prefs` are owner-scoped by RLS,
+and `etl_runs` exposes only `status/started_at/finished_at` to `anon`.
+
+Two ways to consume them:
+
+1. **Point a client at the schema.** No DB changes: the other app creates a
+   Supabase client with `db: { schema: "info_agg" }` (or sends
+   `Accept-Profile: info_agg`). A client targets one schema at a time — this
+   repo already does this, with `createClient()` on `info_agg` and
+   `createPublicClient()` on `public`.
+
+2. **Wrap them in views in the consuming schema**, if that app wants its own
+   naming or a narrowed subset.
+
+**If you use views, `security_invoker = true` is mandatory and is NOT the
+default.** A plain `CREATE VIEW` runs as its owner and silently bypasses the
+base table's RLS — verified: a definer view over `watchlist_stocks` returned
+another user's row to a roleless caller, while the invoker view returned zero.
+
+```sql
+CREATE SCHEMA IF NOT EXISTS newapp;
+GRANT USAGE ON SCHEMA newapp TO anon, authenticated;
+
+CREATE VIEW newapp.tickers WITH (security_invoker = true) AS
+  SELECT ticker, name, exchange FROM info_agg.stocks;
+
+GRANT SELECT ON newapp.tickers TO anon, authenticated;
+```
+
+Checklist for the consuming schema:
+
+- Add the schema to **Supabase → Settings → API → Exposed schemas**, or
+  PostgREST will not serve it.
+- Keep it **read-only** against `info_agg`. The ETL owns those tables and
+  writes via `service_role`; never grant another app write access to them.
+- Share only the public data tables. Cross-app access to `watchlist_*` /
+  `user_home_prefs` is a deliberate design decision, not a default.
+- Grant to `authenticated` (or gate on `has_project_role`) rather than `anon`
+  for anything that should not be world-readable. **Note:** signup is open and
+  auto-confirms, so `authenticated` means "anyone who registered" — it is not
+  by itself an authorization boundary.
+- Foreign keys across schemas work normally: a new app's tables can reference
+  `info_agg.stocks(id)` directly.
+- Because `09` removed the schema-wide default `GRANT SELECT`, a **new** shared
+  table added to `info_agg` is unreadable until you `GRANT SELECT` on it
+  explicitly. That is intended.
 
 ### Adding a New Data Source
 
