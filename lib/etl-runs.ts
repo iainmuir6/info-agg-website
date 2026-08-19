@@ -8,7 +8,7 @@ export type CounterRow = { label: string; count: number | null };
 
 /** Per-domain outcome as recorded by the orchestrator on the etl_runs row. */
 export type DomainOutcome = {
-  state: "ok" | "skipped" | "failed";
+  state: "ok" | "degraded" | "skipped" | "failed";
   error: string | null;
   errors: string[];
   notes: string[];
@@ -46,18 +46,20 @@ export const DOMAIN_ACCENT: Record<string, string> = {
 
 export const STATE_LABEL: Record<DomainOutcome["state"], string> = {
   ok: "OK",
+  degraded: "WARN",
   skipped: "SKIP",
   failed: "FAIL",
 };
 
 export const STATE_COLOR: Record<DomainOutcome["state"], string> = {
   ok: "hsl(142 65% 42%)",
+  degraded: "hsl(30 90% 50%)",
   skipped: "hsl(45 90% 52%)",
   failed: "hsl(0 72% 50%)",
 };
 
 /** Counters worth surfacing per domain, in display order. Anything else in the
- *  stats payload (errors, notes, ok, skipped) is handled separately. */
+ *  stats payload (errors, notes, ok, skipped, degraded) is handled separately. */
 export const COUNTER_LABELS: Record<string, string> = {
   leagues_processed: "Leagues",
   news_inserted: "News",
@@ -84,6 +86,9 @@ export function parseDomains(stats: unknown): Record<string, DomainOutcome> {
       .filter(([k]) => typeof s[k] === "number")
       .map(([k, label]) => ({ label, count: s[k] as number }));
     const skipped = s.skipped === true;
+    // Wrote nothing but did not take the run down with it (media). Distinct
+    // from ok, or the dashboard would show a dead source in green.
+    const degraded = s.degraded === true;
     // Runs recorded before the orchestrator persisted an explicit `ok` flag
     // have to be inferred: no error and at least one row written. Falling back
     // to "no error field" alone would read a domain that wrote nothing — the
@@ -91,7 +96,7 @@ export function parseDomains(stats: unknown): Record<string, DomainOutcome> {
     const ok =
       s.ok === undefined ? !s.error && counters.some((c) => (c.count ?? 0) > 0) : s.ok === true;
     out[domain] = {
-      state: skipped ? "skipped" : ok ? "ok" : "failed",
+      state: skipped ? "skipped" : degraded ? "degraded" : ok ? "ok" : "failed",
       error: typeof s.error === "string" ? s.error : null,
       errors: Array.isArray(s.errors) ? (s.errors as string[]) : [],
       notes: Array.isArray(s.notes) ? (s.notes as string[]) : [],

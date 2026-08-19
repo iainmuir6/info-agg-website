@@ -403,13 +403,20 @@ def run_media_etl(supabase: Client) -> Dict[str, Any]:
         if youtube_stats.get('skipped'):
             return {'success': True, 'skipped': True, 'stats': stats}
 
-        ok = stats['youtube_videos'] > 0
-        result: Dict[str, Any] = {'success': ok, 'stats': stats}
-        if not ok:
-            result['error'] = 'media wrote 0 rows from any source'
-        return result
+        # Non-blocking by design. Media is one API, one call, no fallback, and
+        # the least load-bearing data on the site — but `success: False` here
+        # failed the *whole* run, which skipped cache revalidation for every
+        # other domain's rows and opened a GitHub issue. Two of the three failed
+        # runs in the 60 days before this change were a YouTube blip alongside
+        # a fully successful sports/markets/news run. Report it loudly (the run
+        # lands on 'partial') without taking the pipeline down with it.
+        if stats['youtube_videos'] == 0:
+            stats['errors'].append('media wrote 0 rows from any source')
+            return {'success': True, 'degraded': True, 'stats': stats}
+        return {'success': True, 'stats': stats}
     except Exception as e:
-        return {'success': False, 'error': str(e)}
+        return {'success': True, 'degraded': True,
+                'stats': {'youtube_videos': 0, 'errors': [f"media failed: {e}"]}}
 
 
 def run_etfdb_etl(supabase: Client) -> None:
@@ -581,6 +588,8 @@ def run_full_etl(
                         ok = results[domain].get('success', False)
                         if results[domain].get('skipped'):
                             status = 'SKIP'
+                        elif results[domain].get('degraded'):
+                            status = 'WARN'
                         else:
                             status = 'OK  ' if ok else 'FAIL'
                         print(f"  [{status}] {domain:<8}  {elapsed:.1f}s")
@@ -622,7 +631,7 @@ def run_full_etl(
     if any(not r.get('success') for r in active.values()):
         run_status = 'failed'
     elif (all_errors or (cleanup_report or {}).get('error')
-          or any(r.get('skipped') for r in active.values())):
+          or any(r.get('skipped') or r.get('degraded') for r in active.values())):
         run_status = 'partial'
     else:
         run_status = 'success'
@@ -637,6 +646,8 @@ def run_full_etl(
         payload['ok'] = bool(r.get('success'))
         if r.get('skipped'):
             payload['skipped'] = True
+        if r.get('degraded'):
+            payload['degraded'] = True
         return payload
 
     finish_etl_run(
@@ -676,7 +687,7 @@ def run_full_etl(
             return f"youtube={s.get('youtube_videos',0)}"
         return ''
 
-    passed = failed = skipped = 0
+    passed = failed = skipped = warned = 0
     for domain in DOMAIN_ORDER:
         result = results.get(domain)
         if result is None:
@@ -684,7 +695,10 @@ def run_full_etl(
         elapsed = domain_elapsed.get(domain, 0)
         ok = result.get('success', False)
         was_skipped = bool(result.get('skipped'))
-        status = 'SKIP' if was_skipped else (' OK ' if ok else 'FAIL')
+        degraded = bool(result.get('degraded'))
+        status = ('SKIP' if was_skipped else
+                  'WARN' if degraded else
+                  (' OK ' if ok else 'FAIL'))
         stat_str = _stat_str(domain, result) if ok else result.get('error', '')
         print(f"  {domain:<8} [{status}]  {stat_str:<48}  {elapsed:.1f}s")
         notes = result.get('stats', {}).get('notes', [])
@@ -698,13 +712,16 @@ def run_full_etl(
                 print(f"             ↳ … and {len(errors) - 3} more errors")
         if was_skipped:
             skipped += 1
+        elif degraded:
+            warned += 1
         else:
             passed += ok
             failed += (not ok)
 
     print("-" * W)
     skip_str = f" · {skipped} skipped" if skipped else ""
-    print(f"  {passed} passed · {failed} failed{skip_str} · {duration:.1f}s total")
+    warn_str = f" · {warned} degraded" if warned else ""
+    print(f"  {passed} passed · {failed} failed{warn_str}{skip_str} · {duration:.1f}s total")
     print("=" * W)
 
     return results
