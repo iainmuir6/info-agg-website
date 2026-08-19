@@ -379,7 +379,8 @@ def run_news_etl(supabase: Client, sections: Optional[List[str]] = None) -> Dict
             result['error'] = 'news wrote 0 articles'
         return result
     except Exception as e:
-        return {'success': False, 'error': str(e)}
+        return {'success': False, 'error': str(e),
+                'stats': {'errors': [f"news failed: {e}"]}}
 
 
 def run_media_etl(supabase: Client) -> Dict[str, Any]:
@@ -573,6 +574,8 @@ def run_full_etl(
         finally:
             domain_elapsed[domain] = (et_now() - t0).total_seconds()
 
+    domain_futures: Dict[Any, str] = {}
+    timed_out: set = set()
     if domain_fns:
         with ThreadPoolExecutor(max_workers=len(domain_fns)) as executor:
             domain_futures = {
@@ -599,11 +602,30 @@ def run_full_etl(
             except TimeoutError:
                 for future, domain in domain_futures.items():
                     if results.get(domain) is None:
+                        timed_out.add(domain)
                         results[domain] = {
                             'success': False,
                             'error': f'domain exceeded {DOMAIN_TIMEOUT_S}s timeout',
                         }
                         print(f"  [FAIL] {domain:<8}  timed out")
+
+    # A "timed out" domain is not actually abandoned: the executor's context
+    # manager joins every worker on exit, so by this point it has finished and
+    # may well have written rows. Recover its real result and keep the overrun
+    # as an error rather than reporting a bare failure with no counters.
+    for future, domain in domain_futures.items():
+        if domain not in timed_out or not future.done() or future.cancelled():
+            continue
+        try:
+            recovered = future.result()
+        except Exception as e:
+            recovered = {'success': False, 'error': str(e)}
+        stats = dict(recovered.get('stats') or {})
+        stats['errors'] = ([f'domain exceeded {DOMAIN_TIMEOUT_S}s timeout']
+                           + list(stats.get('errors') or []))
+        # Still a failure — the ceiling exists for a reason — but an honest one.
+        results[domain] = {**recovered, 'stats': stats, 'success': False,
+                           'error': f'domain exceeded {DOMAIN_TIMEOUT_S}s timeout'}
 
     run_deadline.clear()   # cleanup + run recording are not part of the budget
 

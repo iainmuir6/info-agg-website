@@ -189,6 +189,7 @@ def run_quick_refresh(tier: str, triggered_by: str = 'manual') -> Dict[str, Any]
         finally:
             domain_elapsed[domain] = (et_now() - t0).total_seconds()
 
+    timed_out: set = set()
     with ThreadPoolExecutor(max_workers=len(domain_fns)) as executor:
         domain_futures = {
             executor.submit(_timed, domain, fn): domain
@@ -204,10 +205,27 @@ def run_quick_refresh(tier: str, triggered_by: str = 'manual') -> Dict[str, Any]
         except TimeoutError:
             for future, domain in domain_futures.items():
                 if domain not in results:
+                    timed_out.add(domain)
                     results[domain] = {
                         'success': False,
                         'error': f'domain exceeded {DOMAIN_TIMEOUT_S}s timeout',
                     }
+
+    # The executor joins every worker on exit, so a domain reported as timed
+    # out has in fact finished — and may have written rows. Recover its result
+    # and keep the overrun as an error (see run_etl.py for the full note).
+    for future, domain in domain_futures.items():
+        if domain not in timed_out or not future.done() or future.cancelled():
+            continue
+        try:
+            recovered = future.result()
+        except Exception as e:
+            recovered = {'success': False, 'error': str(e)}
+        stats = dict(recovered.get('stats') or {})
+        stats['errors'] = ([f'domain exceeded {DOMAIN_TIMEOUT_S}s timeout']
+                           + list(stats.get('errors') or []))
+        results[domain] = {**recovered, 'stats': stats, 'success': False,
+                           'error': f'domain exceeded {DOMAIN_TIMEOUT_S}s timeout'}
 
     run_deadline.clear()
 
