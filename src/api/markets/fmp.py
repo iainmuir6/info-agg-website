@@ -330,13 +330,26 @@ def fetch_fmp_quote(symbol: str, api_key: Optional[str] = None) -> Optional[Dict
         return None
 
 
-def fetch_treasury_rates(api_key: Optional[str] = None) -> List[Dict[str, Any]]:
+def fetch_treasury_rates(
+    api_key: Optional[str] = None,
+    errors: Optional[List[str]] = None,
+) -> List[Dict[str, Any]]:
     """
     Fetch US treasury rates from FMP /stable/treasury-rates.
 
     Returns a flat list of dicts with indicator_name and value per term per date:
         [{'indicator_name': 'treasury_10y', 'date': '2024-01-05', 'value': 4.05}, ...]
+
+    errors: optional list the failure reason is appended to. Without it a
+    transient outage returns `[]` indistinguishably from "no data", and the
+    caller reports zero rows with an empty error list — which reads downstream
+    as a silent failure of the whole economic-indicators source.
     """
+    def _fail(msg: str) -> None:
+        print(msg)
+        if errors is not None:
+            errors.append(msg)
+
     if api_key is None:
         api_key = get_fmp_api_key()
 
@@ -381,19 +394,31 @@ def fetch_treasury_rates(api_key: Optional[str] = None) -> List[Dict[str, Any]]:
     except RuntimeError:
         raise
     except requests.exceptions.RequestException as e:
-        print(f"Error fetching FMP treasury rates: {e}")
+        _fail(f"Error fetching FMP treasury rates: {e}")
         return []
     except Exception as e:
-        print(f"Error parsing FMP treasury rates: {e}")
+        _fail(f"Error parsing FMP treasury rates: {e}")
         return []
 
 
-def fetch_economic_indicator(name: str, api_key: Optional[str] = None) -> List[Dict[str, Any]]:
+def fetch_economic_indicator(
+    name: str,
+    api_key: Optional[str] = None,
+    errors: Optional[List[str]] = None,
+) -> List[Dict[str, Any]]:
     """
     Fetch a single economic indicator from FMP /stable/economic-indicators?name={name}.
 
     Returns a list of dicts: [{'indicator_name': name, 'date': '...', 'value': ...}, ...]
+
+    errors: optional list the failure reason is appended to (see
+    fetch_treasury_rates — same reason).
     """
+    def _fail(msg: str) -> None:
+        print(msg)
+        if errors is not None:
+            errors.append(msg)
+
     if api_key is None:
         api_key = get_fmp_api_key()
 
@@ -425,10 +450,10 @@ def fetch_economic_indicator(name: str, api_key: Optional[str] = None) -> List[D
     except RuntimeError:
         raise
     except requests.exceptions.RequestException as e:
-        print(f"Error fetching FMP economic indicator '{name}': {e}")
+        _fail(f"Error fetching FMP economic indicator '{name}': {e}")
         return []
     except Exception as e:
-        print(f"Error parsing FMP economic indicator '{name}': {e}")
+        _fail(f"Error parsing FMP economic indicator '{name}': {e}")
         return []
 
 

@@ -189,17 +189,19 @@ def run_markets_etl(
     if watchlist is None:
         watchlist = all_tickers
 
-    try:
-        total_stats = {
-            'stocks_processed': 0,
-            'quotes_inserted': 0,
-            'news_inserted': 0,
-            'market_news_inserted': 0,
-            'sentiment_upserted': 0,
-            'economic_rows_upserted': 0,
-            'errors': []
-        }
+    # Outside the try: an exception halfway through must still report the rows
+    # that were already written, not an empty domain.
+    total_stats: Dict[str, Any] = {
+        'stocks_processed': 0,
+        'quotes_inserted': 0,
+        'news_inserted': 0,
+        'market_news_inserted': 0,
+        'sentiment_upserted': 0,
+        'economic_rows_upserted': 0,
+        'errors': []
+    }
 
+    try:
         # Pre-load all stock IDs in one query so threads make zero DB calls
         stock_rows = db_call(
             lambda: supabase.table('stocks').select('id,ticker').in_('ticker', watchlist).execute(),
@@ -305,6 +307,10 @@ def run_markets_etl(
                 supabase, topics=SENTIMENT_TOPICS_ALL
             )
 
+        # Per-source error lists, not just one pooled list: the health check
+        # below has to ask "did *this* source explain its own zero?", and a
+        # pooled list answers that question for the wrong source.
+        source_errors: Dict[str, List[str]] = {name: [] for name in post_fns}
         with ThreadPoolExecutor(max_workers=len(post_fns)) as post_pool:
             post_futures = {post_pool.submit(fn): name for name, fn in post_fns.items()}
             for future in as_completed(post_futures):
@@ -312,50 +318,53 @@ def run_markets_etl(
                 try:
                     s = future.result()
                 except Exception as e:
-                    total_stats['errors'].append(f"Error in {name}: {e}")
+                    source_errors[name].append(f"Error in {name}: {e}")
                     continue
                 if name == 'market_news':
                     total_stats['market_news_inserted'] = s.get('articles_inserted', 0)
-                    total_stats['errors'].extend(s.get('errors', []))
                 elif name == 'sentiment':
                     total_stats['sentiment_upserted'] = s.get('articles_upserted', 0)
-                    total_stats['errors'].extend(s.get('errors', []))
                 elif name == 'econ':
                     total_stats['economic_rows_upserted'] = s.get('rows_upserted', 0)
-                    total_stats['errors'].extend(s.get('errors', []))
+                source_errors[name].extend(s.get('errors', []))
+        for name in post_fns:
+            total_stats['errors'].extend(source_errors[name])
 
-        # Honest success: the daily run must always produce quotes. Zero
-        # quotes written means the fetch pool or the upsert failed wholesale.
-        #
-        # Beyond that, the dangerous case is a source that wrote nothing AND
-        # raised nothing — an outage then looks exactly like a quiet day. That
-        # is how a total loss of company news (1847 rows -> 0) was recorded as
-        # a successful run with zero errors. Every source below either returns
-        # rows or raises, so zero-with-no-errors means we failed to notice
-        # something. Only assert it when the error list is empty; once a
-        # source has reported a real error, the run is already honest about it.
-        silent: List[str] = []
-        if not total_stats['errors']:
-            if total_stats['market_news_inserted'] == 0:
-                silent.append('market_news')
-            if not skip_sentiment and total_stats['sentiment_upserted'] == 0:
-                silent.append('sentiment')
-            if total_stats['economic_rows_upserted'] == 0:
-                silent.append('economic_indicators')
+        # A source that wrote nothing is always worth an error line, whether or
+        # not it explained itself: a total loss of company news (1847 rows -> 0)
+        # was once recorded as a successful run with zero errors, and a total
+        # loss of AV sentiment (10 topics, 0 rows) was recorded as a successful
+        # markets domain purely because the *pooled* error list was non-empty,
+        # which switched the old check off. Ask each source about its own zero.
+        for name, rows in (
+            ('market_news', total_stats['market_news_inserted']),
+            ('sentiment', None if skip_sentiment else total_stats['sentiment_upserted']),
+            ('economic_indicators', total_stats['economic_rows_upserted']),
+        ):
+            if rows != 0:
+                continue
+            key = 'econ' if name == 'economic_indicators' else name
+            if source_errors.get(key):
+                total_stats['errors'].append(f"{name} wrote 0 rows")
+            else:
+                total_stats['errors'].append(
+                    f"{name} wrote 0 rows and reported no error")
 
-        ok = total_stats['quotes_inserted'] > 0 and not silent
+        # Honest success: the daily run must always produce quotes. Zero quotes
+        # written means the fetch pool or the upsert failed wholesale — that is
+        # the only markets outcome worth exiting non-zero for. A dead secondary
+        # source is loud (above) and lands the run on 'partial'; failing the
+        # whole run for it used to skip cache revalidation for the 50k rows that
+        # *did* write.
+        ok = total_stats['quotes_inserted'] > 0
         result: Dict[str, Any] = {'success': ok, 'stats': total_stats}
-        if total_stats['quotes_inserted'] == 0:
+        if not ok:
             result['error'] = 'markets wrote 0 quote rows'
-        elif silent:
-            result['error'] = (
-                f"silent zero from {', '.join(silent)} — wrote no rows and "
-                f"reported no error"
-            )
         return result
 
     except Exception as e:
-        return {'success': False, 'error': str(e)}
+        total_stats['errors'].append(f"markets failed: {e}")
+        return {'success': False, 'error': str(e), 'stats': total_stats}
 
 
 def run_news_etl(supabase: Client, sections: Optional[List[str]] = None) -> Dict[str, Any]:

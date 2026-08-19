@@ -1192,7 +1192,7 @@ def sync_economic_indicators(supabase: Client) -> Dict[str, Any]:
     all_rows: List[Dict[str, Any]] = []
 
     try:
-        treasury_rows = fetch_treasury_rates(api_key)
+        treasury_rows = fetch_treasury_rates(api_key, errors=stats['errors'])
         all_rows.extend(treasury_rows)
         stats['indicators_processed'] += 1
     except RuntimeError as e:
@@ -1204,7 +1204,7 @@ def sync_economic_indicators(supabase: Client) -> Dict[str, Any]:
 
     for name in MACRO_INDICATORS:
         try:
-            indicator_rows = fetch_economic_indicator(name, api_key)
+            indicator_rows = fetch_economic_indicator(name, api_key, errors=stats['errors'])
             all_rows.extend(indicator_rows)
             stats['indicators_processed'] += 1
         except RuntimeError as e:
