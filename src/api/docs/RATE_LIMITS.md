@@ -28,6 +28,27 @@ Performance Requirement in the repo root `CLAUDE.md`).
 further calls to it for the rest of the run, independent of the rate limiter. Wired into
 Finnhub, NYT, ESPN, and FMP.
 
+NYT top stories registers under a **per-key** endpoint id (`nyt:topstories:key1/key2`). Its
+sections are split across keys and worked by one thread each, so a single shared counter let
+three unrelated blips spread over *both* workers trip the endpoint and skip every remaining
+section — one tier-B run wrote 0 articles that way.
+
+ESPN scoreboards register under **two** ids and check both: the shared `espn:scoreboard` carries
+host-level faults (connection errors, timeouts, 5xx, 429 — `etl_lib.is_host_fault()`), so a real
+ESPN outage still costs one timeout rather than one per league; `espn:scoreboard:{sport}/{league}`
+carries that league's own 4xx, which says nothing about the other eight and must not skip them.
+
+**NYT transient 404s.** `topstories/v2/{section}.json` intermittently returns 404 for a section
+that exists and answers 200 seconds later (observed live for `insider`). The shared HTTP session
+deliberately does not retry 404, so `fetch_nyt_top_stories` retries that status once itself.
+
+**Secret redaction.** `requests` puts the full request URL — query string and API key included —
+into its exception strings, and every fetcher prints those. `etl_lib.install_secret_redaction()`
+wraps `stdout`/`stderr` at import so `?api-key=…`-style credentials are scrubbed from every
+printed line, and `EndpointBreaker` redacts before truncating its stored reason (truncating
+mid-key had been slipping a usable key prefix past GitHub Actions' secret masking, which only
+matches the whole value). `finish_etl_run` redacts the same patterns out of `etl_runs`.
+
 
 ## Daily Budget Summary
 

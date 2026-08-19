@@ -219,6 +219,51 @@ python src/api/run_etl.py --skip-sentiment
 
 ---
 
+## Run Status: what counts as a failure
+
+`etl_runs.status` is `success` | `partial` | `failed`, and the process exits **1 only on
+`failed`** (`run_etl.py`, `run_quick_refresh.py`). Both workflows now revalidate the site cache
+regardless of status — rows already written should not sit behind a stale cache because a later
+domain fell over.
+
+| Domain  | Fails the run when                                  | Reported but non-fatal                                    |
+|---------|-----------------------------------------------------|-----------------------------------------------------------|
+| sports  | every league failed, or rows fetched but none written | individual league errors; a quiet night with no games     |
+| markets | 0 quote rows                                        | market news / sentiment / econ writing 0 rows              |
+| news    | 0 articles                                          | per-section errors; sections skipped after a breaker trip  |
+| media   | never                                               | 0 videos → domain state `WARN`, run status `partial`       |
+
+Sports cannot use a row count on its own: a scores-only tier-A refresh at 04:07 UTC legitimately
+writes 0 rows. `_sports_outcome()` (in `run_etl.py`, shared with the intraday refresh) reads
+`leagues_processed` vs `leagues_failed` and `rows_pending` vs rows written instead — so a quiet
+night passes, a total ESPN outage fails, and a dead upsert fails even when the fetches were fine.
+Before this, tier A's rule was `rows > 0 or not include_news`, which is unconditionally true.
+
+Two rules behind that table:
+
+1. **Only the domain's primary write can fail it.** A dead secondary source (AV sentiment, FMP
+   econ, Finnhub market news) is recorded as an error and lands the run on `partial`. Failing the
+   whole daily run over one of them meant a red build, a filed issue, and no cache revalidation
+   for the ~50k rows that *did* write.
+2. **Every source is asked about its own zero.** A source that writes 0 rows gets an error line
+   whether or not it explained itself — `… wrote 0 rows` when it reported its own error, and
+   `… wrote 0 rows and reported no error` when it did not. The old check only ran when the
+   domain's *pooled* error list was empty, so a total loss of AV sentiment (10 topics, 0 rows)
+   was recorded as a healthy markets domain, while a silent FMP econ outage failed the entire run.
+
+Media is deliberately outside this: one API, one call, no fallback, and the least load-bearing
+data on the site. It reports `WARN` on the dashboard and in the summary table, never `FAIL`.
+
+Two more things the roll-up now gets right:
+
+- **A domain that raises still reports its counters.** `run_markets_etl` builds its stats dict
+  outside the `try`, and every domain returns a stats payload on the exception path, so the
+  dashboard shows "wrote this much, then broke" rather than an empty domain.
+- **A `DOMAIN_TIMEOUT_S` overrun is reported honestly.** The executor's context manager joins
+  every worker on exit, so a domain flagged as timed out has in fact finished — and may have
+  written rows. Its real result is recovered after the pool closes; the overrun stays as an error
+  and the domain still fails, but the counters survive.
+
 ## Decision Tree
 
 ```
