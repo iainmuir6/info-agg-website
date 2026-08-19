@@ -52,12 +52,24 @@ NYT_POPULAR_TYPES = ['viewed', 'shared', 'emailed']
 # don't explicitly sleep. MinInterval sleeps outside its lock so concurrent
 # callers are paced without being serialized.
 _NYT_MIN_INTERVAL_S = 1.0
-_NYT_LOCK = threading.Lock()  # guards the disabled-keys set only
+_NYT_LOCK = threading.Lock()  # guards the disabled-keys set and key labels
 _nyt_pacer = MinInterval(_NYT_MIN_INTERVAL_S)
 
 # If NYT returns 429 for a specific key, we stop using that key for the
 # remainder of the current ETL run.
 _NYT_DISABLED_KEYS: set[str] = set()
+
+
+# Stable, non-revealing label per key for breaker/endpoint ids: the id shows up
+# in log messages, so it must never carry any part of the key itself.
+_NYT_KEY_LABELS: Dict[str, str] = {}
+
+
+def _nyt_key_label(api_key: str) -> str:
+    with _NYT_LOCK:
+        if api_key not in _NYT_KEY_LABELS:
+            _NYT_KEY_LABELS[api_key] = f"key{len(_NYT_KEY_LABELS) + 1}"
+        return _NYT_KEY_LABELS[api_key]
 
 
 def _nyt_min_interval() -> None:
@@ -96,17 +108,31 @@ def get_nyt_api_key() -> str:
 # ============================================================================
 # NEW YORK TIMES API FUNCTIONS
 # ============================================================================
-def fetch_nyt_top_stories(section: str = 'home', api_key: Optional[str] = None) -> Optional[Dict[str, Any]]:
+def fetch_nyt_top_stories(
+    section: str = 'home',
+    api_key: Optional[str] = None,
+    errors: Optional[List[str]] = None,
+) -> Optional[Dict[str, Any]]:
     """
     Fetch top stories from New York Times by section
 
     Args:
         section: Section name (home, arts, business, technology, science, health, sports, world, etc.)
         api_key: Optional API key
+        errors: Optional list the failure reason is appended to. Without it a
+                failure is only printed, so the caller sees `None` and cannot
+                tell "NYT is down" from "this section had no stories" — which
+                is how a run that wrote 0 articles reached etl_runs with an
+                empty `errors` array.
 
     Returns:
         Dictionary with top stories data
     """
+    def _fail(msg: str) -> None:
+        print(msg)
+        if errors is not None:
+            errors.append(msg)
+
     if api_key is None:
         api_key = get_nyt_api_key()
 
@@ -115,21 +141,34 @@ def fetch_nyt_top_stories(section: str = 'home', api_key: Optional[str] = None) 
         'api-key': api_key
     }
 
+    endpoint = f'nyt:topstories:{_nyt_key_label(api_key)}'
+
     try:
-        breaker.check('nyt:topstories')
+        breaker.check(endpoint)
         _nyt_min_interval()
         response = get_http_session().get(url, params=params, timeout=HTTP_TIMEOUT)
+        if response.status_code == 404:
+            # NYT's gateway intermittently 404s a section that exists and
+            # answers 200 seconds later (observed live: `insider` 404'd inside
+            # a run and returned 200 on three spaced retries right after). The
+            # shared session does not retry 404 — normally correct, since a 404
+            # is permanent — so retry once here, then let it fail for real.
+            _nyt_min_interval()
+            response = get_http_session().get(url, params=params, timeout=HTTP_TIMEOUT)
         if response.status_code == 429:
             # Handled by key rotation, not an endpoint fault — do not trip.
             _nyt_disable_key(api_key)
+            _fail(f"NYT rate-limited (429) on top stories for {section}; "
+                  f"key disabled for the rest of this run")
             return None
         response.raise_for_status()
-        breaker.record_success('nyt:topstories')
+        breaker.record_success(endpoint)
         data = response.json()
 
         # Check for API error
         if data.get('fault'):
-            print(f"NYT API error: {data.get('fault', {}).get('faultstring', 'Unknown error')}")
+            _fail(f"NYT API error for section {section}: "
+                  f"{data.get('fault', {}).get('faultstring', 'Unknown error')}")
             return None
 
         articles = []
@@ -183,21 +222,26 @@ def fetch_nyt_top_stories(section: str = 'home', api_key: Optional[str] = None) 
         }
 
     except EndpointUnavailable as e:
-        print(f"NYT top stories skipped for {section}: {e}")
+        _fail(f"NYT top stories skipped for {section}: {e}")
         return None
     except requests.exceptions.RequestException as e:
-        breaker.record_failure('nyt:topstories', e)
-        print(f"Error fetching NYT top stories for section {section}: {e}")
+        # Scoped per key: the sections are split across keys and worked by one
+        # thread each, so a shared 'nyt:topstories' counter let three unlucky
+        # blips spread over *both* workers trip the endpoint and skip every
+        # remaining section — which is exactly how one run wrote 0 articles.
+        breaker.record_failure(endpoint, e)
+        _fail(f"Error fetching NYT top stories for section {section}: {e}")
         return None
     except Exception as e:
-        print(f"Error parsing NYT top stories for section {section}: {e}")
+        _fail(f"Error parsing NYT top stories for section {section}: {e}")
         return None
 
 
 def fetch_nyt_most_popular(
     type: str = 'viewed',
     period: int = 1,
-    api_key: Optional[str] = None
+    api_key: Optional[str] = None,
+    errors: Optional[List[str]] = None,
 ) -> Optional[Dict[str, Any]]:
     """
     Fetch most popular articles from New York Times
@@ -206,10 +250,17 @@ def fetch_nyt_most_popular(
         type: Type of popularity (viewed, shared, emailed)
         period: Time period in days (1, 7, 30)
         api_key: Optional API key
+        errors: Optional list the failure reason is appended to (see
+                fetch_nyt_top_stories — same reason).
 
     Returns:
         Dictionary with most popular articles
     """
+    def _fail(msg: str) -> None:
+        print(msg)
+        if errors is not None:
+            errors.append(msg)
+
     if api_key is None:
         api_key = get_nyt_api_key()
 
@@ -226,13 +277,16 @@ def fetch_nyt_most_popular(
         response = get_http_session().get(url, params=params, timeout=HTTP_TIMEOUT)
         if response.status_code == 429:
             _nyt_disable_key(api_key)
+            _fail(f"NYT rate-limited (429) on most popular ({type}); "
+                  f"key disabled for the rest of this run")
             return None
         response.raise_for_status()
         data = response.json()
 
         # Check for API error
         if data.get('fault'):
-            print(f"NYT API error: {data.get('fault', {}).get('faultstring', 'Unknown error')}")
+            _fail(f"NYT API error for most popular ({type}): "
+                  f"{data.get('fault', {}).get('faultstring', 'Unknown error')}")
             return None
 
         articles = []
@@ -295,10 +349,10 @@ def fetch_nyt_most_popular(
         }
 
     except requests.exceptions.RequestException as e:
-        print(f"Error fetching NYT most popular ({type}): {e}")
+        _fail(f"Error fetching NYT most popular ({type}): {e}")
         return None
     except Exception as e:
-        print(f"Error parsing NYT most popular ({type}): {e}")
+        _fail(f"Error parsing NYT most popular ({type}): {e}")
         return None
 
 

@@ -221,12 +221,16 @@ def sync_nyt_data(supabase: Client, sections: List[str]) -> Dict[str, Any]:
 
             # One bad section must not abandon this key's remaining sections.
             try:
-                result = fetch_nyt_top_stories(section=section, api_key=current_key)
+                result = fetch_nyt_top_stories(
+                    section=section, api_key=current_key, errors=section_errors
+                )
             except Exception as e:
                 section_errors.append(f"NYT section {section} failed: {e}")
                 continue
             if result and result.get('articles'):
                 collected_top.extend(result['articles'])
+            elif result is not None:
+                section_errors.append(f"NYT section {section} returned no articles")
         return collected_top
 
     active_workers = [i for i, assigned in sections_by_key_index.items() if assigned]
@@ -254,7 +258,9 @@ def sync_nyt_data(supabase: Client, sections: List[str]) -> Dict[str, Any]:
         if active_keys:
             popular_api_key = active_keys[0]
     try:
-        popular = fetch_nyt_most_popular(type='viewed', period=7, api_key=popular_api_key)
+        popular = fetch_nyt_most_popular(
+            type='viewed', period=7, api_key=popular_api_key, errors=stats['errors']
+        )
         if popular and popular.get('articles'):
             popular_articles = popular['articles']
     except Exception as e:
@@ -266,7 +272,9 @@ def sync_nyt_data(supabase: Client, sections: List[str]) -> Dict[str, Any]:
         if active_keys:
             fallback_key = active_keys[0]
             try:
-                popular = fetch_nyt_most_popular(type='viewed', period=7, api_key=fallback_key)
+                popular = fetch_nyt_most_popular(
+                    type='viewed', period=7, api_key=fallback_key, errors=stats['errors']
+                )
                 if popular and popular.get('articles'):
                     popular_articles = popular['articles']
             except Exception as e:
