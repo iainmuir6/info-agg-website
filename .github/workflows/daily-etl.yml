@@ -78,7 +78,13 @@ jobs:
           retention-days: 30
 
       - name: Revalidate site cache
-        if: success()
+        # Not `success()`: a run is marked failed when any one domain writes
+        # nothing, but the other domains' rows are already in the database by
+        # then. Gating the cache bust on a clean run left fresh sports, markets
+        # and news behind a stale cache for an hour (or a day) because YouTube
+        # blipped. revalidateTag only invalidates — if nothing was written, the
+        # refetch returns the same rows, so running it unconditionally is safe.
+        if: ${{ !cancelled() }}
         env:
           SITE_URL: ${{ secrets.NEXT_PUBLIC_SITE_URL }}
           REVALIDATE_SECRET: ${{ secrets.REVALIDATE_SECRET }}
