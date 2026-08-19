@@ -9,6 +9,7 @@ import json
 import logging
 import os
 import re
+import sys
 import threading
 import time
 from datetime import date, datetime, timezone
@@ -35,6 +36,55 @@ def get_logger(name: str) -> logging.Logger:
             )
             _LOG_CONFIGURED = True
     return logging.getLogger(name)
+
+
+# ── Secret redaction ─────────────────────────────────────────────────────────
+# Fetchers authenticate by query param, and requests puts the full request URL
+# — query string and all — into its exception strings. Those strings get
+# printed and appended to a domain's `errors`, which land in etl_runs (anon can
+# read that table). That is how live Finnhub keys ended up publicly readable.
+#
+# GitHub Actions masks secrets in workflow logs, but only where the *whole*
+# secret appears verbatim: a message truncated mid-key (see EndpointBreaker)
+# slips a usable prefix past the masker. So redact ourselves, at every exit —
+# the stream filter below covers all ~110 `print(f"... {e}")` sites at once, and
+# `_redact()` covers the etl_runs write.
+_SECRET_RE = re.compile(r'((?<![\w-])(?:token|apikey|api_key|api-key|key)=)[A-Za-z0-9_-]{4,}', re.I)
+
+
+def redact_secrets(text: str) -> str:
+    """Replace `?api-key=…`-style credentials in an arbitrary string."""
+    return _SECRET_RE.sub(r'\1[REDACTED]', text)
+
+
+class _RedactingStream:
+    """Text stream proxy that scrubs credentials out of everything written."""
+
+    def __init__(self, stream: Any):
+        self._stream = stream
+
+    def write(self, text: str) -> int:
+        return self._stream.write(redact_secrets(text) if '=' in text else text)
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._stream, name)
+
+
+def install_secret_redaction() -> None:
+    """Wrap stdout/stderr so no fetcher can print an API key. Idempotent.
+
+    Installed on import: logging's handlers bind whatever stderr is when the
+    first logger is configured, and every ETL module imports this one, so
+    wrapping here catches both `print()` and logging without each entrypoint
+    having to remember.
+    """
+    for name in ('stdout', 'stderr'):
+        stream = getattr(sys, name, None)
+        if stream is not None and not isinstance(stream, _RedactingStream):
+            setattr(sys, name, _RedactingStream(stream))
+
+
+install_secret_redaction()
 
 
 # ── Time ─────────────────────────────────────────────────────────────────────
@@ -207,7 +257,7 @@ class EndpointBreaker:
     def record_failure(self, endpoint: str, exc: Any) -> None:
         with self._lock:
             self._fails[endpoint] = self._fails.get(endpoint, 0) + 1
-            self._reason[endpoint] = str(exc)[:120]
+            self._reason[endpoint] = redact_secrets(str(exc))[:120]
 
     def record_success(self, endpoint: str) -> None:
         with self._lock:
@@ -402,19 +452,11 @@ def preflight_env() -> Tuple[List[str], List[str]]:
 
 log = get_logger('etl_runs')
 
-# Fetchers authenticate by query param, and requests puts the full request URL
-# — query string and all — into its exception strings. Those strings get
-# appended to a domain's `errors` and land in etl_runs, which anon can read.
-# That is how live Finnhub keys ended up publicly readable; redact here, at the
-# single point where stats/errors are persisted, so no fetcher can reintroduce it.
-_SECRET_RE = re.compile(r'((?:token|apikey|api_key|api-key|key)=)[A-Za-z0-9_-]{8,}', re.I)
-
-
 def _redact(obj: Any) -> Any:
     """Strip API keys out of anything bound for etl_runs. Best-effort: a payload
     that will not round-trip through JSON is dropped rather than stored raw."""
     try:
-        return json.loads(_SECRET_RE.sub(r'\1[REDACTED]', json.dumps(obj, default=str)))
+        return json.loads(redact_secrets(json.dumps(obj, default=str)))
     except (TypeError, ValueError) as e:
         log.warning('could not redact run payload, omitting it: %s', e)
         return None
