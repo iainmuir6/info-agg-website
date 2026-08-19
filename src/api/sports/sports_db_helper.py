@@ -198,6 +198,7 @@ def sync_all_sports_data(
     """
     stats = {
         'leagues_processed': 0,
+        'leagues_failed': 0,
         'news_inserted': 0,
         'scores_inserted': 0,
         'errors': []
@@ -229,16 +230,28 @@ def sync_all_sports_data(
                 continue
 
             stats['leagues_processed'] += 1
+            # ESPN's fetchers report failures by appending here rather than
+            # raising, so "did this league work?" is the change in the error
+            # list across it. The count is what lets a scores-only run tell a
+            # quiet night (0 games, 0 failures) from an outage.
+            errors_before = len(stats['errors'])
 
             if include_news:
-                articles = fetch_espn_news(sport, league, limit=news_limit_per_sport)
+                articles = fetch_espn_news(
+                    sport, league, limit=news_limit_per_sport, errors=stats['errors'])
                 all_news_records.extend(_sports_news_records(league_id, articles))
 
-            games = fetch_espn_scores(sport, league)
+            games = fetch_espn_scores(sport, league, errors=stats['errors'])
             all_score_records.extend(_sports_score_records(league_id, games))
+
+            if len(stats['errors']) > errors_before:
+                stats['leagues_failed'] += 1
 
         except Exception as e:
             stats['errors'].append(f"Error processing {sport}/{league}: {e}")
+            stats['leagues_failed'] += 1
+
+    stats['rows_pending'] = len(all_news_records) + len(all_score_records)
 
     if all_news_records:
         seen_urls: set = set()
@@ -340,7 +353,8 @@ def sync_season_schedules(
             chunk_end = min(cursor + timedelta(days=chunk_days - 1), window_end)
             date_range = f"{cursor.strftime('%Y%m%d')}-{chunk_end.strftime('%Y%m%d')}"
             try:
-                games = fetch_espn_scores(sport, league, dates=date_range)
+                games = fetch_espn_scores(
+                    sport, league, dates=date_range, errors=stats['errors'])
                 league_records.extend(_sports_score_records(league_id, games))
             except Exception as e:
                 stats['errors'].append(f"{league} {date_range}: {e}")
@@ -428,7 +442,7 @@ def sync_standings(supabase: Client) -> Dict[str, Any]:
             stats['errors'].append(f"League ID not found for {sport}/{league}")
             continue
         try:
-            rows = fetch_espn_standings(sport, league)
+            rows = fetch_espn_standings(sport, league, errors=stats['errors'])
             if rows:
                 stats['rows_inserted'] += insert_standings(
                     supabase, league_id, rows, errors=stats['errors']
@@ -471,7 +485,8 @@ def backfill_sports_scores(
         day_count = 0
         for sport, league in SPORT_CONFIGS:
             try:
-                games = fetch_espn_scores(sport, league, dates=date_str)
+                games = fetch_espn_scores(
+                    sport, league, dates=date_str, errors=stats['errors'])
                 if games:
                     league_id = get_league_id(supabase, sport, league)
                     if league_id:

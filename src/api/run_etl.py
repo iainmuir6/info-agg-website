@@ -110,6 +110,33 @@ def get_supabase_client() -> Client:
     return create_client(supabase_url, supabase_key)
 
 
+def _sports_outcome(stats: Dict[str, Any]) -> tuple:
+    """Decide whether a sports run succeeded. Returns (ok, reason).
+
+    Row count alone cannot answer this. A scores-only refresh at 04:07 UTC
+    legitimately writes 0 rows because no game is in progress, which is why the
+    intraday tier used to pass unconditionally — and therefore could not report
+    an ESPN outage at all. Two things actually distinguish a quiet night from a
+    broken one:
+
+      * every league that was attempted failed, or
+      * rows were fetched and queued but none of them were written (the upsert
+        died), which no row count on its own would show.
+    """
+    attempted = stats.get('leagues_processed', 0)
+    failed = stats.get('leagues_failed', 0)
+    pending = stats.get('rows_pending')
+    wrote = stats.get('news_inserted', 0) + stats.get('scores_inserted', 0)
+
+    if attempted == 0:
+        return False, 'sports processed 0 leagues (league lookup or fetch failed)'
+    if failed >= attempted:
+        return False, f'sports: all {attempted} league(s) failed to fetch'
+    if pending and wrote == 0:
+        return False, f'sports fetched {pending} row(s) but wrote 0 (upsert failure)'
+    return True, ''
+
+
 def run_sports_etl(supabase: Client, season_schedules: bool = False) -> Dict[str, Any]:
     """Run sports ETL: ESPN news and scores (today's snapshot).
 
@@ -130,15 +157,18 @@ def run_sports_etl(supabase: Client, season_schedules: bool = False) -> Dict[str
             stats['standings_leagues'] = standings_stats.get('leagues_processed', 0)
             stats['standings_rows'] = standings_stats.get('rows_inserted', 0)
             stats['errors'].extend(standings_stats.get('errors', []))
-        # Honest success: ESPN always has news, so writing nothing at all
-        # means the fetch or the writes failed — not a quiet day.
-        ok = (stats['news_inserted'] + stats['scores_inserted']) > 0
+        ok, reason = _sports_outcome(stats)
         result: Dict[str, Any] = {'success': ok, 'stats': stats}
         if not ok:
-            result['error'] = 'sports wrote 0 rows (fetch or upsert failure)'
+            result['error'] = reason
         return result
     except Exception as e:
-        return {'success': False, 'error': str(e)}
+        # Keep whatever the domain managed to record. Returning a bare error
+        # threw away the counters for rows that were already written, so the
+        # dashboard showed an empty domain instead of "wrote this much, then
+        # broke".
+        return {'success': False, 'error': str(e),
+                'stats': {'errors': [f"sports failed: {e}"]}}
 
 
 def run_markets_etl(

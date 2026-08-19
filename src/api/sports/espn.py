@@ -25,7 +25,7 @@ if _PARENT not in sys.path:
     sys.path.insert(0, _PARENT)
 from etl_lib import (
     get_http_session, MinInterval,
-    breaker, EndpointUnavailable, HTTP_TIMEOUT,
+    breaker, EndpointUnavailable, HTTP_TIMEOUT, is_host_fault,
 )
 
 
@@ -74,7 +74,12 @@ SPORT_CONFIGS = [
 ]
 
 
-def fetch_espn_news(sport: str, league: str, limit: int = 20) -> List[Dict[str, Any]]:
+def fetch_espn_news(
+    sport: str,
+    league: str,
+    limit: int = 20,
+    errors: Optional[List[str]] = None,
+) -> List[Dict[str, Any]]:
     """
     Fetch news articles for a specific sport/league from ESPN API
 
@@ -82,10 +87,18 @@ def fetch_espn_news(sport: str, league: str, limit: int = 20) -> List[Dict[str, 
         sport: Sport name (e.g., 'football', 'basketball')
         league: League name (e.g., 'nfl', 'nba')
         limit: Maximum number of articles to return
+        errors: Optional list the failure reason is appended to. Without it an
+                outage returns `[]`, identical to a league with no news, and
+                the caller reports a clean run that quietly lost a league.
 
     Returns:
         List of news article dictionaries
     """
+    def _fail(msg: str) -> None:
+        print(msg)
+        if errors is not None:
+            errors.append(msg)
+
     url = f"{ESPN_BASE_URL}/{sport}/{league}/news"
 
     try:
@@ -117,10 +130,10 @@ def fetch_espn_news(sport: str, league: str, limit: int = 20) -> List[Dict[str, 
         return articles
 
     except requests.exceptions.RequestException as e:
-        print(f"Error fetching news for {sport}/{league}: {e}")
+        _fail(f"Error fetching news for {sport}/{league}: {e}")
         return []
     except (KeyError, IndexError) as e:
-        print(f"Error parsing news data for {sport}/{league}: {e}")
+        _fail(f"Error parsing news data for {sport}/{league}: {e}")
         return []
 
 
@@ -265,7 +278,11 @@ def find_espn_team_by_name(
 
 
 def fetch_espn_scores(
-    sport: str, league: str, dates: Optional[str] = None, limit: Optional[int] = None
+    sport: str,
+    league: str,
+    dates: Optional[str] = None,
+    limit: Optional[int] = None,
+    errors: Optional[List[str]] = None,
 ) -> List[Dict[str, Any]]:
     """
     Fetch scores/schedule for a specific sport/league from ESPN API
@@ -276,10 +293,17 @@ def fetch_espn_scores(
         dates: Single date 'YYYYMMDD' or an inclusive range 'YYYYMMDD-YYYYMMDD'
         limit: Optional cap on events ESPN returns. The backfill sets this so a
             truncated range can be detected (returned == limit) and split.
+        errors: Optional list the failure reason is appended to (see
+            fetch_espn_news — same reason).
 
     Returns:
         List of game/match dictionaries
     """
+    def _fail(msg: str) -> None:
+        print(msg)
+        if errors is not None:
+            errors.append(msg)
+
     url = f"{ESPN_BASE_URL}/{sport}/{league}/scoreboard"
 
     params = {}
@@ -288,12 +312,20 @@ def fetch_espn_scores(
     if limit:
         params['limit'] = limit
 
+    # Two breaker ids per call. The shared one carries host-level faults, so an
+    # ESPN outage still costs one timeout rather than one per league; the
+    # per-league one carries that league's own 4xx, which says nothing about
+    # the other eight and must not skip them.
+    league_endpoint = f'espn:scoreboard:{sport}/{league}'
+
     try:
         breaker.check('espn:scoreboard')
+        breaker.check(league_endpoint)
         _espn_min_interval()
         response = get_http_session().get(url, params=params, timeout=HTTP_TIMEOUT)
         response.raise_for_status()
         breaker.record_success('espn:scoreboard')
+        breaker.record_success(league_endpoint)
         data = response.json()
 
         games = []
@@ -338,14 +370,15 @@ def fetch_espn_scores(
         return games
 
     except EndpointUnavailable as e:
-        print(f"ESPN scoreboard skipped for {sport}/{league}: {e}")
+        _fail(f"ESPN scoreboard skipped for {sport}/{league}: {e}")
         return []
     except requests.exceptions.RequestException as e:
-        breaker.record_failure('espn:scoreboard', e)
-        print(f"Error fetching scores for {sport}/{league}: {e}")
+        breaker.record_failure(
+            'espn:scoreboard' if is_host_fault(e) else league_endpoint, e)
+        _fail(f"Error fetching scores for {sport}/{league}: {e}")
         return []
     except (KeyError, IndexError) as e:
-        print(f"Error parsing scores data for {sport}/{league}: {e}")
+        _fail(f"Error parsing scores data for {sport}/{league}: {e}")
         return []
 
 
@@ -400,7 +433,11 @@ def _standings_entries(
     return rows
 
 
-def fetch_espn_standings(sport: str, league: str) -> List[Dict[str, Any]]:
+def fetch_espn_standings(
+    sport: str,
+    league: str,
+    errors: Optional[List[str]] = None,
+) -> List[Dict[str, Any]]:
     """
     Fetch current-season standings for a sport/league from ESPN.
 
@@ -414,7 +451,15 @@ def fetch_espn_standings(sport: str, league: str) -> List[Dict[str, Any]]:
         losses, ties, win_percent, games_behind, streak, playoff_seed,
         point_differential, season. `conference`/`division` are None when
         the league has no such grouping.
+
+    errors: Optional list the failure reason is appended to (see
+    fetch_espn_news — same reason).
     """
+    def _fail(msg: str) -> None:
+        print(msg)
+        if errors is not None:
+            errors.append(msg)
+
     url = f"{ESPN_STANDINGS_BASE_URL}/{sport}/{league}/standings"
 
     try:
@@ -423,10 +468,10 @@ def fetch_espn_standings(sport: str, league: str) -> List[Dict[str, Any]]:
         response.raise_for_status()
         data = response.json()
     except requests.exceptions.RequestException as e:
-        print(f"Error fetching standings for {sport}/{league}: {e}")
+        _fail(f"Error fetching standings for {sport}/{league}: {e}")
         return []
     except Exception as e:
-        print(f"Error parsing standings data for {sport}/{league}: {e}")
+        _fail(f"Error parsing standings data for {sport}/{league}: {e}")
         return []
 
     season = data.get('season', {}).get('year')

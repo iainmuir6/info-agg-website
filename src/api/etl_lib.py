@@ -270,6 +270,22 @@ class EndpointBreaker:
             return self._fails.get(endpoint, 0) >= self.threshold
 
 
+def is_host_fault(exc: Any) -> bool:
+    """True when an exception blames the *host* rather than the resource.
+
+    Connection errors, timeouts, 5xx and 429 mean the next call to any path on
+    that host will probably cost another full timeout — worth short-circuiting.
+    A 404/400/403 on one path says nothing about the other eight paths behind
+    the same breaker id, and counting it there is how one league's oddity ended
+    up skipping every league after it.
+    """
+    response = getattr(exc, 'response', None)
+    status = getattr(response, 'status_code', None)
+    if status is None:
+        return True
+    return status >= 500 or status in (408, 429)
+
+
 # Shared across fetchers so every caller of the same endpoint benefits from
 # what the others already learned.
 breaker = EndpointBreaker()

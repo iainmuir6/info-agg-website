@@ -42,6 +42,7 @@ from run_etl import (
     classify_tickers,
     get_supabase_client,
     run_news_etl,
+    _sports_outcome,
     MARKET_NEWS_CATEGORIES,
     DOMAIN_TIMEOUT_S,
 )
@@ -144,15 +145,18 @@ def run_quick_sports_etl(supabase, include_news: bool) -> Dict[str, Any]:
         stats = sync_all_sports_data(
             supabase, news_limit_per_sport=20, include_news=include_news
         )
-        ok = (stats['news_inserted'] + stats['scores_inserted']) > 0 or not include_news
-        # Scores-only runs can legitimately write 0 rows overnight; only a
-        # full (news included) run writing nothing is a failure signal.
+        # Same rule as the daily run. The old one was `rows > 0 or not
+        # include_news`, which is unconditionally true on tier A — a scores-only
+        # refresh could never report a failure, so a total ESPN outage on the
+        # 15-minute cadence was indistinguishable from a night with no games.
+        ok, reason = _sports_outcome(stats)
         result: Dict[str, Any] = {'success': ok, 'stats': stats}
         if not ok:
-            result['error'] = 'sports wrote 0 rows (fetch or upsert failure)'
+            result['error'] = reason
         return result
     except Exception as e:
-        return {'success': False, 'error': str(e)}
+        return {'success': False, 'error': str(e),
+                'stats': {'errors': [f"sports failed: {e}"]}}
 
 
 def run_quick_refresh(tier: str, triggered_by: str = 'manual') -> Dict[str, Any]:
