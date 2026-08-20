@@ -3,7 +3,17 @@ import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { isSuperAdmin } from "@/lib/rbac";
 import { UpdatePasswordForm } from "@/components/update-password-form";
+import { UpdateDisplayNameForm } from "@/components/update-display-name-form";
 import { SignOutButton } from "@/components/sign-out-button";
+import { EtlRunBreakdown } from "@/components/etl-run-breakdown";
+import {
+  cleanupTotal,
+  parseDomains,
+  tierLabel,
+  STATUS_COLOR,
+  type EtlRun,
+} from "@/lib/etl-runs";
+import { formatTime } from "@/lib/format-date";
 import {
   FavoritesPanel,
   type FavoriteStock,
@@ -19,20 +29,23 @@ function SectionCard({
   title,
   accent,
   className,
+  meta,
   children,
 }: {
   title: string;
   accent: string;
   className?: string;
+  meta?: React.ReactNode;
   children: React.ReactNode;
 }) {
   return (
     <div className={`border border-border ${className ?? ""}`}>
       <div
-        className="px-3 py-1.5 border-b border-border"
+        className="px-3 py-1.5 border-b border-border flex items-center justify-between gap-2"
         style={{ borderLeftColor: accent, borderLeftWidth: 3 }}
       >
         <span className="text-[10px] font-mono tracking-widest uppercase font-bold">{title}</span>
+        {meta}
       </div>
       {children}
     </div>
@@ -54,6 +67,38 @@ export default async function ProfilePage() {
   const { data: userData } = await supabase.auth.getUser();
   const createdAt = userData?.user?.created_at;
   const memberSince = createdAt ? formatDateLong(createdAt) : "—";
+  const displayName =
+    (userData?.user?.user_metadata?.display_name as string | undefined) ?? "";
+
+  // Latest ETL run for the admin section — full-row etl_runs access is
+  // super_admin-only, so this is only fetched (and rendered) for admins.
+  let latestRun: EtlRun | null = null;
+  if (admin) {
+    /* eslint-disable @typescript-eslint/no-explicit-any */
+    const { data: r } = (await supabase
+      .from("etl_runs")
+      .select(
+        "id, status, tier, triggered_by, started_at, finished_at, duration_seconds, stats, errors, cleanup",
+      )
+      .order("started_at", { ascending: false })
+      .limit(1)
+      .maybeSingle()) as { data: any };
+    if (r) {
+      latestRun = {
+        id: r.id,
+        status: r.status,
+        tier: r.tier,
+        triggered_by: r.triggered_by,
+        started_at: r.started_at,
+        finished_at: r.finished_at,
+        duration_seconds: r.duration_seconds == null ? null : Number(r.duration_seconds),
+        errors: Array.isArray(r.errors) ? r.errors : [],
+        domains: parseDomains(r.stats),
+        cleanupTotal: cleanupTotal(r.cleanup),
+      };
+    }
+    /* eslint-enable @typescript-eslint/no-explicit-any */
+  }
 
   // NOTE: `watchlist_leagues` is deliberately not read here. Its only reader
   // was the "Tracked Leagues" toggle on this page — the Command Center gates
@@ -152,11 +197,21 @@ export default async function ProfilePage() {
             initialPodcasts={watchlistPodcastsRes.data ?? []}
           />
 
-          <SectionCard title="Change Password" accent="hsl(220 90% 52%)">
-            <div className="px-3 py-2.5">
-              <UpdatePasswordForm />
-            </div>
-          </SectionCard>
+          {/* Account settings — the two single-field forms share a row rather
+                 than stacking two near-empty full-width cards */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 items-start">
+            <SectionCard title="Display Name" accent="hsl(220 90% 52%)">
+              <div className="px-3 py-2.5">
+                <UpdateDisplayNameForm initialName={displayName} />
+              </div>
+            </SectionCard>
+
+            <SectionCard title="Change Password" accent="hsl(220 90% 52%)">
+              <div className="px-3 py-2.5">
+                <UpdatePasswordForm />
+              </div>
+            </SectionCard>
+          </div>
 
           {admin && (
             <SectionCard title="Admin" accent="hsl(45 90% 52%)">
@@ -179,6 +234,43 @@ export default async function ProfilePage() {
                   </Link>
                 </div>
               </div>
+            </SectionCard>
+          )}
+
+          {admin && (
+            <SectionCard
+              title="Latest ETL Run"
+              accent="hsl(45 90% 52%)"
+              meta={
+                latestRun ? (
+                  <span className="flex items-center gap-2 text-[9px] font-mono text-muted-foreground tracking-wider flex-wrap justify-end">
+                    <span className="uppercase">
+                      {tierLabel(latestRun.tier)} · {latestRun.triggered_by}
+                    </span>
+                    <span className="tabular-nums">
+                      {formatTime(latestRun.started_at, true)}
+                      {latestRun.duration_seconds != null && ` · ${latestRun.duration_seconds}s`}
+                    </span>
+                    <span
+                      className="text-[9px] font-mono tracking-widest uppercase font-bold px-1.5 py-0.5 border"
+                      style={{
+                        color: STATUS_COLOR[latestRun.status] ?? "hsl(0 0% 50%)",
+                        borderColor: STATUS_COLOR[latestRun.status] ?? "hsl(0 0% 50%)",
+                      }}
+                    >
+                      {latestRun.status}
+                    </span>
+                  </span>
+                ) : null
+              }
+            >
+              {!latestRun ? (
+                <p className="px-3 py-4 text-[11px] font-mono text-muted-foreground">
+                  No ETL run has been recorded yet.
+                </p>
+              ) : (
+                <EtlRunBreakdown run={latestRun} />
+              )}
             </SectionCard>
           )}
         </div>

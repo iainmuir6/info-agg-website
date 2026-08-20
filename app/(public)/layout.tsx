@@ -71,13 +71,16 @@ const getSportsTickerItems = unstable_cache(
 type EtlHealth = {
   color: string;
   label: string;
+  /** Just the relative-age part ("34m ago") — the mobile header shows this
+   *  alone next to the dot, with no "Updated" prefix. Null when no run yet. */
+  age: string | null;
 };
 
 // Header health dot, driven by the latest etl_runs row instead of being
 // hardcoded green: fresh (<2h) → green, stale (<26h) → amber, else red.
 const getEtlHealth = unstable_cache(
   async (): Promise<EtlHealth> => {
-    const fallback: EtlHealth = { color: "hsl(45 90% 45%)", label: "No sync data" };
+    const fallback: EtlHealth = { color: "hsl(45 90% 45%)", label: "No sync data", age: null };
     try {
       const supabase = createStaticClient();
       const { data } = await supabase
@@ -93,9 +96,9 @@ const getEtlHealth = unstable_cache(
       const ageMin = Math.round(ageMs / 60_000);
       const ageLabel =
         ageMin < 60 ? `${ageMin}m ago` : ageMin < 60 * 26 ? `${Math.round(ageMin / 60)}h ago` : `${Math.round(ageMin / 1440)}d ago`;
-      if (ageMs < 2 * 3600_000) return { color: "hsl(142 65% 42%)", label: `Updated ${ageLabel}` };
-      if (ageMs < 26 * 3600_000) return { color: "hsl(45 90% 45%)", label: `Updated ${ageLabel}` };
-      return { color: "hsl(0 72% 50%)", label: `Stale — ${ageLabel}` };
+      if (ageMs < 2 * 3600_000) return { color: "hsl(142 65% 42%)", label: `Updated ${ageLabel}`, age: ageLabel };
+      if (ageMs < 26 * 3600_000) return { color: "hsl(45 90% 45%)", label: `Updated ${ageLabel}`, age: ageLabel };
+      return { color: "hsl(0 72% 50%)", label: `Stale — ${ageLabel}`, age: ageLabel };
     } catch {
       return fallback;
     }
@@ -114,11 +117,21 @@ const NAV_LINKS = [
 export default async function PublicLayout({ children }: { children: React.ReactNode }) {
   // Server renders Eastern time (it has no visitor timezone); HeaderDate
   // swaps in the reader's own timezone on the client.
-  const dateStr = new Date()
+  const now = new Date();
+  const dateStr = now
     .toLocaleDateString("en-US", {
       weekday: "long",
       year: "numeric",
       month: "long",
+      day: "numeric",
+      timeZone: APP_TIME_ZONE,
+    })
+    .toUpperCase();
+  const dateStrShort = now
+    .toLocaleDateString("en-US", {
+      weekday: "short",
+      year: "numeric",
+      month: "short",
       day: "numeric",
       timeZone: APP_TIME_ZONE,
     })
@@ -129,28 +142,48 @@ export default async function PublicLayout({ children }: { children: React.React
   const isAuthenticated = !!claimsData?.claims;
   const etlHealth = await getEtlHealth();
 
+  // Profile bubble: FL initials when a display name is set, first two email
+  // characters otherwise.
+  const displayName = (
+    claimsData?.claims?.user_metadata as { display_name?: string } | undefined
+  )?.display_name?.trim();
+  let bubbleInitials: string | undefined;
+  if (displayName) {
+    const parts = displayName.split(/\s+/);
+    bubbleInitials = (
+      parts[0][0] + (parts.length > 1 ? parts[parts.length - 1][0] : "")
+    ).toUpperCase();
+  }
+  bubbleInitials ??=
+    (claimsData?.claims?.email as string | undefined)?.slice(0, 2).toUpperCase() ?? "??";
+
   return (
     <div className="min-h-screen bg-background flex flex-col">
       {/* Header */}
       <header className="sticky top-0 z-50 bg-background border-b border-border">
         {/* Masthead */}
-        <div className="px-6 py-3 flex items-center justify-between border-b border-border">
-          <Link href="/" className="flex flex-col group">
+        <div className="px-4 sm:px-6 py-3 flex items-center justify-between gap-3 border-b border-border">
+          <Link href="/" className="flex flex-col group min-w-0">
             <span
-              className="text-xl font-black tracking-tighter leading-none group-hover:opacity-80 transition-opacity"
+              className="text-lg sm:text-xl font-black tracking-tighter leading-none group-hover:opacity-80 transition-opacity"
               style={{ fontFamily: "Georgia, serif" }}
             >
               INFO HUB
             </span>
-            <HeaderDate initial={dateStr} />
+            <HeaderDate initialLong={dateStr} initialShort={dateStrShort} />
           </Link>
 
-          <div className="flex items-center gap-4">
-            <div className="hidden sm:flex items-center gap-1.5" title={etlHealth.label}>
+          <div className="flex items-center gap-2.5 sm:gap-4 shrink-0">
+            <div className="flex items-center gap-1.5" title={etlHealth.label}>
               <div className="w-1.5 h-1.5 rounded-full animate-pulse-dot" style={{ backgroundColor: etlHealth.color }} />
-              <span className="text-[10px] font-mono tracking-wider text-muted-foreground uppercase">
+              <span className="hidden sm:inline text-[10px] font-mono tracking-wider text-muted-foreground uppercase">
                 {etlHealth.label}
               </span>
+              {etlHealth.age && (
+                <span className="sm:hidden text-[9px] font-mono tracking-wider text-muted-foreground uppercase tabular-nums">
+                  {etlHealth.age}
+                </span>
+              )}
             </div>
             {!isAuthenticated ? (
               <Link
@@ -166,7 +199,7 @@ export default async function PublicLayout({ children }: { children: React.React
                   className="flex items-center justify-center w-7 h-7 rounded-full border border-border text-[10px] font-mono font-bold tracking-wider text-muted-foreground hover:text-foreground hover:border-foreground transition-colors"
                   title="Profile"
                 >
-                  {(claimsData?.claims?.email as string | undefined)?.slice(0, 2).toUpperCase() ?? "??"}
+                  {bubbleInitials}
                 </Link>
               </>
             )}
