@@ -16,10 +16,6 @@ export const metadata: Metadata = {
   authors: [{ name: "Info Hub" }],
   creator: "Info Hub",
   publisher: "Info Hub",
-  icons: {
-    icon: "/icon.svg",
-    apple: "/apple-touch-icon.png",
-  },
   appleWebApp: {
     capable: true,
     title: "Info Hub",
