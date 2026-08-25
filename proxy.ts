@@ -9,12 +9,14 @@ export const config = {
   matcher: [
     /*
      * Match all request paths except:
-     * - _next/static (static files)
-     * - _next/image (image optimization files)
-     * - favicon.ico (favicon file)
-     * - images - .svg, .png, .jpg, .jpeg, .gif, .webp
-     * Feel free to modify this pattern to include more paths.
+     * - _next/static, _next/image (build output)
+     * - site metadata that must stay reachable while signed out: the favicon,
+     *   the web app manifest, robots and sitemap. A session redirect answers
+     *   these with a 307 and nothing errors -- the browser just falls back to
+     *   defaults, which is how "Add to Home Screen" loses its icon and its
+     *   standalone mode, and how a crawler reads a login page.
+     * - static assets by extension
      */
-    "/((?!_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)",
+    "/((?!_next/static|_next/image|favicon\\.ico|manifest\\.json|robots\\.txt|sitemap\\.xml|.*\\.(?:svg|png|jpg|jpeg|gif|webp|ico|webmanifest)$).*)",
   ],
 };
