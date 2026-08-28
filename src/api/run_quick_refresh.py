@@ -60,31 +60,45 @@ log = get_logger('quick_refresh')
 # Asset types quoted via FMP (250 req/day budget) — excluded from tier A
 FMP_ASSET_TYPES = {'forex', 'commodity'}
 
-# How many consecutive intraday runs may lose all of ESPN before the outage
-# stops being treated as noise. At the tier-A cadence (every 15 min) four runs
-# is roughly an hour of ESPN being unreachable — long enough that it is not a
-# blip, short enough to still be actionable.
-SPORTS_DEGRADE_STREAK = 4
+# How many consecutive intraday runs may lose a whole upstream before the
+# outage stops being treated as noise. Per domain, because the tiers run at
+# different cadences: sports and markets refresh every 15 min (tier A), so four
+# runs is about an hour; news is tier B only (hourly), so two runs is already
+# two hours without NYT.
+DEGRADE_STREAK = {'sports': 4, 'markets': 4, 'news': 2}
 
 
-def _is_upstream_sports_outage(stats: Dict[str, Any]) -> bool:
-    """True when every league ESPN was asked for failed to fetch.
+def _is_upstream_outage(domain: str, stats: Dict[str, Any]) -> bool:
+    """True when the domain wrote nothing because its API gave it nothing.
 
-    Deliberately narrower than "sports did not succeed". The other two ways
-    _sports_outcome() fails are ours, not ESPN's — 0 leagues processed means
-    the league lookup or the client broke, and rows fetched but none written
-    means the upsert died — and both must stay loud.
+    Deliberately narrower than "the domain failed". Each domain has two ways to
+    write zero rows, and only one of them is the upstream's fault:
+
+      * nothing was attempted (0 leagues / 0 tickers / 0 sections) — the league
+        or stock lookup broke, which is ours, or
+      * rows were fetched and then none were written — the upsert died, also
+        ours.
+
+    Both stay loud. What degrades is the third shape: everything was attempted,
+    and every call to the outside came back empty or failing.
     """
-    attempted = stats.get('leagues_processed', 0)
-    return attempted > 0 and stats.get('leagues_failed', 0) >= attempted
+    if domain == 'sports':
+        attempted = stats.get('leagues_processed', 0)
+        return attempted > 0 and stats.get('leagues_failed', 0) >= attempted
+    if domain == 'markets':
+        return (stats.get('stocks_processed', 0) > 0
+                and stats.get('quotes_pending', 0) == 0)
+    if domain == 'news':
+        return (stats.get('sections_processed', 0) > 0
+                and stats.get('articles_pending', 0) == 0)
+    return False
 
 
-def _sports_degraded_streak(supabase) -> int:
-    """Count the most recent consecutive intraday runs that lost all of ESPN.
+def _recent_intraday_stats(supabase) -> List[Dict[str, Any]]:
+    """The previous finished intraday runs' per-domain stats, newest first.
 
-    Reads back what previous runs recorded in etl_runs.stats.sports.degraded.
-    A run where sports was fine ends the streak. Errors reading the history
-    return 0 — the quiet path — because failing to look up the history is not
+    One query serves every domain's streak count. Errors return an empty
+    history — the quiet path — because failing to read the history is not
     itself evidence of an outage.
     """
     try:
@@ -93,16 +107,27 @@ def _sports_degraded_streak(supabase) -> int:
                 .in_('tier', ['a', 'b'])
                 .neq('status', 'running')
                 .order('started_at', desc=True)
-                .limit(SPORTS_DEGRADE_STREAK)
+                .limit(max(DEGRADE_STREAK.values()))
                 .execute())
     except Exception as e:
-        log.warning('could not read degraded-sports history: %s', e)
-        return 0
+        log.warning('could not read degraded-run history: %s', e)
+        return []
+    return [row.get('stats') or {} for row in (resp.data or [])]
 
+
+def _degraded_streak(history: List[Dict[str, Any]], domain: str) -> int:
+    """Consecutive recent runs where this domain lost its upstream.
+
+    Runs that did not touch the domain at all are skipped rather than counted
+    as healthy — otherwise the tier-A runs between two tier-B ones would reset
+    news's streak on every pass, and news could never escalate.
+    """
     streak = 0
-    for row in (resp.data or []):
-        sports = ((row.get('stats') or {}).get('sports') or {})
-        if not sports.get('degraded'):
+    for stats in history:
+        domain_stats = stats.get(domain)
+        if not isinstance(domain_stats, dict):
+            continue
+        if not domain_stats.get('degraded'):
             break
         streak += 1
     return streak
@@ -163,6 +188,11 @@ def run_quick_markets_etl(supabase, include_fmp_quotes: bool) -> Dict[str, Any]:
             total_stats['errors'].extend(stats.get('errors', []))
             pending_quotes.extend(stats.get('pending_quotes', []))
 
+    # Same reason as news's articles_pending: 0 quotes written is either every
+    # Finnhub call failing or the upsert dying, and only the fetched count
+    # separates them.
+    total_stats['quotes_pending'] = len(pending_quotes)
+
     if pending_quotes:
         inserted = upsert_daily_stock_quotes_batch(
             supabase, pending_quotes, errors=total_stats['errors']
@@ -200,16 +230,6 @@ def run_quick_sports_etl(supabase, include_news: bool) -> Dict[str, Any]:
         result: Dict[str, Any] = {'success': ok, 'stats': stats}
         if not ok:
             result['error'] = reason
-            # ESPN's site.api intermittently 403s datacenter IPs, which fails
-            # every league at once on a GitHub Actions runner and clears by
-            # itself minutes later. On the intraday cadence that is noise: the
-            # next tier-A run is <=15 min out and the daily run backfills. Flag
-            # it so the roll-up can land on `partial` (exit 0, no failure
-            # email) instead of `failed` — run_quick_refresh() still escalates
-            # once the outage persists across SPORTS_DEGRADE_STREAK runs.
-            if _is_upstream_sports_outage(stats):
-                result['degraded'] = True
-                stats['degraded'] = True
         return result
     except Exception as e:
         return {'success': False, 'error': str(e),
@@ -294,29 +314,41 @@ def run_quick_refresh(tier: str, triggered_by: str = 'manual') -> Dict[str, Any]
     active = {d: r for d, r in results.items()
               if d in ('sports', 'markets', 'news') and isinstance(r, dict)}
 
-    # A degraded domain (today: a total ESPN outage) is reported but does not
-    # fail the run — until it keeps happening. Count this run plus the previous
-    # ones that recorded the same thing; at SPORTS_DEGRADE_STREAK it stops
-    # being a blip and goes back to being a failure, so the workflow exits 1
-    # and GitHub sends its email.
-    sports = active.get('sports') or {}
-    if sports.get('degraded'):
-        streak = _sports_degraded_streak(supabase) + 1
-        if streak >= SPORTS_DEGRADE_STREAK:
-            sports['degraded'] = False
-            # Also clear the flag in the persisted stats, so this run breaks
-            # the streak it just reported on. A genuinely sustained outage then
-            # fails once per SPORTS_DEGRADE_STREAK runs (~hourly) rather than
-            # mailing on every 15-minute refresh until ESPN comes back.
-            (sports.get('stats') or {})['degraded'] = False
-            sports['error'] = (f"{sports.get('error', 'sports failed')} "
+    # A domain that failed only because its upstream went dark is reported but
+    # does not fail the run. These fetchers sit behind APIs that intermittently
+    # 403 or 429 a datacenter IP (ESPN's site.api does it to GitHub Actions
+    # runners; Finnhub and NYT rate-limit) and clear by themselves minutes
+    # later — on this cadence that is noise, not an incident: the next refresh
+    # is 15 minutes out and the daily run backfills regardless. Failing here
+    # costs a red build and a GitHub failure email for something that fixed
+    # itself before anyone read it.
+    #
+    # Until it keeps happening. Each degraded run records `degraded` in its
+    # stats; at DEGRADE_STREAK consecutive runs the outage stops being a blip
+    # and goes back to being a failure, so the workflow exits 1 and GitHub
+    # sends its email.
+    degradable = {d: r for d, r in active.items()
+                  if not r.get('success') and _is_upstream_outage(d, r.get('stats') or {})}
+    history = _recent_intraday_stats(supabase) if degradable else []
+    for domain, result in degradable.items():
+        stats = result.get('stats') or {}
+        streak = _degraded_streak(history, domain) + 1
+        if streak >= DEGRADE_STREAK[domain]:
+            # Clear the flag in the persisted stats too, so this run breaks the
+            # streak it just reported on. A genuinely sustained outage then
+            # fails once per DEGRADE_STREAK runs rather than mailing on every
+            # refresh until the API comes back.
+            stats['degraded'] = False
+            result['error'] = (f"{result.get('error', domain + ' failed')} "
                                f"({streak} consecutive intraday runs)")
-            log.error('sports degraded for %d consecutive runs — failing the run',
-                      streak)
+            log.error('%s upstream down for %d consecutive runs — failing the run',
+                      domain, streak)
         else:
-            log.warning('sports lost every league (run %d of %d before this '
-                        'fails the run) — reporting partial',
-                        streak, SPORTS_DEGRADE_STREAK)
+            result['degraded'] = True
+            stats['degraded'] = True
+            log.warning('%s lost its upstream (run %d of %d before this fails '
+                        'the run) — reporting partial',
+                        domain, streak, DEGRADE_STREAK[domain])
 
     all_errors = collect_domain_errors(active)
     if any(not r.get('success') and not r.get('degraded') for r in active.values()):

@@ -281,6 +281,10 @@ def sync_nyt_data(supabase: Client, sections: List[str]) -> Dict[str, Any]:
                 stats['errors'].append(f"Error fetching NYT most popular (fallback key): {e}")
 
     stats['sections_processed'] = len(sections)
+    # What NYT actually handed back, before any write. Lets a caller tell a
+    # total NYT outage (0 pending) from a dead upsert (pending > 0, 0 inserted)
+    # — `articles_inserted == 0` alone cannot distinguish them.
+    stats['articles_pending'] = len(top_stories_articles) + len(popular_articles)
 
     # Phase 2: Single batch upsert per article type.
     if top_stories_articles:

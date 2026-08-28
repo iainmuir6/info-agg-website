@@ -228,9 +228,9 @@ domain fell over.
 
 | Domain  | Fails the run when                                  | Reported but non-fatal                                    |
 |---------|-----------------------------------------------------|-----------------------------------------------------------|
-| sports  | every league failed, or rows fetched but none written | individual league errors; a quiet night with no games; on the intraday tiers, an isolated all-league ESPN outage (see below) |
-| markets | 0 quote rows                                        | market news / sentiment / econ writing 0 rows              |
-| news    | 0 articles                                          | per-section errors; sections skipped after a breaker trip  |
+| sports  | every league failed, or rows fetched but none written | individual league errors; a quiet night with no games; on the intraday tiers, an isolated ESPN outage (see below) |
+| markets | 0 quote rows                                        | market news / sentiment / econ writing 0 rows; on the intraday tiers, an isolated Finnhub outage |
+| news    | 0 articles                                          | per-section errors; sections skipped after a breaker trip; on the intraday tiers, an isolated NYT outage |
 | media   | never                                               | 0 videos → domain state `WARN`, run status `partial`       |
 
 Sports cannot use a row count on its own: a scores-only tier-A refresh at 04:07 UTC legitimately
@@ -239,28 +239,38 @@ writes 0 rows. `_sports_outcome()` (in `run_etl.py`, shared with the intraday re
 night passes, a total ESPN outage fails, and a dead upsert fails even when the fetches were fine.
 Before this, tier A's rule was `rows > 0 or not include_news`, which is unconditionally true.
 
-### Degraded sports on the intraday tiers
+### Degraded domains on the intraday tiers
 
-ESPN's `site.api` intermittently 403s datacenter IPs. On a GitHub Actions runner that fails every
-league at once and clears by itself minutes later, while the same run from a residential IP
-succeeds — so "all 9 leagues failed" on tier A/B is usually the runner's address, not an incident.
-Failing the run there costs a red build and a GitHub failure email for something that fixes itself
-before anyone reads it, and the next tier-A refresh is at most 15 minutes away with the daily run
-backfilling regardless.
+These fetchers sit behind APIs that intermittently refuse a datacenter IP and clear by themselves
+minutes later. ESPN's `site.api` 403s GitHub Actions runners — every league fails at once while the
+same run from a residential IP succeeds; Finnhub and NYT 429. On the intraday cadence that is
+noise, not an incident: the next tier-A refresh is at most 15 minutes away and the daily run
+backfills regardless. Failing there costs a red build and a GitHub failure email for something that
+fixed itself before anyone read it.
 
-So `run_quick_refresh.py` treats that one case as **degraded**: domain state `WARN`, run status
-`partial`, exit 0, no email. The narrowing matters — `_is_upstream_sports_outage()` requires
-`leagues_failed >= leagues_processed > 0`, so the other two `_sports_outcome()` failures still fail
-the run loudly, because both are ours: 0 leagues processed means the league lookup or the client
-broke, and rows fetched but none written means the upsert died.
+So `run_quick_refresh.py` treats a lost upstream as **degraded**: domain state `WARN`, run status
+`partial`, exit 0, no email. `run_etl.py` is deliberately not part of this — the daily run fires
+once, has no next attempt to fall back on, and a total loss there is worth an email.
 
-A real ESPN outage still pages. Each degraded run records `stats.sports.degraded` in `etl_runs`,
-and `_sports_degraded_streak()` counts back over the previous intraday runs; at
-`SPORTS_DEGRADE_STREAK` (4 runs ≈ an hour at the tier-A cadence) the run fails normally and exits
-1. That failing run also writes `degraded: false`, breaking its own streak, so a sustained outage
-fails roughly hourly instead of on all four refreshes an hour. The daily run is deliberately not
-part of this: it fires once, has no next attempt to fall back on, and a total ESPN loss there is
-worth an email.
+The narrowing is what makes this safe. Each domain has two ways to write zero rows that are *ours*,
+and both stay loud:
+
+| Domain  | Degrades when                                | Still fails when                                          |
+|---------|----------------------------------------------|-----------------------------------------------------------|
+| sports  | `leagues_failed >= leagues_processed > 0`     | 0 leagues processed (lookup/client broke); `rows_pending > 0` but 0 written (upsert died) |
+| markets | `stocks_processed > 0`, `quotes_pending == 0` | 0 tickers processed; quotes fetched but 0 written           |
+| news    | `sections_processed > 0`, `articles_pending == 0` | 0 sections processed; articles fetched but 0 written    |
+
+`quotes_pending` / `articles_pending` exist for exactly this: `articles_inserted == 0` on its own
+cannot tell "NYT gave us nothing" from "the upsert died", and only the second is our bug.
+
+A real outage still pages. Every degraded run records `degraded` in its per-domain stats, and
+`_degraded_streak()` counts back over the previous intraday runs — skipping runs that never touched
+the domain, so tier-A runs between two tier-B ones don't reset news's streak. At `DEGRADE_STREAK`
+the run fails normally and exits 1: 4 runs for sports and markets (≈ an hour at the 15-minute tier-A
+cadence), 2 for news (tier B only, so ≈ 2 hours). The failing run also writes `degraded: false`,
+breaking its own streak, so a sustained outage fails about once per streak window instead of on
+every refresh until the API returns.
 
 Two rules behind that table:
 
