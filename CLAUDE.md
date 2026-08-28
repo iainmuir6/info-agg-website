@@ -50,6 +50,17 @@ python src/api/backfill_scores.py --season current --dry-run # Show the plan, wr
 
 See [`src/api/docs/RATE_LIMITS.md`](src/api/docs/RATE_LIMITS.md) for per-API limits, daily caps, and how rate limiting is implemented in each fetcher.
 
+## ETL Run Status
+
+`etl_runs.status` is `success` | `partial` | `failed`, and both orchestrators exit **1 only on
+`failed`** — which is what makes GitHub email about a run. The intraday tiers deliberately absorb a
+lost upstream (ESPN 403ing the runner, Finnhub/NYT 429s) as `partial`/exit 0 and only fail once the
+outage persists across several runs; the daily run stays strict. Before changing what fails a run —
+or adding alerting on top of it — read
+[`src/api/docs/RUNBOOK.md`](src/api/docs/RUNBOOK.md#run-status-what-counts-as-a-failure)'s
+"Run Status" section, which spells out per domain what is the upstream's fault (degrades) and what
+is ours (always fails).
+
 ## Environment Variables
 
 `.env.local` (Next.js frontend + ETL):

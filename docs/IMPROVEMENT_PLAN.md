@@ -79,6 +79,12 @@ swallowed; AV rotates keys but never retries the original request).
 `if: failure()` issue/email step, and whether the `_KEY_3` workflow secret gap was closed —
 recheck `daily-etl.yml`'s `env:` block before treating this as fully done.
 
+Note for whoever builds that alerting step: a red run is now *meant* to be rare. GitHub already
+emails on exit 1, and the intraday tiers absorb a lost upstream as `partial` rather than failing on
+a blip that clears in minutes (see RUNBOOK, "Run Status"). So alert on `failed`, not on `partial`
+or on the presence of errors — every healthy run carries a few — and remember that a sustained
+outage surfaces as a `failed` run roughly once per streak window, not on every refresh.
+
 **Action:**
 - Replace `print()` with the `logging` module (timestamps, levels, per-domain logger names).
 - Workflow: pass `--output etl-report.json`, upload it with `actions/upload-artifact`, and add

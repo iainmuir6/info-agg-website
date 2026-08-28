@@ -86,6 +86,10 @@ jobs:
           echo "trigger=$trigger" >> "$GITHUB_OUTPUT"
 
       - name: Run quick refresh
+        # Exits 1 only on run status `failed`, which is what makes GitHub email
+        # about this workflow. A lost upstream (ESPN 403ing the runner, a
+        # Finnhub/NYT 429) lands on `partial` and exits 0 until it persists
+        # across several runs — see src/api/docs/RUNBOOK.md, "Run Status".
         run: python src/api/run_quick_refresh.py --tier "${{ steps.tier.outputs.tier }}" --triggered-by "${{ steps.tier.outputs.trigger }}"
         env:
           PYTHONPATH: src/api

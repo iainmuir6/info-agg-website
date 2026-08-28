@@ -59,7 +59,9 @@ export const STATE_COLOR: Record<DomainOutcome["state"], string> = {
 };
 
 /** Counters worth surfacing per domain, in display order. Anything else in the
- *  stats payload (errors, notes, ok, skipped, degraded) is handled separately. */
+ *  stats payload is handled separately (errors, notes, ok, skipped, degraded)
+ *  or deliberately not shown: the `*_pending` counts exist so the orchestrator
+ *  can tell a dead API from a dead upsert, and mean nothing to a reader. */
 export const COUNTER_LABELS: Record<string, string> = {
   leagues_processed: "Leagues",
   news_inserted: "News",
@@ -86,8 +88,10 @@ export function parseDomains(stats: unknown): Record<string, DomainOutcome> {
       .filter(([k]) => typeof s[k] === "number")
       .map(([k, label]) => ({ label, count: s[k] as number }));
     const skipped = s.skipped === true;
-    // Wrote nothing but did not take the run down with it (media). Distinct
-    // from ok, or the dashboard would show a dead source in green.
+    // Wrote nothing but did not take the run down with it: media on any run,
+    // and on the intraday tiers a domain whose upstream went dark (see
+    // RUNBOOK, "Run Status"). Distinct from ok, or the dashboard would show a
+    // dead source in green.
     const degraded = s.degraded === true;
     // Runs recorded before the orchestrator persisted an explicit `ok` flag
     // have to be inferred: no error and at least one row written. Falling back
