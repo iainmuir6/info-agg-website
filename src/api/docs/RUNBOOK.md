@@ -228,7 +228,7 @@ domain fell over.
 
 | Domain  | Fails the run when                                  | Reported but non-fatal                                    |
 |---------|-----------------------------------------------------|-----------------------------------------------------------|
-| sports  | every league failed, or rows fetched but none written | individual league errors; a quiet night with no games     |
+| sports  | every league failed, or rows fetched but none written | individual league errors; a quiet night with no games; on the intraday tiers, an isolated all-league ESPN outage (see below) |
 | markets | 0 quote rows                                        | market news / sentiment / econ writing 0 rows              |
 | news    | 0 articles                                          | per-section errors; sections skipped after a breaker trip  |
 | media   | never                                               | 0 videos → domain state `WARN`, run status `partial`       |
@@ -238,6 +238,29 @@ writes 0 rows. `_sports_outcome()` (in `run_etl.py`, shared with the intraday re
 `leagues_processed` vs `leagues_failed` and `rows_pending` vs rows written instead — so a quiet
 night passes, a total ESPN outage fails, and a dead upsert fails even when the fetches were fine.
 Before this, tier A's rule was `rows > 0 or not include_news`, which is unconditionally true.
+
+### Degraded sports on the intraday tiers
+
+ESPN's `site.api` intermittently 403s datacenter IPs. On a GitHub Actions runner that fails every
+league at once and clears by itself minutes later, while the same run from a residential IP
+succeeds — so "all 9 leagues failed" on tier A/B is usually the runner's address, not an incident.
+Failing the run there costs a red build and a GitHub failure email for something that fixes itself
+before anyone reads it, and the next tier-A refresh is at most 15 minutes away with the daily run
+backfilling regardless.
+
+So `run_quick_refresh.py` treats that one case as **degraded**: domain state `WARN`, run status
+`partial`, exit 0, no email. The narrowing matters — `_is_upstream_sports_outage()` requires
+`leagues_failed >= leagues_processed > 0`, so the other two `_sports_outcome()` failures still fail
+the run loudly, because both are ours: 0 leagues processed means the league lookup or the client
+broke, and rows fetched but none written means the upsert died.
+
+A real ESPN outage still pages. Each degraded run records `stats.sports.degraded` in `etl_runs`,
+and `_sports_degraded_streak()` counts back over the previous intraday runs; at
+`SPORTS_DEGRADE_STREAK` (4 runs ≈ an hour at the tier-A cadence) the run fails normally and exits
+1. That failing run also writes `degraded: false`, breaking its own streak, so a sustained outage
+fails roughly hourly instead of on all four refreshes an hour. The daily run is deliberately not
+part of this: it fires once, has no next attempt to fall back on, and a total ESPN loss there is
+worth an email.
 
 Two rules behind that table:
 

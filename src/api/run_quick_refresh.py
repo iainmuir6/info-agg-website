@@ -60,6 +60,53 @@ log = get_logger('quick_refresh')
 # Asset types quoted via FMP (250 req/day budget) — excluded from tier A
 FMP_ASSET_TYPES = {'forex', 'commodity'}
 
+# How many consecutive intraday runs may lose all of ESPN before the outage
+# stops being treated as noise. At the tier-A cadence (every 15 min) four runs
+# is roughly an hour of ESPN being unreachable — long enough that it is not a
+# blip, short enough to still be actionable.
+SPORTS_DEGRADE_STREAK = 4
+
+
+def _is_upstream_sports_outage(stats: Dict[str, Any]) -> bool:
+    """True when every league ESPN was asked for failed to fetch.
+
+    Deliberately narrower than "sports did not succeed". The other two ways
+    _sports_outcome() fails are ours, not ESPN's — 0 leagues processed means
+    the league lookup or the client broke, and rows fetched but none written
+    means the upsert died — and both must stay loud.
+    """
+    attempted = stats.get('leagues_processed', 0)
+    return attempted > 0 and stats.get('leagues_failed', 0) >= attempted
+
+
+def _sports_degraded_streak(supabase) -> int:
+    """Count the most recent consecutive intraday runs that lost all of ESPN.
+
+    Reads back what previous runs recorded in etl_runs.stats.sports.degraded.
+    A run where sports was fine ends the streak. Errors reading the history
+    return 0 — the quiet path — because failing to look up the history is not
+    itself evidence of an outage.
+    """
+    try:
+        resp = (supabase.table('etl_runs')
+                .select('stats')
+                .in_('tier', ['a', 'b'])
+                .neq('status', 'running')
+                .order('started_at', desc=True)
+                .limit(SPORTS_DEGRADE_STREAK)
+                .execute())
+    except Exception as e:
+        log.warning('could not read degraded-sports history: %s', e)
+        return 0
+
+    streak = 0
+    for row in (resp.data or []):
+        sports = ((row.get('stats') or {}).get('sports') or {})
+        if not sports.get('degraded'):
+            break
+        streak += 1
+    return streak
+
 
 def run_quick_markets_etl(supabase, include_fmp_quotes: bool) -> Dict[str, Any]:
     """Quotes + market news. Skips company news, sentiment, econ, profiles.
@@ -153,6 +200,16 @@ def run_quick_sports_etl(supabase, include_news: bool) -> Dict[str, Any]:
         result: Dict[str, Any] = {'success': ok, 'stats': stats}
         if not ok:
             result['error'] = reason
+            # ESPN's site.api intermittently 403s datacenter IPs, which fails
+            # every league at once on a GitHub Actions runner and clears by
+            # itself minutes later. On the intraday cadence that is noise: the
+            # next tier-A run is <=15 min out and the daily run backfills. Flag
+            # it so the roll-up can land on `partial` (exit 0, no failure
+            # email) instead of `failed` — run_quick_refresh() still escalates
+            # once the outage persists across SPORTS_DEGRADE_STREAK runs.
+            if _is_upstream_sports_outage(stats):
+                result['degraded'] = True
+                stats['degraded'] = True
         return result
     except Exception as e:
         return {'success': False, 'error': str(e),
@@ -236,8 +293,33 @@ def run_quick_refresh(tier: str, triggered_by: str = 'manual') -> Dict[str, Any]
 
     active = {d: r for d, r in results.items()
               if d in ('sports', 'markets', 'news') and isinstance(r, dict)}
+
+    # A degraded domain (today: a total ESPN outage) is reported but does not
+    # fail the run — until it keeps happening. Count this run plus the previous
+    # ones that recorded the same thing; at SPORTS_DEGRADE_STREAK it stops
+    # being a blip and goes back to being a failure, so the workflow exits 1
+    # and GitHub sends its email.
+    sports = active.get('sports') or {}
+    if sports.get('degraded'):
+        streak = _sports_degraded_streak(supabase) + 1
+        if streak >= SPORTS_DEGRADE_STREAK:
+            sports['degraded'] = False
+            # Also clear the flag in the persisted stats, so this run breaks
+            # the streak it just reported on. A genuinely sustained outage then
+            # fails once per SPORTS_DEGRADE_STREAK runs (~hourly) rather than
+            # mailing on every 15-minute refresh until ESPN comes back.
+            (sports.get('stats') or {})['degraded'] = False
+            sports['error'] = (f"{sports.get('error', 'sports failed')} "
+                               f"({streak} consecutive intraday runs)")
+            log.error('sports degraded for %d consecutive runs — failing the run',
+                      streak)
+        else:
+            log.warning('sports lost every league (run %d of %d before this '
+                        'fails the run) — reporting partial',
+                        streak, SPORTS_DEGRADE_STREAK)
+
     all_errors = collect_domain_errors(active)
-    if any(not r.get('success') for r in active.values()):
+    if any(not r.get('success') and not r.get('degraded') for r in active.values()):
         run_status = 'failed'
     elif all_errors:
         run_status = 'partial'
@@ -274,14 +356,15 @@ def run_quick_refresh(tier: str, triggered_by: str = 'manual') -> Dict[str, Any]
                     f"articles={s.get('articles_inserted', 0)}")
         return ''
 
-    passed = failed = 0
+    passed = failed = degraded_n = 0
     for domain in ['sports', 'markets', 'news']:
         result = results.get(domain)
         if not isinstance(result, dict):
             continue
         elapsed = domain_elapsed.get(domain, 0)
         ok = result.get('success', False)
-        status = ' OK ' if ok else 'FAIL'
+        degraded = result.get('degraded', False)
+        status = ' OK ' if ok else ('WARN' if degraded else 'FAIL')
         stat_str = _stat_str(domain, result) if ok else result.get('error', '')
         print(f"  {domain:<8} [{status}]  {stat_str:<48}  {elapsed:.1f}s")
         errors = result.get('stats', {}).get('errors', [])
@@ -291,10 +374,14 @@ def run_quick_refresh(tier: str, triggered_by: str = 'manual') -> Dict[str, Any]
             if len(errors) > 3:
                 print(f"             ↳ … and {len(errors) - 3} more errors")
         passed += ok
-        failed += (not ok)
+        degraded_n += degraded
+        failed += (not ok and not degraded)
 
     print("-" * W)
-    print(f"  {passed} passed · {failed} failed · {duration:.1f}s total")
+    tally = f"  {passed} passed · {failed} failed"
+    if degraded_n:
+        tally += f" · {degraded_n} degraded"
+    print(f"{tally} · {duration:.1f}s total")
     print("=" * W)
 
     return results
