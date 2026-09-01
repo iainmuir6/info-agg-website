@@ -32,6 +32,26 @@ const WEATHER_GLYPH: Record<string, string> = {
   "thunder-showers-night": "⚡",
 };
 
+/** Today's high/low, reconciled against the current reading.
+ *
+ *  Visual Crossing returns `currentConditions` live but `days[0]` from the
+ *  forecast issued for that day, and the two can disagree: on 2026-09-01
+ *  Charlottesville came back as 98.6° current against a 92.5° daily high, and
+ *  New York as 80.9° against 80.8°. Showing a high beneath the temperature
+ *  printed next to it reads as a bug in this card, so the observed value wins.
+ *  This only ever widens the range — it never invents a number. */
+function todayRange(
+  current: number | null,
+  high: number | null,
+  low: number | null,
+): { high: number | null; low: number | null } {
+  if (current == null) return { high, low };
+  return {
+    high: high == null ? high : Math.max(high, current),
+    low: low == null ? low : Math.min(low, current),
+  };
+}
+
 const glyph = (icon: string | null | undefined) =>
   (icon && WEATHER_GLYPH[icon]) || "○";
 
@@ -121,7 +141,7 @@ export function WeatherCard({
 
       {data.forecast.length > 0 && (
         <div className="mt-3 pt-3 border-t border-border grid grid-cols-5 gap-1">
-          {data.forecast.slice(0, 5).map((d) => (
+          {data.forecast.slice(0, 5).map((d, di) => (
             <div key={d.date} className="text-center">
               <p className="text-[9px] font-mono text-muted-foreground uppercase">
                 {new Date(`${d.date}T12:00:00`).toLocaleDateString("en-US", {
@@ -132,8 +152,12 @@ export function WeatherCard({
                 {glyph(d.icon)}
               </p>
               <p className="text-[10px] font-mono tabular-nums">
-                {round(d.tempmax)}°
-                <span className="text-muted-foreground">/{round(d.tempmin)}°</span>
+                {/* Only day 0 is reconciled — it is the one the current
+                    reading can contradict. */}
+                {round(di === 0 ? todayRange(c.temp, d.tempmax, d.tempmin).high : d.tempmax)}°
+                <span className="text-muted-foreground">
+                  /{round(di === 0 ? todayRange(c.temp, d.tempmax, d.tempmin).low : d.tempmin)}°
+                </span>
               </p>
             </div>
           ))}
@@ -477,7 +501,8 @@ export function WeatherGridMini({
             </span>
             {today && (
               <span className="text-[8px] font-mono text-muted-foreground tabular-nums leading-[11px]">
-                {round(today.tempmax)}/{round(today.tempmin)}
+                {round(todayRange(cur.temp, today.tempmax, today.tempmin).high)}/
+                {round(todayRange(cur.temp, today.tempmax, today.tempmin).low)}
               </span>
             )}
           </div>
