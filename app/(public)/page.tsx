@@ -1117,8 +1117,9 @@ export default async function CommandCenter() {
     nba: "NBA", mlb: "MLB", nfl: "NFL", nhl: "NHL",
     ncaab: "NCAAB", ncaaf: "NCAAF", wnba: "WNBA",
   };
+  // Key order drives card order — the leagues are rendered by iterating this.
   const sportsSnapshots: Record<string, LeagueSnapshot> = {
-    nba, mlb, nfl, nhl, ncaab, ncaaf, wnba,
+    nfl, nba, ncaaf, ncaab, mlb, nhl, wnba,
   };
 
   // ── Personalization: section order + hidden sections ─────────────────────
