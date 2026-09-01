@@ -54,15 +54,24 @@ export function CountryMap({
       : !!window.matchMedia?.("(prefers-color-scheme: dark)").matches;
 
     const shapes = new VectorSource();
+    const borders = new VectorSource();
     const map = new Map({
       target: el,
       layers: [
         new TileLayer({ source: new OSM() }),
+        // World borders sit under the highlight so the country reads as part
+        // of a map rather than a shape floating on a tile.
+        new VectorLayer({
+          source: borders,
+          style: new Style({
+            stroke: new Stroke({ color: "hsl(220 6% 55% / 0.5)", width: 0.5 }),
+          }),
+        }),
         new VectorLayer({
           source: shapes,
           style: new Style({
             fill: new Fill({ color: "hsl(265 70% 55% / 0.42)" }),
-            stroke: new Stroke({ color: ACCENT, width: 1.5 }),
+            stroke: new Stroke({ color: ACCENT, width: 0.75 }),
           }),
         }),
       ],
@@ -87,7 +96,6 @@ export function CountryMap({
 
     let cancelled = false;
     (async () => {
-      if (!ccn3) return;
       try {
         const [{ feature }, topo] = await Promise.all([
           import("topojson-client"),
@@ -95,25 +103,32 @@ export function CountryMap({
         ]);
         if (cancelled) return;
 
-        // world-atlas ids are numeric ISO codes; ccn3 is zero-padded ("392").
-        const topology = (topo.default ?? topo) as Parameters<typeof feature>[0];
+        // The bundled JSON's inferred type does not line up with
+        // topojson-client's Topology, so go through unknown deliberately.
+        const topology = (topo.default ?? topo) as unknown as Parameters<typeof feature>[0];
         const collection = feature(
           topology,
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           (topology as any).objects.countries
         ) as unknown as { features: { id?: string | number }[] };
 
+        const reader = new GeoJSON();
+        const opts = {
+          dataProjection: "EPSG:4326",
+          featureProjection: "EPSG:3857",
+        } as const;
+
+        borders.addFeatures(reader.readFeatures(collection, opts));
+
+        // world-atlas ids are numeric ISO codes; ccn3 is zero-padded ("392").
+        if (!ccn3) return;
         const target = String(Number(ccn3));
         const match = collection.features.find(
           (f) => String(Number(f.id)) === target
         );
         if (!match) return;
 
-        const geometries = new GeoJSON().readFeatures(match, {
-          dataProjection: "EPSG:4326",
-          featureProjection: "EPSG:3857",
-        });
-        shapes.addFeatures(geometries);
+        shapes.addFeatures(reader.readFeatures(match, opts));
 
         // Fit to the country's real extent — exact framing beats an
         // area-derived guess, and guarantees the whole country is in shot.
