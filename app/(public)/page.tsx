@@ -377,11 +377,17 @@ function estimateCardHeight(section: HomeSectionKey, count: number): number {
     // Ticker grids lay out 3 across, so N tickers is only ceil(N/3) rows.
     case "stocks":
       return CARD_HEADER_PX + Math.ceil(count / 2) * 30; // `large`, 2 columns
-    case "etfs":
     case "forex":
     case "commodities":
-    case "crypto":
       return CARD_HEADER_PX + Math.ceil(count / 3) * 28;
+    // ETFs are the same grid but split into four labelled groups (macro,
+    // sectors, rates, commodities), and those headers are not in `count`.
+    case "etfs":
+      return CARD_HEADER_PX + Math.ceil(count / 3) * 28 + 70;
+    // Crypto is a ticker grid PLUS a headline list that `count` says nothing
+    // about — measured 242px against the 58px the bare grid would suggest.
+    case "crypto":
+      return CARD_HEADER_PX + Math.ceil(count / 3) * 28 + 180;
     case "econ":
       return CARD_HEADER_PX + Math.ceil(count / 2) * 22 + 60; // grouped headers
     // Stacked lists of wrapping headlines.
@@ -396,8 +402,12 @@ function estimateCardHeight(section: HomeSectionKey, count: number): number {
       return CARD_HEADER_PX + count * 27;
     case "spotify":
       return 240; // fixed-height iframe embeds
+    // Score rows lay out TWO-UP (.score-grid in globals.css), so N games is
+    // ceil(N/2) rows — not N. Treating them as one-up made the 27-game MLB
+    // card estimate 1,038px against a measured 476px, and the packer left a
+    // whole column short to make room for it.
     case "sports":
-      return CARD_HEADER_PX + count * 34 + 90; // score rows + standings block
+      return CARD_HEADER_PX + Math.ceil(count / 2) * 29 + 90; // + standings
     case "weather":
       return CARD_HEADER_PX + 96; // fixed 2x3 grid
     case "country":
@@ -409,7 +419,10 @@ function estimateCardHeight(section: HomeSectionKey, count: number): number {
     case "almanac":
       return CARD_HEADER_PX + count * 30;
     // Briefings. Calibrated against the rendered cards rather than guessed:
-    // measured in the browser at 520px (7 rows) and 773px (20 units).
+    // measured in the browser at 520px (7 rows) and 773px (20 units), against
+    // original estimates of 328 and 504. Under-estimating these by ~55% made
+    // the packer treat the briefing column as far emptier than it was and
+    // pile five more cards into it.
     case "ai_day":
       // header + serif headline + two section rules + 3-line rows + footer
       return CARD_HEADER_PX + 110 + count * 52;
@@ -1774,14 +1787,32 @@ export default async function CommandCenter() {
   // the height model and the mobile focus toolbar read straight off the props
   // instead of every one of ~19 push sites passing them again.
   type CardProps = { count?: number; label?: string; href?: string; accent?: string };
-  // Explicit placement for the two cards whose position is an editorial call
-  // rather than something height-balancing could work out:
-  //   misc      — pinned to the first column
-  //   onthisday — sits directly beneath Country of the Day, which it follows
-  //               in DEFAULT_HOME_ORDER
+  // Placement rules the height-balancer cannot infer, because they are
+  // editorial rather than geometric:
+  //
+  //   top     — the AI briefings always lead the board.
+  //   bottom  — the five misc cards never sit at the top of a column. This used
+  //             to be implied by their position at the end of DEFAULT_HOME_ORDER
+  //             plus a packer that filled in order; now that packing is
+  //             largest-first, the rule has to be stated outright.
+  //   column  — the briefings own the first column, exclusively.
+  //   follow  — a card that reads as the previous one's companion and should sit
+  //             directly beneath it: On This Day under Country of the Day, and
+  //             Summary of the Week under Summary of the Day.
   const CARD_PLACEMENT: Partial<Record<HomeSectionKey, PackHint>> = {
-    almanac: { column: 0 },
-    onthisday: { follow: true },
+    // The briefings summarise everything below them, so they lead the board:
+    // pinned to the first column AND to the head of it, which together survive
+    // both height-balancing and a reordered user layout. `exclusive` keeps the
+    // rest of that column empty — together the two run ~840px, so any card
+    // stacked underneath would start below the fold of every other column.
+    ai_day: { column: 0, top: true, exclusive: true },
+    ai_week: { follow: true },
+    weather: { bottom: true },
+    country: { bottom: true },
+    onthisday: { follow: true, bottom: true },
+    calendar: { bottom: true },
+    // (Misc no longer pins to column 0 — that column is the briefings'.)
+    almanac: { bottom: true },
   };
 
   const cardWeights: number[] = [];

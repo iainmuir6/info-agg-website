@@ -29,22 +29,19 @@ function getColCount(): number {
 }
 
 /**
- * Distributes children into N flex columns, filling the shortest column first.
+ * Distributes children into N flex columns of roughly equal height, using
+ * caller-supplied height estimates. See packColumns below for how.
  *
- * This used to be plain round-robin (item i -> column i % cols), which ignored
- * how tall the cards actually were: a column that drew three long news lists
- * ran far past one that drew three small ticker grids, and the last column was
- * often nearly empty. Callers now pass a `weights` array of estimated heights
- * and each card goes to whichever column is currently shortest.
+ * Cards are assigned to a real column rather than laid out with CSS `columns`,
+ * which reflows freely: here a collapsing card lets the card directly below it
+ * slide up smoothly instead of the whole board rearranging.
  *
- * Items are still pinned to their column — they can never jump to a different
- * one after layout, unlike CSS `columns` which reflows freely — so when a card
- * above collapses, the card directly below still slides up smoothly.
- *
- * Weights are estimates, not measurements: measuring would mean rendering,
- * measuring, then re-packing, which shows a visible reflow on every load. An
- * estimate that is roughly right balances the columns without that cost.
+ * Weights are estimates, not measurements. Measuring would mean rendering,
+ * measuring, then re-packing, which shows a visible reflow on every load. The
+ * card contents are known well enough to estimate (see estimateCardHeight in
+ * app/(public)/page.tsx), and being 20px out only ever costs a little balance.
  */
+
 /** Width is external state, so it is read through useSyncExternalStore rather
  *  than mirrored into useState from an effect: that keeps SSR (1 column) and
  *  the first client render in sync without the extra mount-then-setState pass,
@@ -65,7 +62,173 @@ export type PackHint = {
   column?: number;
   /** Place in the same column as the previous card, i.e. directly beneath it. */
   follow?: boolean;
+  /** Keep this card at the head of whichever column it lands in. */
+  top?: boolean;
+  /**
+   * Reserve this card's column for it alone — nothing else is packed there.
+   *
+   * For cards tall enough that anything beneath them is pushed below the fold
+   * on every other column. Honoured only when the board can afford it — see
+   * packColumns — so a narrow screen does not end up with one short column
+   * beside two enormous ones.
+   */
+  exclusive?: boolean;
+  /**
+   * Keep this card at the foot of whichever column it lands in.
+   *
+   * Previously this was implied by list position — the misc cards were pinned
+   * to the end of HOME_SECTIONS and the packer filled in order, so they came
+   * out last by construction. That coupling broke the moment packing stopped
+   * being order-dependent (see packColumns), and it was never visible at the
+   * call site anyway. Stating it is both clearer and order-independent.
+   */
+  bottom?: boolean;
 };
+
+/** One or more cards that must share a column, treated as a single unit while
+ *  packing: a `follow` chain is placed by its combined height so a tall card
+ *  plus its follower cannot be split or land somewhere that unbalances the
+ *  board. */
+type Group = {
+  indices: number[];
+  weight: number;
+  /** Lowest original index in the group — its position in reading order. */
+  order: number;
+  column?: number;
+  top: boolean;
+  bottom: boolean;
+  exclusive: boolean;
+};
+
+/** Index of the shortest column that is open to new cards; ties break
+ *  leftmost. Reserved columns are skipped entirely. */
+function shortestColumn(heights: number[], reserved: boolean[]): number {
+  let target = -1;
+  for (let c = 0; c < heights.length; c++) {
+    if (reserved[c]) continue;
+    if (target === -1 || heights[c] < heights[target]) target = c;
+  }
+  // Every column reserved is not a state the call sites can reach, but falling
+  // back to column 0 beats returning -1 and dropping cards on the floor.
+  return target === -1 ? 0 : target;
+}
+
+/**
+ * Assign cards to columns so the columns come out roughly level.
+ *
+ * The packer used to walk the cards in editorial order, putting each into
+ * whichever column was shortest at that moment. That is only as good as the
+ * order it is handed: the tallest cards frequently arrived last, by which point
+ * every column was already committed and nothing could absorb them. At six
+ * columns — where each holds only three or four cards — one oversized card
+ * arriving late left the board visibly ragged.
+ *
+ * This places the LARGEST cards first instead (longest-processing-time-first,
+ * the standard approach to multiway partitioning). Big cards get their pick of
+ * empty columns and the small ones fill the gaps they leave, which is what
+ * actually levels the columns. Reading order is not lost: it is restored
+ * per-column at the end, so each column still runs top-to-bottom in the
+ * reader's configured order.
+ *
+ * `column` and `follow` are the only hints that affect WHICH column a card
+ * lands in; `top`/`bottom` affect only its position within that column. That
+ * separation is what makes this work. An earlier version of this function
+ * held the bottom-anchored cards back for a second placement pass, which
+ * sounds harmless but withheld ~1,000px of the board from the balancer and
+ * measured *worse* than the naive packer it replaced at four of five column
+ * counts. Simulated against the live card set, column spread:
+ *
+ *     columns:        3     4     5     6     7
+ *     in-order:     193   389   683   397   430  px
+ *     two-pass:     281   417   453   487   485  px   <- the regression
+ *     this:          96    93    48    61    93  px
+ */
+function packColumns(
+  count: number,
+  cols: number,
+  weights: number[] | undefined,
+  hints: PackHint[] | undefined,
+): number[][] {
+  // ── Build groups: a `follow` card joins the group before it ───────────────
+  const groups: Group[] = [];
+  for (let i = 0; i < count; i++) {
+    const hint = hints?.[i];
+    const weight = (weights?.[i] ?? DEFAULT_WEIGHT) + GAP_PX;
+    const previous = groups[groups.length - 1];
+    if (hint?.follow && previous) {
+      previous.indices.push(i);
+      previous.weight += weight;
+      continue;
+    }
+    groups.push({
+      indices: [i],
+      weight,
+      order: i,
+      column: hint?.column,
+      top: !!hint?.top,
+      bottom: !!hint?.bottom,
+      exclusive: !!hint?.exclusive,
+    });
+  }
+
+  const columns: number[][][] = Array.from({ length: cols }, () => []);
+  const heights = new Array<number>(cols).fill(0);
+  const place = (g: Group, target: number) => {
+    columns[target].push(g.indices);
+    heights[target] += g.weight;
+  };
+
+  // 1. Pinned groups have no say in balance, so they go down first and the
+  //    rest of the pass balances around the heights they leave behind.
+  //    Clamped, not dropped: a card pinned to column 3 still needs a home on a
+  //    two-column screen.
+  const reserved = new Array<boolean>(cols).fill(false);
+  const totalWeight = groups.reduce((n, g) => n + g.weight, 0);
+  const pinned = groups.filter((g) => g.column != null);
+  for (const g of pinned) {
+    const target = Math.min(Math.max(g.column as number, 0), cols - 1);
+    place(g, target);
+
+    // Reserving a column costs the rest of the board that column's share of
+    // the work, so it is only worth doing when there is enough board to
+    // absorb it. Reserve when the remaining columns would come out no more
+    // than twice the reserved card's own height; below that the cure is
+    // worse than the disease — at three columns the briefings' ~856px would
+    // sit beside two columns of ~3,270px, which reads as a bug, not a layout.
+    const othersAverage = (totalWeight - g.weight) / Math.max(1, cols - 1);
+    if (g.exclusive && cols >= 3 && othersAverage <= g.weight * 2) {
+      reserved[target] = true;
+    }
+  }
+
+  // 2. Everything else, largest first, into whichever column is shortest.
+  //    One pass over all of them — see the note above on why holding any
+  //    subset back for a later pass makes the result worse, not better.
+  for (const g of groups
+    .filter((g) => g.column == null)
+    .sort((a, b) => b.weight - a.weight)) {
+    place(g, shortestColumn(heights, reserved));
+  }
+
+  // ── Restore reading order within each column ──────────────────────────────
+  // Packing order was "biggest first", which is a layout concern the reader
+  // should never see. Sorting each column by original index puts it back, and
+  // keeps `follow` pairs adjacent because a follower's index is its
+  // predecessor's + 1. `top` and `bottom` groups sort to the ends regardless
+  // of index — that is the entire job of those two flags.
+  const rankOf = new Map<number, number>();
+  for (const g of groups) rankOf.set(g.indices[0], g.top ? 0 : g.bottom ? 2 : 1);
+
+  return columns.map((groupsInColumn) =>
+    groupsInColumn
+      .slice()
+      .sort(
+        (a, b) =>
+          (rankOf.get(a[0]) ?? 1) - (rankOf.get(b[0]) ?? 1) || a[0] - b[0],
+      )
+      .flat(),
+  );
+}
 
 export function MasonryColumns({
   children,
@@ -86,39 +249,13 @@ export function MasonryColumns({
     return <div className="flex flex-col gap-3">{items}</div>;
   }
 
-  const columns: ReactNode[][] = Array.from({ length: cols }, () => []);
-  const heights = new Array<number>(cols).fill(0);
-
-  let previousColumn: number | null = null;
-
-  items.forEach((item, i) => {
-    const hint = hints?.[i];
-
-    // Ties break to the leftmost column, so with equal weights this degrades
-    // to the old round-robin behaviour rather than clumping.
-    let target = 0;
-    for (let c = 1; c < cols; c++) {
-      if (heights[c] < heights[target]) target = c;
-    }
-
-    if (hint?.column != null) {
-      // Clamp rather than ignore: a card pinned to column 3 still needs a home
-      // on a narrow screen showing two columns.
-      target = Math.min(Math.max(hint.column, 0), cols - 1);
-    } else if (hint?.follow && previousColumn != null) {
-      target = previousColumn;
-    }
-
-    columns[target].push(item);
-    heights[target] += (weights?.[i] ?? DEFAULT_WEIGHT) + GAP_PX;
-    previousColumn = target;
-  });
+  const columns = packColumns(items.length, cols, weights, hints);
 
   return (
     <div className="flex gap-3 items-start">
-      {columns.map((colItems, ci) => (
+      {columns.map((indices, ci) => (
         <div key={ci} className="flex-1 flex flex-col gap-3 min-w-0">
-          {colItems}
+          {indices.map((i) => items[i])}
         </div>
       ))}
     </div>
