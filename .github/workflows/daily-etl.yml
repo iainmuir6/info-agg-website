@@ -1,14 +1,19 @@
 name: Daily ETL
 
 on:
-  schedule:
-    # 10:43 UTC = 6:43am EDT / 5:43am EST. GitHub fires crons late when the
-    # scheduler is congested — load peaks at :00/:15/:30/:45 and around
-    # 12:00–14:00 UTC, where this repo saw 1.5–2.5h delays. An odd minute in
-    # a quieter hour keeps the delay small while staying pre-market (cleanup
-    # collapses completed NY trading days).
-    - cron: '43 10 * * *'
-  workflow_dispatch:       # Manual trigger from GitHub Actions UI or the admin button
+  # No `schedule:` — GitHub's scheduled-workflow delivery for this repo
+  # degraded badly in Aug 2026: the 10:43 UTC cron was firing between 14:58
+  # and 21:14 UTC (4-10h late) and most intraday crons were dropped outright,
+  # which left the site 8-12h stale every morning. The clock now lives in
+  # vercel.json, which calls GET /api/cron/etl?job=daily → workflow_dispatch.
+  # Dispatched runs start immediately.
+  workflow_dispatch:       # Vercel cron, the /dashboard admin button, or the Actions UI
+    inputs:
+      triggered_by:
+        description: Value recorded in etl_runs.triggered_by
+        type: choice
+        options: [cron, manual]
+        default: manual
 
 # Never overlap with another daily run or an intraday refresh — they hit the
 # same rate-limited APIs and tables.
@@ -64,7 +69,7 @@ jobs:
       # The 10:43 UTC schedule is before US market open, so every prior
       # NY-calendar day is a completed trading day.
       - name: Run ETL pipeline with retention cleanup
-        run: python src/api/run_etl.py --triggered-by cron --cleanup --season-schedules --output etl-report.json
+        run: python src/api/run_etl.py --triggered-by "${{ inputs.triggered_by || 'manual' }}" --cleanup --season-schedules --output etl-report.json
         env:
           PYTHONPATH: src/api
 

@@ -157,14 +157,29 @@ domain (markets), not the sum of all four. Each domain phase also has its own co
 `--budget-seconds` ceiling (default 50s) — it stops starting new work once spent rather than
 running unbounded. See `src/api/docs/EXECUTION_ORDER.md` for the per-domain breakdown.
 
-> **Scheduling — GitHub Actions, not Vercel Cron.** `.github/workflows/daily-etl.yml` runs
-> `python src/api/run_etl.py --triggered-by cron --cleanup --season-schedules` on a schedule
-> (`cron: '43 10 * * *'` UTC) and revalidates the site's cache afterward. It can also be
-> triggered manually — either from the GitHub Actions UI (`workflow_dispatch`) or from the
-> `/dashboard` admin page's trigger button, which calls `POST /api/etl`. That route exists at
-> all because Vercel's serverless runtime has no Python interpreter — it can only ask GitHub
-> Actions to run the pipeline, never run it in-process. There is no Vercel Cron route in this
-> project; an older `/api/cron/etl` route referenced by previous docs no longer exists.
+> **Scheduling — Vercel Cron is the clock; GitHub Actions is the runtime.** The Python
+> pipeline can only run on GitHub Actions (Vercel's serverless runtime has no Python
+> interpreter), but it is no longer *scheduled* there. Both workflows are now
+> `workflow_dispatch`-only, and `vercel.json` holds the real cadence: 16 daily cron entries
+> hitting `GET /api/cron/etl?job=daily|a|b`, which fires the matching dispatch. Dispatched
+> runs start immediately.
+>
+> **Why:** GitHub's `schedule:` trigger is best-effort, and delivery for this repo collapsed
+> on 2026-08-27 — the 10:43 UTC daily started landing between 14:58 and 21:14 UTC (4–10h
+> late) and Tier A/B dropped from ~34 runs/day to 3–5. The site was 8–12h stale every
+> morning. `workflow_dispatch` is not subject to that throttling.
+>
+> Vercel Hobby allows 100 cron entries but each may only run **once per day**, with **±59 min**
+> precision, so the schedule is synthesized from one entry per hour slot. The morning is sized
+> against the worst case: `0 9 * * *` fires by 09:59 UTC and the run finishes ~2 min later, so
+> the daily is always complete before 11:00 UTC — i.e. before 7am ET under both EDT and EST —
+> and Tier B entries at 10/11/12 UTC keep news fresh through the 7–9am ET window.
+>
+> Requires `CRON_SECRET` set on the Vercel project (Vercel only attaches the
+> `Authorization: Bearer` header when that variable exists; the route fails closed without
+> it) and `GITHUB_DISPATCH_TOKEN` for the dispatch itself. Manual triggering is unchanged:
+> the GitHub Actions UI, or the `/dashboard` admin button via `POST /api/etl`. Runs from
+> Vercel cron record `triggered_by='cron'`; manual ones record `'manual'`.
 
 ### What each domain does on a daily run
 
@@ -306,7 +321,7 @@ New environment?
      scores) fine; historical OHLCV/news backfill needs the seed path repaired first.
 
 Already seeded — routine operation?
-  └─ python src/api/run_etl.py  (or let .github/workflows/daily-etl.yml run it on schedule)
+  └─ python src/api/run_etl.py  (or let vercel.json's cron dispatch daily-etl.yml)
 
 Missed some ESPN score history (outage, late backfill)?
   └─ python src/api/backfill_scores.py --season current  (safe to re-run, upserts by event)
@@ -336,4 +351,4 @@ Need faster-than-daily updates between full runs?
 | Economic indicators | FMP full history — Phase 10 (~8 calls) | ~8 calls/day (incremental) |
 | AV sentiment | All 10 topics (Phase 8) | All 10 topics (no partial-topic mode) |
 | Typical duration | ~12–18 min with 3 AV keys, when it worked | Well under 60s (target; cooperative 50s budget default) |
-| Scheduling | Manual only, when it worked | `.github/workflows/daily-etl.yml` (cron `43 10 * * *` UTC) + manual `workflow_dispatch` from `/dashboard` |
+| Scheduling | Manual only, when it worked | Vercel Cron (`vercel.json`, ~09:00 UTC) → `workflow_dispatch` on `.github/workflows/daily-etl.yml`, + the `/dashboard` button |

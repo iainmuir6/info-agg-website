@@ -46,6 +46,25 @@ python src/api/backfill_scores.py --season current --dry-run # Show the plan, wr
 > (now non-functional) design for reference only. Score history has a working equivalent —
 > `backfill_scores.py`, above — quote/news history does not yet.
 
+## ETL Scheduling
+
+**Vercel Cron is the clock; GitHub Actions is the runtime.** Both workflows are
+`workflow_dispatch`-only — neither has a `schedule:` trigger. `vercel.json` holds the real
+cadence: 16 once-per-day cron entries hitting `GET /api/cron/etl?job=daily|a|b`, each firing
+an immediate dispatch.
+
+This is deliberate. GitHub's `schedule:` trigger is best-effort and delivery for this repo
+collapsed on 2026-08-27: the 10:43 UTC daily started landing between 14:58 and 21:14 UTC and
+intraday runs dropped from ~34/day to 3–5, leaving the site 8–12h stale every morning.
+**Do not move the schedule back into the workflow files.**
+
+Vercel Hobby allows 100 cron entries but each runs at most **once per day** with **±59 min**
+precision, hence one entry per hour slot rather than a `*/15` expression. The morning is sized
+against the worst case: the `0 9 * * *` daily entry fires by 09:59 UTC and finishes ~2 min
+later, so it is always done before 11:00 UTC — before 7am ET under both EDT and EST — with
+Tier B entries at 10/11/12 UTC covering the 7–9am ET window. Budget: 6 Tier B x 13 FMP calls
++ the daily's 21 = 99 of the 250/day cap.
+
 ## Rate Limits
 
 See [`src/api/docs/RATE_LIMITS.md`](src/api/docs/RATE_LIMITS.md) for per-API limits, daily caps, and how rate limiting is implemented in each fetcher.
@@ -75,6 +94,7 @@ is ours (always fails).
 - Spotify playlists/podcast embeds (`lib/top-podcasts.ts`) need no backend fetch — they're live `<iframe>`s, not ETL-synced. `SPOTIFY_CLIENT_ID`/`SPOTIFY_CLIENT_SECRET` are still required, though: `app/api/podcasts/search` uses them (client-credentials flow, `lib/spotify-search.ts`) to power the "search a podcast to favorite" UI on `/profile`. Reddit was removed.
 - `GITHUB_DISPATCH_TOKEN` — fine-grained PAT with Actions read/write on this repo. Required by `POST /api/etl` (the `/dashboard` admin trigger button) to fire `workflow_dispatch` against `.github/workflows/daily-etl.yml` / `intraday-refresh.yml`, since Vercel serverless has no Python runtime to run the ETL in-process.
 - `GITHUB_REPOSITORY` (default `iainmuir6/info-agg-website`) / `GITHUB_DISPATCH_REF` (default `main`) — override the target repo/branch for the workflow dispatch above.
+- `CRON_SECRET` — **required for the site to refresh at all.** Vercel Cron (`vercel.json`) attaches `Authorization: Bearer $CRON_SECRET` to its invocations of `GET /api/cron/etl` only when this variable is set on the project; the route fails closed (503) without it, and no ETL runs. Neither workflow has a `schedule:` trigger any more — see the ETL Scheduling section below.
 - `REVALIDATE_SECRET` — bearer token `POST /api/revalidate` checks before calling `revalidateTag("etl-data")`. The GitHub Actions ETL workflow calls this after a successful run so the site's cached data refreshes within seconds.
 
 ## Architecture
@@ -88,6 +108,7 @@ This is a personal information aggregator ("Info Hub") with two layers:
 - `app/(auth)/auth/` — Auth pages: login, sign-up, forgot-password, update-password
 - `app/auth/callback/route.ts` — Supabase PKCE exchange (`GET /auth/callback?code=…&next=…`)
 - `app/api/etl/` — `POST /api/etl` (`super_admin` only) fires a `workflow_dispatch` against `.github/workflows/daily-etl.yml` (or `intraday-refresh.yml` with `{ mode: "quick" }`) and returns immediately — Vercel serverless has no Python runtime, so the ETL always runs on GitHub Actions, never in-process. Progress shows up in `info_agg.etl_runs` and the Actions tab.
+- `app/api/cron/etl/` — `GET /api/cron/etl?job=daily|a|b` (bearer `CRON_SECRET`) — the unattended scheduler. Called by the 16 cron entries in `vercel.json`; each fires a `workflow_dispatch` and records `triggered_by='cron'`. Shares `lib/github-dispatch.ts` with `POST /api/etl`.
 - `app/api/revalidate/` — `POST /api/revalidate` (bearer `REVALIDATE_SECRET`) — called by the GitHub Actions workflow after a successful run to `revalidateTag("etl-data")` so the site picks up new rows within seconds.
 - `app/api/auth/invite/` — `POST /api/auth/invite` with `{ "email": "…" }` — `super_admin` only; sends Supabase invite email (callback → update-password)
 - `app/api/podcasts/search/` — client-credentials Spotify search backing the "favorite a podcast" UI on `/profile`

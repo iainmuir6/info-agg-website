@@ -1,23 +1,17 @@
 name: Intraday Refresh
 
-# Tiered refresh cadence (docs/IMPROVEMENT_PLAN.md §1.1). Times in UTC;
-# ET is UTC-4 (EDT) / UTC-5 (EST).
+# Tiered refresh cadence. Invoked by Vercel Cron (vercel.json) via
+# GET /api/cron/etl?job=a|b → workflow_dispatch, not by GitHub's own
+# `schedule:` trigger — see the note in daily-etl.yml for why. Dispatched runs
+# start immediately, so the times in vercel.json are the real cadence.
 #
-# Minutes are deliberately OFF the quarter-hour marks — GitHub's scheduler
-# is most congested at :00/:15/:30/:45 and fires late there (this repo saw
-# multi-hour delays); odd minutes keep the delay small.
-#
-#   Tier A — every 15 min at :07/:22/:37/:52, 12:00–03:59 UTC
-#     (8am–11:59pm EDT): Finnhub quotes (stocks/ETFs/crypto), ESPN
-#     scoreboards, Finnhub market news. Consumes no daily API budget.
-#   Tier B — hourly at :41, 10:41–23:41 UTC (6:41am–7:41pm EDT): adds NYT
-#     top stories, ESPN news, and FMP forex/commodity quotes. 14 runs/day
-#     × 13 FMP calls = 182, + the daily run's 21 ≈ 203 of the 250/day cap.
+#   Tier A — Finnhub quotes (stocks/ETFs/crypto), ESPN scoreboards, Finnhub
+#     market news. Consumes no daily API budget. 11 slots/day.
+#   Tier B — adds NYT top stories, ESPN news, and FMP forex/commodity quotes.
+#     6 slots/day x 13 FMP calls = 78, + the daily run's 21 = 99 of the 250/day
+#     cap. Three of the six sit at 10/11/12 UTC so the 7-9am ET window always
+#     has a fresh Tier B behind it under both EDT and EST.
 on:
-  schedule:
-    - cron: '7,22,37,52 12-23 * * *'   # Tier A — daytime/evening
-    - cron: '7,22,37,52 0-3 * * *'     # Tier A — late evening ET
-    - cron: '41 10-23 * * *'           # Tier B — hourly
   workflow_dispatch:
     inputs:
       tier:
@@ -25,6 +19,11 @@ on:
         type: choice
         options: [a, b]
         default: a
+      triggered_by:
+        description: Value recorded in etl_runs.triggered_by
+        type: choice
+        options: [cron, manual]
+        default: manual
 
 # Shares the 'etl' group with the daily workflow so refreshes never overlap
 # a daily run (same rate-limited APIs and tables). A refresh that fires
@@ -66,31 +65,12 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      - name: Resolve tier
-        id: tier
-        env:
-          SCHEDULE: ${{ github.event.schedule }}
-          INPUT_TIER: ${{ inputs.tier }}
-        run: |
-          if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
-            tier="${INPUT_TIER:-a}"
-            trigger="dispatch"
-          elif [ "$SCHEDULE" = "41 10-23 * * *" ]; then
-            tier="b"
-            trigger="cron"
-          else
-            tier="a"
-            trigger="cron"
-          fi
-          echo "tier=$tier" >> "$GITHUB_OUTPUT"
-          echo "trigger=$trigger" >> "$GITHUB_OUTPUT"
-
       - name: Run quick refresh
         # Exits 1 only on run status `failed`, which is what makes GitHub email
         # about this workflow. A lost upstream (ESPN 403ing the runner, a
         # Finnhub/NYT 429) lands on `partial` and exits 0 until it persists
         # across several runs — see src/api/docs/RUNBOOK.md, "Run Status".
-        run: python src/api/run_quick_refresh.py --tier "${{ steps.tier.outputs.tier }}" --triggered-by "${{ steps.tier.outputs.trigger }}"
+        run: python src/api/run_quick_refresh.py --tier "${{ inputs.tier }}" --triggered-by "${{ inputs.triggered_by || 'manual' }}"
         env:
           PYTHONPATH: src/api
 
