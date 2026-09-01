@@ -3,6 +3,8 @@
 // info_agg.user_home_prefs, so renaming a key orphans saved prefs.
 
 export type HomeSectionKey =
+  | "ai_day"
+  | "ai_week"
   | "stocks"
   | "etfs"
   | "forex"
@@ -24,6 +26,11 @@ export type HomeSectionKey =
   | "almanac";
 
 export const HOME_SECTIONS: { key: HomeSectionKey; label: string }[] = [
+  // The briefings lead: they are the "read this first" summary of everything
+  // below them, and they are the only cards whose value decays if you scroll
+  // past them to the raw feeds they summarise.
+  { key: "ai_day", label: "Summary of the Day" },
+  { key: "ai_week", label: "Summary of the Week" },
   { key: "stocks", label: "Stocks" },
   { key: "nyt", label: "NYT Top Stories" },
   { key: "sports", label: "Sports" },
@@ -65,6 +72,11 @@ export function sectionLabel(key: string): string {
  *  in app/(public)/layout.tsx.
  */
 export const SECTION_DOMAIN: Record<HomeSectionKey, string> = {
+  // "brief" matches no NAV_LINKS entry, and that is the point: a briefing that
+  // spans every domain belongs to none of them, so it shows on the unfiltered
+  // dashboard and drops out when the reader narrows to one category.
+  ai_day: "brief",
+  ai_week: "brief",
   stocks: "markets",
   etfs: "markets",
   forex: "markets",

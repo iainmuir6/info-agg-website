@@ -3,6 +3,12 @@ import { unstable_cache } from "next/cache";
 import { getShowImages } from "@/lib/spotify-search";
 import { createClient } from "@/lib/supabase/server";
 import { getMiscContent } from "@/lib/misc-content";
+import { getAiSummaries } from "@/lib/ai-summary";
+import {
+  AI_ACCENT,
+  DaySummaryMini,
+  WeekSummaryMini,
+} from "@/components/ai-summary-cards";
 import {
   AlmanacMini,
   CalendarMini,
@@ -402,6 +408,14 @@ function estimateCardHeight(section: HomeSectionKey, count: number): number {
       return CARD_HEADER_PX + Math.min(count, 5) * 32;
     case "almanac":
       return CARD_HEADER_PX + count * 30;
+    // Briefings. Calibrated against the rendered cards rather than guessed:
+    // measured in the browser at 520px (7 rows) and 773px (20 units).
+    case "ai_day":
+      // header + serif headline + two section rules + 3-line rows + footer
+      return CARD_HEADER_PX + 110 + count * 52;
+    case "ai_week":
+      // header + serif headline + footer; `count` is bullets + domain pills
+      return CARD_HEADER_PX + 58 + count * 34;
     default:
       return CARD_HEADER_PX + count * 30;
   }
@@ -1080,6 +1094,7 @@ export default async function CommandCenter() {
     youtubeVideos,
     econIndicators,
     misc,
+    aiSummaries,
     nba, mlb, nfl, nhl, ncaab, ncaaf, wnba,
   ] = await Promise.all([
     getCompanyNews(supabase, assets.coreTickers),
@@ -1089,6 +1104,7 @@ export default async function CommandCenter() {
     getYouTubeVideos(supabase),
     getEconomicIndicators(supabase),
     getMiscContent(supabase),
+    getAiSummaries(supabase),
     getLeagueSnapshot(supabase, "basketball", "nba"),
     getLeagueSnapshot(supabase, "baseball", "mlb"),
     getLeagueSnapshot(supabase, "football", "nfl"),
@@ -1203,6 +1219,29 @@ export default async function CommandCenter() {
   //    can reorder and hide sections. Default order interleaves markets /
   //    news / sports (DEFAULT_HOME_ORDER).
   const cards: { section: HomeSectionKey; node: React.ReactNode }[] = [];
+
+  // /summary is reached ONLY from these two cards — it is not in NAV_LINKS.
+  // The compact rows clamp their text; the page carries it in full.
+  if (aiSummaries.day) {
+    const dayRows = aiSummaries.day.yesterday.length + aiSummaries.day.today.length;
+    cards.push({ section: "ai_day", node: (
+      <CollapsibleCard label="Summary of the Day" accent={AI_ACCENT} href="/summary" count={dayRows}>
+        <DaySummaryMini summary={aiSummaries.day} />
+      </CollapsibleCard>
+    )});
+  }
+
+  if (aiSummaries.week) {
+    const weekRows = aiSummaries.week.sections.reduce(
+      (n, s) => n + s.bullets.length + 1,
+      0,
+    );
+    cards.push({ section: "ai_week", node: (
+      <CollapsibleCard label="Summary of the Week" accent={AI_ACCENT} href="/summary" count={weekRows}>
+        <WeekSummaryMini summary={aiSummaries.week} />
+      </CollapsibleCard>
+    )});
+  }
 
   if (assets.stocks.length > 0) {
     cards.push({ section: "stocks", node: (

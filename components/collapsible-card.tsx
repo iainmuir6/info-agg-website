@@ -6,7 +6,10 @@ import Link from "next/link";
 interface CollapsibleCardProps {
   label: string;
   accent: string;
-  href: string;
+  /** Omit for cards with no deeper page of their own — the AI briefings
+   *  summarise every domain, so there is nothing for "All →" to open, and a
+   *  link to "/" would just reload the dashboard the card is already on. */
+  href?: string;
   count?: number;
   /** Retained for call-site compatibility; the header shows only the count. */
   summary?: string;
@@ -68,12 +71,14 @@ export function CollapsibleCard({
           )}
         </button>
         {headerExtra && <span className="shrink-0 ml-2">{headerExtra}</span>}
-        <Link
-          href={href}
-          className="text-[9px] font-mono tracking-wider uppercase text-muted-foreground hover:text-foreground transition-colors shrink-0 ml-2"
-        >
-          All →
-        </Link>
+        {href && (
+          <Link
+            href={href}
+            className="text-[9px] font-mono tracking-wider uppercase text-muted-foreground hover:text-foreground transition-colors shrink-0 ml-2"
+          >
+            All →
+          </Link>
+        )}
       </div>
 
       {/*
