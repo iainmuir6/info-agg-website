@@ -87,9 +87,19 @@ jobs:
           REVALIDATE_SECRET: ${{ secrets.REVALIDATE_SECRET }}
         run: |
           if [ -n "$SITE_URL" ] && [ -n "$REVALIDATE_SECRET" ]; then
-            curl -fsS -X POST "$SITE_URL/api/revalidate" \
-              -H "Authorization: Bearer $REVALIDATE_SECRET" \
-              || echo "::warning::revalidate call failed (non-fatal)"
+            # Strip any trailing slash: "$SITE_URL/api/revalidate" would
+            # otherwise be "//api/revalidate", which Vercel answers with a 308.
+            # `curl -f` does not fail on a 3xx and this call did not follow
+            # redirects, so the step exited 0 while never busting the cache.
+            # -L is belt-and-braces (308 preserves the POST method).
+            code=$(curl -sS -L -o /dev/null -w '%{http_code}' \
+              -X POST "${SITE_URL%/}/api/revalidate" \
+              -H "Authorization: Bearer $REVALIDATE_SECRET") || code=000
+            if [ "$code" = "200" ]; then
+              echo "revalidated (HTTP $code)"
+            else
+              echo "::warning::revalidate call failed (HTTP $code, non-fatal)"
+            fi
           else
             echo "NEXT_PUBLIC_SITE_URL / REVALIDATE_SECRET not set — skipping revalidate"
           fi
