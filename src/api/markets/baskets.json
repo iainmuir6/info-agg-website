@@ -1,62 +1,72 @@
 {
-    "core_market": [
-      "VTI",
-      "SPY",
-      "QQQ",
-      "IWM",
-      "VXUS"
-    ],
-    "sectors": [
-      "XLC",
-      "XLY",
-      "XLP",
-      "XLE",
-      "XLF",
-      "XLV",
-      "XLI",
-      "XLB",
-      "XLRE",
-      "XLK",
-      "XLU"
-    ],
-    "breadth": [
-      "RSP",
-      "VUG",
-      "VTV"
-    ],
-    "risk": [
-      "TLT",
-      "HYG",
-      "GLD",
-      "SLV",
-      "DBC",
-      "UUP"
-    ],
-    "core_stocks": [
-      "AAPL",
-      "MSFT",
-      "NVDA",
-      "AMZN",
-      "GOOGL",
-      "META",
-      "TSLA",
-      "BRK-B",
-      "JPM",
-      "AVGO",
-      "AMD",
-      "INTC",
-      "SPCX"
-    ],
-    "crypto": [
-      "BTC",
-      "ETH",
-      "XRP"
-    ],
-    "forex": [
-      "EURUSD", "GBPUSD", "USDJPY", "USDCAD", "AUDUSD",
-      "USDCHF", "NZDUSD", "USDCNY", "USDMXN", "USDINR"
-    ],
-    "commodities": [
-      "BZUSD", "SIUSD", "GCUSD"
-    ]
-  }
+  "core_market": [
+    "VTI",
+    "SPY",
+    "QQQ",
+    "IWM",
+    "VXUS"
+  ],
+  "sectors": [
+    "XLC",
+    "XLY",
+    "XLP",
+    "XLE",
+    "XLF",
+    "XLV",
+    "XLI",
+    "XLB",
+    "XLRE",
+    "XLK",
+    "XLU"
+  ],
+  "breadth": [
+    "RSP",
+    "VUG",
+    "VTV"
+  ],
+  "risk": [
+    "TLT",
+    "HYG",
+    "GLD",
+    "SLV",
+    "DBC",
+    "UUP"
+  ],
+  "core_stocks": [
+    "AAPL",
+    "MSFT",
+    "NVDA",
+    "AMZN",
+    "GOOGL",
+    "META",
+    "TSLA",
+    "BRK-B",
+    "JPM",
+    "AVGO",
+    "AMD",
+    "INTC",
+    "SPCX"
+  ],
+  "crypto": [
+    "BTC",
+    "ETH",
+    "XRP"
+  ],
+  "forex": [
+    "USDEUR",
+    "USDGBP",
+    "USDJPY",
+    "USDCAD",
+    "USDCHF",
+    "USDAUD",
+    "USDCNY",
+    "USDINR",
+    "USDMXN",
+    "USDNZD"
+  ],
+  "commodities": [
+    "BZUSD",
+    "SIUSD",
+    "GCUSD"
+  ]
+}

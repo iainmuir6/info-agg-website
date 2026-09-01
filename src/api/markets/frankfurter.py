@@ -27,9 +27,14 @@ load_dotenv()
 FRANKFURTER_BASE = "https://api.frankfurter.dev/v1"
 
 # Every pair the site tracks, as stored in info_agg.stocks.
+#
+# All USD-base ("units of X per 1 USD") rather than the market's conventional
+# direction, so a card can drop the redundant USD leg and label each row with
+# the foreign currency alone. EURUSD/GBPUSD/AUDUSD/NZDUSD were the four quoted
+# the other way round and are now inverted here.
 FOREX_PAIRS = [
-    "EURUSD", "GBPUSD", "AUDUSD", "NZDUSD",
-    "USDJPY", "USDCAD", "USDCHF", "USDCNY", "USDINR", "USDMXN",
+    "USDEUR", "USDGBP", "USDJPY", "USDCAD", "USDCHF",
+    "USDAUD", "USDCNY", "USDINR", "USDMXN", "USDNZD",
 ]
 
 # One HTTP call serves every pair, so the result is memoized for the life of

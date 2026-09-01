@@ -36,12 +36,19 @@ export function TickerHoverChart({
   className,
   href,
   wrapperClassName,
+  displayName,
+  currency = true,
 }: {
   ticker: string;
   children: React.ReactNode;
   className?: string;
   href?: string;
   wrapperClassName?: string;
+  /** Heading text when the raw ticker is not the useful name — forex passes
+   *  "USD to Euro" for USDEUR. Defaults to the ticker. */
+  displayName?: string;
+  /** false for exchange rates, which are a ratio and not a dollar amount. */
+  currency?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const [pos, setPos] = useState<{ left: number; top: number; above: boolean } | null>(null);
@@ -172,10 +179,10 @@ export function TickerHoverChart({
         onMouseLeave={hide}
       >
         <div className="flex items-baseline justify-between gap-2 px-2 py-1 border-b border-border">
-          <span className="text-[11px] font-mono font-black">{ticker}</span>
+          <span className="text-[11px] font-mono font-black">{displayName ?? ticker}</span>
           {data?.price != null && (
             <span className="text-[11px] font-mono tabular-nums">
-              ${data.price.toFixed(2)}
+              {currency ? `$${data.price.toFixed(2)}` : data.price.toFixed(data.price >= 10 ? 2 : 4)}
               {pct != null && (
                 <span className="ml-1 font-bold" style={{ color }}>
                   {up ? "+" : ""}
@@ -197,7 +204,7 @@ export function TickerHoverChart({
               height={130}
               precision={2}
               color={color}
-              ariaLabel={`${ticker} recent price history`}
+              ariaLabel={`${displayName ?? ticker} recent price history`}
             />
           ) : (
             <p className="text-[10px] font-mono text-muted-foreground py-8 text-center">

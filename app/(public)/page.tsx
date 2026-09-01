@@ -35,6 +35,7 @@ import {
 } from "@/lib/favorites";
 import { CollapsibleCard } from "@/components/collapsible-card";
 import { MasonryColumns } from "@/components/masonry-columns";
+import { forexPairName } from "@/lib/currencies";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -839,20 +840,32 @@ function TickerGrid({
         const pct = parseFloat(String(s.quote?.percent_change ?? 0));
         const price = parseFloat(String(s.quote?.current_price ?? 0));
         const favorite = !!favoriteTickers?.has(s.ticker.toUpperCase());
+        // Forex is stored USD-base, so "USDJPY" is 1 USD in yen. The USD leg
+        // is the same on every row, so the label drops it and the value takes
+        // no dollar sign — it is not a dollar amount. Rates below 10 need more
+        // than 2 decimals to move at all (USDEUR ~0.8628).
+        const isFx = s.asset_type === "forex";
+        const label = isFx && s.ticker.startsWith("USD") ? s.ticker.slice(3) : s.ticker;
+        const hoverName = isFx ? forexPairName(s.ticker) : undefined;
+        const value = isFx
+          ? price.toFixed(price >= 10 ? 2 : 4)
+          : `$${price.toFixed(2)}`;
         return (
           <TickerHoverChart
             key={s.ticker}
             ticker={s.ticker}
+            displayName={hoverName}
+            currency={!isFx}
             href={href.startsWith("/sports") ? href : `/markets/${s.ticker}`}
             wrapperClassName="block min-w-0"
             className={`flex items-center justify-between gap-1 border-b border-r border-border hover:bg-secondary/50 transition-colors group ${large ? "px-2.5 py-1.5" : "px-2 py-1"}${favorite ? " favorite-cell" : ""}`}
           >
             <span className={`font-mono font-black shrink-0 group-hover:underline ${large ? "text-xs" : "text-[10px]"}`}>
-              {s.ticker}
+              {label}
             </span>
             <span className="flex flex-col items-end shrink-0 min-w-0">
               <span className={`font-mono tabular-nums font-bold leading-none ${large ? "text-[11px]" : "text-[9px]"}`}>
-                ${price.toFixed(2)}
+                {value}
               </span>
               <ChangeTag pct={pct} large={large} />
             </span>
@@ -1501,9 +1514,10 @@ export default async function CommandCenter() {
 
   if (assets.forex.length > 0) {
     cards.push({ section: "forex", node: (
-      <CollapsibleCard label="FX" accent="hsl(142 65% 42%)" href="/markets"
-        count={assets.forex.length} summary={`${assets.forex.length} pairs`}>
-        <TickerGrid rows={assets.forex} href="/markets" favoriteTickers={favorites.tickers} />
+      <CollapsibleCard label="ForEx" accent="hsl(142 65% 42%)" href="/markets"
+        count={Math.min(assets.forex.length, 9)} summary={`${assets.forex.length} pairs`}>
+        {/* Nine fills the 3-wide grid exactly; the tenth is on /markets. */}
+        <TickerGrid rows={assets.forex.slice(0, 9)} href="/markets" favoriteTickers={favorites.tickers} />
       </CollapsibleCard>
     )});
   }
