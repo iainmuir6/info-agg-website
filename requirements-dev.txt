@@ -1,6 +1,9 @@
-# Dev / manual-tooling extras: notebook analysis (pandas/plotly), the
-# deprecated etfdb.com Selenium scraper (--scrape-etf-info), and misc
-# fetchers. Not installed by the scheduled GitHub Actions runs.
+# Dev / manual-tooling extras: notebook analysis (pandas/plotly, used by the
+# chart builders in misc/weather.py) and the deprecated etfdb.com Selenium
+# scraper (--scrape-etf-info). NOT installed by the scheduled GitHub Actions
+# runs — so nothing reachable from run_etl.py or run_quick_refresh.py may
+# import these at module scope. See "ETL Import Constraint" in CLAUDE.md;
+# weather.py violated it and took down every scheduled run at import time.
 -r requirements.txt
 pandas==2.1.4
 plotly>=5.18.0,<6

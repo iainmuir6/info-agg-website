@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## ETL Performance Requirement
 
-The full ETL (all 4 domains in parallel) **must complete in under 60 seconds**. If it takes longer, that is a bug. The historical hang was caused by global rate-limiter locks sleeping while held, which serialized parallel workers. Never introduce a shared global lock that sleeps inside it — use per-key locks only.
+The full ETL (five fetch domains in parallel, then the `summary` domain sequentially) **must complete in under 60 seconds**. If it takes longer, that is a bug. The historical hang was caused by global rate-limiter locks sleeping while held, which serialized parallel workers. Never introduce a shared global lock that sleeps inside it — use per-key locks only.
 
 ## Commands
 
@@ -23,6 +23,7 @@ python src/api/run_etl.py --media-only
 python src/api/run_etl.py --misc-only                       # Weather, holidays, country, word, wiki, fact
 python src/api/run_etl.py --summary-only                    # Regenerate the AI briefings alone (day + week)
 python src/api/run_etl.py --skip-sentiment                  # Skip AV sentiment (quotes + news only)
+python src/api/run_etl.py --skip-summary                    # Skip the AI briefings (no Gemini call)
 python src/api/run_etl.py --cleanup --season-schedules      # What the daily cron runs (+ retention cleanup)
 python src/api/run_etl.py --test                            # Dry-run: hit every external API once, no DB writes
 
@@ -108,7 +109,7 @@ is ours (always fails).
 
 **Supabase Auth → URL configuration:** Add redirect URLs for the auth callback route, e.g. `http://localhost:3000/auth/callback` and `${NEXT_PUBLIC_SITE_URL}/auth/callback`.
 - API keys for fetchers: `NYT_API_KEY_1`, `NYT_API_KEY_2`, `FINNHUB_API_KEY_1`, `FINNHUB_API_KEY_2`, `FMP_API_KEY`, `ALPHA_VANTAGE_API_KEY` (+ `_1/_2`)
-- `WEATHER_API_KEY` — Visual Crossing timeline API. Powers the weather cards. Billed per *day of data*, so cost is `WEATHER_LOCATIONS` × `FORECAST_DAYS` (currently 4 cities × 5 days = 20 records/run) against 1,000/day.
+- `WEATHER_API_KEY` — Visual Crossing timeline API. Powers the weather cards. Billed per *day of data*, so cost is `WEATHER_LOCATIONS` × `FORECAST_DAYS` (currently **6 cities × 5 days = 30 records/run**) against 1,000/day.
 - `CALENDAR_API_KEY` — Calendarific. Powers the upcoming-holidays card. 500/month free; the daily run uses ~30.
 - `COUNTRIES_API_KEY` — REST Countries **v5** (`api.restcountries.com`, bearer auth). **Its free tier is 1,000 requests per MONTH, not per day** — `misc_db_helper._country_is_current()` therefore skips the fetch when today's rotation pick is already stored, capping it at one call per calendar day however often the daily run is dispatched. v3.1 is deprecated and silently returns a stub that parses as JSON with none of the expected keys, which is how the old fetcher produced a row of `None`s without raising.
 - `YOUTUBE_API_KEY` — YouTube Data API v3 key (API key only, no OAuth). Powers the trending-videos feed. `videos.list` with `chart=mostPopular` costs 1 unit against a 10,000/day quota, so a daily run is negligible. Create at https://console.cloud.google.com/apis/credentials with the YouTube Data API v3 enabled.
@@ -131,7 +132,7 @@ This is a personal information aggregator ("Info Hub") with two layers:
 ### Next.js Frontend (`app/`, `components/`, `lib/`)
 
 **Route groups:**
-- `app/(public)/` — Public-facing pages with a shared newspaper-style layout (`layout.tsx`). Routes: `/` (Command Center dashboard), `/news`, `/sports`, `/sports/[league]`, `/[league]/[team]`, `/markets`, `/markets/[ticker]`, `/media`, `/misc` (Almanac), `/economy`, `/profile` (favorites + podcast search, signed-in users), `/dashboard` (ETL run monitoring + trigger, `super_admin` only)
+- `app/(public)/` — Public-facing pages with a shared newspaper-style layout (`layout.tsx`). Routes: `/` (Command Center dashboard), `/news`, `/sports`, `/sports/[league]`, `/[league]/[team]`, `/markets`, `/markets/[ticker]`, `/media`, `/misc` (Almanac), `/summary` (the two AI briefings in full — reachable only from their Command Center cards, deliberately not in `NAV_LINKS`), `/economy`, `/profile` (favorites + podcast search, signed-in users), `/dashboard` (ETL run monitoring + trigger, `super_admin` only)
 - `app/(auth)/auth/` — Auth pages: login, sign-up, forgot-password, update-password
 - `app/auth/callback/route.ts` — Supabase PKCE exchange (`GET /auth/callback?code=…&next=…`)
 - `app/api/etl/` — `POST /api/etl` (`super_admin` only) fires a `workflow_dispatch` against `.github/workflows/daily-etl.yml` (or `intraday-refresh.yml` with `{ mode: "quick" }`) and returns immediately — Vercel serverless has no Python runtime, so the ETL always runs on GitHub Actions, never in-process. Progress shows up in `info_agg.etl_runs` and the Actions tab.
@@ -170,7 +171,7 @@ Each domain follows the same pattern:
 - `markets/` → Finnhub API (daily quotes, company news, market news) + FMP API (company profiles, commodity quotes, treasury/econ, ETF holdings) + Alpha Vantage (news sentiment) + **Frankfurter** (forex — keyless ECB reference rates, all 10 pairs in one request; replaced 10 FMP calls per intraday Tier B run, cutting FMP from 78 to 18 calls/day. Trade-off: ECB publishes once per business day, so forex no longer moves intraday)
 - `news/` → NYT Top Stories + Most Popular API (NewsAPI is not used anywhere in this codebase, despite what an earlier version of this doc claimed)
 - `media/` → YouTube Data API (trending videos). Spotify (playlists, Top Podcasts) is live-embedded on the frontend with no fetcher. Reddit was removed.
-- `misc/` → six single-call feeds behind one domain: Visual Crossing (weather, 4 cities), Calendarific (US holidays), REST Countries v5 (country of the day, rotating), Wikipedia REST (random summary + On This Day), Merriam-Webster RSS (word of the day), uselessfacts. All land in `misc_content` as JSONB; each source degrades independently, and the domain never fails the run
+- `misc/` → six feeds behind one domain (all single-call except weather, which is one call per city): Visual Crossing (weather, 6 cities — one call each), Calendarific (US holidays), REST Countries v5 (country of the day, rotating), Wikipedia REST (random summary + On This Day), Merriam-Webster RSS (word of the day), uselessfacts. All land in `misc_content` as JSONB; each source degrades independently, and the domain never fails the run
 - `summary/` → Google Gemini (AI briefings: "Summary of the Day" and "Summary of the Week"). The only
   domain with **no upstream of its own** — it summarises the rows the other four just wrote, which is
   why `run_full_etl` calls it **sequentially after** the parallel block instead of inside it. Running
@@ -219,7 +220,8 @@ All tables live in the `info_agg` schema. Apply migrations in order:
 - Markets: `stocks`, `stock_quotes`, `etf_holdings`, `company_news`, `market_news`, `news_sentiment`
 - News: `news_articles`
 - Media: `youtube_videos` (Spotify playlists/podcasts are embedded, not stored)
-- Misc: `misc_content` — one JSONB row per (kind, key) for all six almanac cards
+- Misc: `misc_content` — one JSONB row per (kind, key) for all six almanac cards, plus the two
+  AI briefings at `('summary','day')` and `('summary','week')`
 - User prefs: `watchlist_stocks`, `watchlist_leagues`, `watchlist_teams`, `watchlist_podcasts`, `user_home_prefs`
 - Ops: `etl_runs` — one row per ETL run (status, tier, timing, per-domain stats/errors), read by `/dashboard`
 

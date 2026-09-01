@@ -5,18 +5,31 @@ see the ETL Performance Requirement in the repo root `CLAUDE.md`), gated by mark
 
 ---
 
-## Top Level: 4 domains launch simultaneously
+## Top Level: 5 domains in parallel, then SUMMARY on its own
 
 ```
-t=0s  ┌─────────────┬─────────────┬─────────────┬─────────────┐
-      │  SPORTS     │  MARKETS    │  NEWS       │  MEDIA      │
-      │ fastest     │ slowest —   │ mid         │ fastest     │
-      │             │ gates total │             │             │
-      └─────────────┴─────────────┴─────────────┴─────────────┘
+t=0s  ┌───────────┬───────────┬───────────┬───────────┬───────────┐
+      │  SPORTS   │  MARKETS  │  NEWS     │  MEDIA    │  MISC     │
+      │ slowest — │ mid       │ mid       │ fastest   │ fast      │
+      │ gates it  │           │           │           │           │
+      └───────────┴───────────┴───────────┴───────────┴───────────┘
+                              ↓ all five joined
+                        ┌───────────────┐
+                        │   SUMMARY     │  sequential, last
+                        └───────────────┘
 ```
 
-`run_full_etl()` submits all 4 to a `ThreadPoolExecutor` and waits for all to finish. Wall time
-= slowest domain (markets, driven by NYT's ~1s/section pacing × 9 sections and AV sentiment).
+`run_full_etl()` submits the five fetch domains to a `ThreadPoolExecutor` and waits for all to
+finish. Wall time for that phase = slowest domain.
+
+**SUMMARY is deliberately not in the pool.** It is the one domain with no upstream of its own —
+its input is the rows the other five have just written — so running it alongside them would race
+them and summarise yesterday's data. It runs after the join, and its cost lands directly on the
+total, which is why it carries its own 30s ceiling (`SUMMARY_BUDGET_S`) and a 12s per-request
+timeout. Measured: 6.7s when both briefings generate from scratch, 0.3s when both are already
+current (the common case — they are freshness-gated, so a re-dispatched run regenerates nothing).
+
+Observed totals: **18.4s** for a full daily run with the briefings current.
 Each domain also has its own `--budget-seconds` cooperative ceiling (default 50s per phase; see
 `run_etl.py --budget-seconds`) — a domain stops starting new work once its budget is spent
 rather than running unbounded, which is what keeps the overall run well under the 60s
@@ -55,6 +68,46 @@ Total: ~10s+ (network + JSON parsing dependent)
 
 ---
 
+## MISC (~2–3s)
+
+```
+Six independent single-call feeds, each degrading on its own — a missing key is
+a note, a dead upstream costs one card, and the domain never fails the run:
+
+  weather (Visual Crossing, 6 cities)  ·  holidays (Calendarific)
+  country of the day (REST Countries)  ·  word of the day (Merriam-Webster RSS)
+  On This Day + random pages (Wikipedia)  ·  useless facts
+
+Three are gated so a re-dispatched run costs no upstream requests:
+  country   — skipped once today's rotation pick is stored (1,000/MONTH budget)
+  wikipedia — one pick per calendar day, or the cards churn every run
+  facts     — likewise
+```
+
+---
+
+## SUMMARY (~0.3s current · ~6.7s regenerating, sequential and last)
+
+```
+Gate:  daily briefing  → once per EASTERN calendar day
+       weekly briefing → once per ISO week
+       (either already current → skipped, no Gemini call)
+
+Build: context bundle from the DB — news, market news, biggest movers,
+       completed games, plus scheduled games + upcoming holidays for the
+       daily card's lookahead
+  ↓
+Call:  Gemini, structured JSON output, model list tried in order of
+       RESPONSIVENESS (12s cap each, falls through on 404/429/503)
+  ↓
+Write: misc_content ('summary','day') / ('summary','week')
+```
+
+Never fails the run. On any error the stored row is left untouched, so the card serves the
+previous briefing with a visible timestamp rather than emptying.
+
+---
+
 ## MEDIA (~1–2s)
 
 ```
@@ -68,7 +121,14 @@ Total: ~1–2s
 
 ---
 
-## MARKETS (bottleneck that sets overall wall time)
+## MARKETS (~5–15s — gates the run when AV sentiment is enabled)
+
+> **Which domain gates the run has changed.** Markets used to set wall time on its own; moving
+> forex to Frankfurter (one keyless request for all 10 pairs instead of 10 FMP calls) took the
+> full run from ~29s to ~18s. Measured 2026-09-01: sports 17.9s, markets 13.6s — with AV
+> sentiment skipped, since the daily quota was exhausted. Markets and sports are now close
+> enough that either can gate, and `--skip-sentiment` is what decides it.
+
 
 Two sequential phases, each internally parallel:
 
@@ -94,6 +154,6 @@ Wall time = Phase A + max(Phase B steps), not the sum of every step.
 
 ## Notes
 
-- `--skip-sentiment` removes the AV sentiment step from markets' Phase B entirely, shortening markets (and therefore the overall run, since markets gates it)
+- `--skip-sentiment` removes the AV sentiment step from markets' Phase B entirely. That shortens markets, and shortens the run whenever markets is the gating domain — see the note above; sports now runs it close
 - AV sentiment exhausts the free-tier daily limit (25 req/key) quickly if keys have been used earlier in the day — the daily run should be the **first** AV consumer each day
 - Markets' ticker-fetch phase is capped at 2 concurrent threads (one per Finnhub key, `max_workers=2`); markets' Phase B pool sizes itself to however many of market-news/sentiment/econ are enabled

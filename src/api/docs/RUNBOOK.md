@@ -150,10 +150,11 @@ source _agg_venv/bin/activate   # from repo root
 python src/api/run_etl.py
 ```
 
-Runs all four domains **in parallel** (`ThreadPoolExecutor`, one thread per domain) — this
+Runs the five fetch domains **in parallel** (`ThreadPoolExecutor`, one thread per domain) — this
 replaced the old sequential design specifically so the whole run finishes well under 60s; see
 the ETL Performance Requirement in the repo root `CLAUDE.md`. Wall time is set by the slowest
-domain (markets), not the sum of all four. Each domain phase also has its own cooperative
+domain, not the sum of all five — then the `summary` domain runs sequentially after the join,
+because it summarises the rows the others just wrote. Each domain phase also has its own cooperative
 `--budget-seconds` ceiling (default 50s) — it stops starting new work once spent rather than
 running unbounded. See `src/api/docs/EXECUTION_ORDER.md` for the per-domain breakdown.
 
@@ -244,7 +245,17 @@ python src/api/run_etl.py --scrape-etf-info
 
 # Skip AV sentiment entirely (quotes + news only, saves 5 AV calls)
 python src/api/run_etl.py --skip-sentiment
+
+# Regenerate the AI briefings alone, against whatever is already in the DB
+python src/api/run_etl.py --summary-only
+
+# Run everything except the briefings (no Gemini call)
+python src/api/run_etl.py --skip-summary
 ```
+
+> Every other `--*-only` flag implies `--skip-summary`. The briefings read every domain's rows,
+> so generating one from a single freshly-refreshed domain and four stale ones would overwrite
+> the day's briefing with a worse one. `--summary-only` is the way to regenerate it alone.
 
 > **Quote backfill has no working path right now.** OHLCV history is AV-expensive (1
 > call/ticker/run) and was intentionally kept out of the daily run for that reason. It used to
@@ -354,6 +365,18 @@ Daily Run — AV budget constraints?
 Need faster-than-daily updates between full runs?
   └─ python src/api/run_quick_refresh.py --tier a   (every 15 min, no daily budget spent)
   └─ python src/api/run_quick_refresh.py --tier b   (hourly, adds NYT + ESPN news + FMP)
+     (neither tier touches the AI briefings — those are daily-run only)
+
+Briefing card looks stale or wrong?
+  └─ Check the card's own footer timestamp first. On a Gemini outage the ETL keeps the previous
+     briefing rather than emptying the card, so a stale card can sit above a green run status.
+  └─ python src/api/run_etl.py --summary-only   (regenerates against current DB rows)
+
+Site stopped updating but /dashboard shows no failures at all?
+  └─ Suspect an import-time crash. run_etl.py records its etl_runs row AFTER importing every
+     domain, so anything that dies at import — a dev-only dependency imported at module scope,
+     say — leaves NO row and no failure to see. Check the Actions log directly, and see
+     "ETL Import Constraint" in the repo root CLAUDE.md.
 ```
 
 ---
@@ -363,7 +386,7 @@ Need faster-than-daily updates between full runs?
 | Behaviour | Seed (`run_db_seed.py`, **archived/broken**) | Daily (`run_etl.py`) |
 |-----------|------------------------|----------------------|
 | Entry point | `archive/run_db_seed.py` — does not run | `run_etl.py` |
-| Domain execution | Interleaved with AV backfill batches, one domain at a time | All 4 domains in parallel (`ThreadPoolExecutor`) |
+| Domain execution | Interleaved with AV backfill batches, one domain at a time | 5 fetch domains in parallel (`ThreadPoolExecutor`), then `summary` sequentially |
 | Quote history depth | N days (default 30) via `--backfill-quotes`, when it worked | Today's quote only — no backfill |
 | AV key selection | Round-robin per ticker | Round-robin per call |
 | AV rate limiting | Interleaved with domain ETL (no explicit sleep) | `MinInterval` slot reservation (>=1.25s gap), reserves under lock then sleeps outside it |

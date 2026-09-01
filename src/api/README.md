@@ -14,7 +14,7 @@ source _agg_venv/bin/activate
 
 ```
 src/api/
-├── run_etl.py               # Orchestrator — daily entry point, runs all 4 domains in parallel
+├── run_etl.py               # Orchestrator — daily entry point; 5 fetch domains in parallel, then summary
 ├── run_quick_refresh.py     # Tiered intraday refresh (Tier A every 15 min, Tier B hourly) — no backfill
 ├── run_test.py               # Dry-run: calls every external API once, no DB writes
 ├── backfill_scores.py        # Standalone recovery tool for historical ESPN scores
@@ -36,6 +36,10 @@ src/api/
 │   ├── espn.py              # ESPN fetcher: scores, news, and standings for all configured leagues
 │   ├── odds.py                # Betting odds fetcher (not wired into run_etl.py)
 │   └── sports_db_helper.py  # DB layer: upserts for leagues, sports_news, sports_scores, sports_standings
+│
+├── summary/
+│   ├── gemini.py             # Gemini REST client: structured JSON out, model fallback, 12s cap
+│   └── summary_db_helper.py  # Builds the grounding context, generates + stores both briefings
 │
 ├── news/
 │   ├── nyt.py               # NYT Top Stories + Most Popular fetcher
