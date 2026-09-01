@@ -9,6 +9,8 @@ import { Children, ReactNode, useSyncExternalStore } from "react";
 const MIN_CARD_PX = 300;
 const GAP_PX = 12;   // gap-3
 const MAX_COLS = 8;  // sanity ceiling for ultrawide displays
+/** Used when a caller passes no weight for a card. */
+const DEFAULT_WEIGHT = 220;
 
 /**
  * Column count derived from available width rather than fixed breakpoints.
@@ -27,11 +29,21 @@ function getColCount(): number {
 }
 
 /**
- * Distributes children into N flex columns using round-robin assignment.
- * Items are pinned to their column — they can never jump to a different one
- * regardless of height changes, unlike CSS `columns` which reflows freely.
- * When a card above collapses, the card directly below slides up smoothly
- * because they share a flex-col container.
+ * Distributes children into N flex columns, filling the shortest column first.
+ *
+ * This used to be plain round-robin (item i -> column i % cols), which ignored
+ * how tall the cards actually were: a column that drew three long news lists
+ * ran far past one that drew three small ticker grids, and the last column was
+ * often nearly empty. Callers now pass a `weights` array of estimated heights
+ * and each card goes to whichever column is currently shortest.
+ *
+ * Items are still pinned to their column — they can never jump to a different
+ * one after layout, unlike CSS `columns` which reflows freely — so when a card
+ * above collapses, the card directly below still slides up smoothly.
+ *
+ * Weights are estimates, not measurements: measuring would mean rendering,
+ * measuring, then re-packing, which shows a visible reflow on every load. An
+ * estimate that is roughly right balances the columns without that cost.
  */
 /** Width is external state, so it is read through useSyncExternalStore rather
  *  than mirrored into useState from an effect: that keeps SSR (1 column) and
@@ -42,7 +54,30 @@ function subscribeToResize(onStoreChange: () => void) {
   return () => window.removeEventListener("resize", onStoreChange);
 }
 
-export function MasonryColumns({ children }: { children: ReactNode }) {
+/** Placement override for a single card.
+ *
+ *  Height-balancing alone cannot express "this card belongs in column 1" or
+ *  "this card sits directly under that one" — both are editorial decisions the
+ *  packer has no way to infer, so callers state them explicitly.
+ */
+export type PackHint = {
+  /** Force into this column index (clamped to the current column count). */
+  column?: number;
+  /** Place in the same column as the previous card, i.e. directly beneath it. */
+  follow?: boolean;
+};
+
+export function MasonryColumns({
+  children,
+  weights,
+  hints,
+}: {
+  children: ReactNode;
+  /** Estimated height per child, in the same order as `children`. */
+  weights?: number[];
+  /** Optional placement overrides, in the same order as `children`. */
+  hints?: PackHint[];
+}) {
   const cols = useSyncExternalStore(subscribeToResize, getColCount, () => 1);
 
   const items = Children.toArray(children).filter(Boolean);
@@ -51,9 +86,33 @@ export function MasonryColumns({ children }: { children: ReactNode }) {
     return <div className="flex flex-col gap-3">{items}</div>;
   }
 
-  // Round-robin: item 0 → col 0, item 1 → col 1, …, item N → col (N % cols)
   const columns: ReactNode[][] = Array.from({ length: cols }, () => []);
-  items.forEach((item, i) => columns[i % cols].push(item));
+  const heights = new Array<number>(cols).fill(0);
+
+  let previousColumn: number | null = null;
+
+  items.forEach((item, i) => {
+    const hint = hints?.[i];
+
+    // Ties break to the leftmost column, so with equal weights this degrades
+    // to the old round-robin behaviour rather than clumping.
+    let target = 0;
+    for (let c = 1; c < cols; c++) {
+      if (heights[c] < heights[target]) target = c;
+    }
+
+    if (hint?.column != null) {
+      // Clamp rather than ignore: a card pinned to column 3 still needs a home
+      // on a narrow screen showing two columns.
+      target = Math.min(Math.max(hint.column, 0), cols - 1);
+    } else if (hint?.follow && previousColumn != null) {
+      target = previousColumn;
+    }
+
+    columns[target].push(item);
+    heights[target] += (weights?.[i] ?? DEFAULT_WEIGHT) + GAP_PX;
+    previousColumn = target;
+  });
 
   return (
     <div className="flex gap-3 items-start">

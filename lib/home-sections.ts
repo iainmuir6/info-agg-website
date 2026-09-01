@@ -26,8 +26,6 @@ export type HomeSectionKey =
 export const HOME_SECTIONS: { key: HomeSectionKey; label: string }[] = [
   { key: "stocks", label: "Stocks" },
   { key: "nyt", label: "NYT Top Stories" },
-  { key: "weather", label: "Weather" },
-  { key: "calendar", label: "Calendar" },
   { key: "sports", label: "Sports" },
   { key: "nyt_more", label: "NYT More Headlines" },
   { key: "market_news", label: "Market News" },
@@ -40,8 +38,15 @@ export const HOME_SECTIONS: { key: HomeSectionKey; label: string }[] = [
   { key: "spotify", label: "Spotify" },
   { key: "podcasts", label: "Top Podcasts" },
   { key: "youtube", label: "YouTube" },
+  // Misc sections are pinned to the END of the order on purpose. The masonry
+  // assigns cards round-robin (item i -> column i % cols), so an item's row
+  // within its column is floor(i / cols) — the only way to guarantee a card
+  // sits at the BOTTOM of whatever column it lands in is for it to be among
+  // the last `cols` items. Keeping all five here does that at any column count.
+  { key: "weather", label: "Weather" },
   { key: "country", label: "Country of the Day" },
   { key: "onthisday", label: "On This Day" },
+  { key: "calendar", label: "Calendar" },
   { key: "almanac", label: "Misc" },
 ];
 
