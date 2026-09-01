@@ -67,6 +67,22 @@ later, so it is always done before 11:00 UTC — before 7am ET under both EDT an
 Tier B entries at 10/11/12 UTC covering the 7–9am ET window. Budget: 6 Tier B x 13 FMP calls
 + the daily's 21 = 99 of the 250/day cap.
 
+## ETL Import Constraint
+
+The scheduled runs install **`requirements.txt` only** — `requirements-dev.txt` (pandas, plotly,
+selenium, bs4) is explicitly not installed on GitHub Actions. So **any module reachable from
+`run_etl.py` or `run_quick_refresh.py` must import only `requirements.txt` packages at module
+scope.** Dev-only imports belong inside the functions that need them, or behind a
+`try/except ModuleNotFoundError` with a guard.
+
+This is not theoretical. `misc/weather.py` carries Plotly chart builders alongside the two
+fetchers the ETL actually uses, and imported numpy/pandas/plotly at the top. Because
+`run_etl.py` imports `misc.misc_db_helper` unconditionally, that made the whole pipeline
+unimportable without them — the daily run and both intraday tiers died at import with
+`ModuleNotFoundError: No module named 'numpy'` *before* they could record an `etl_runs` row, so
+the failure was invisible to the dashboard. It went unnoticed for months only because the Actions
+runner image happened to ship numpy; the runs were depending on an incidental system package.
+
 ## Rate Limits
 
 See [`src/api/docs/RATE_LIMITS.md`](src/api/docs/RATE_LIMITS.md) for per-API limits, daily caps, and how rate limiting is implemented in each fetcher.

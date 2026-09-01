@@ -13,14 +13,42 @@ from __future__ import annotations
 
 import os
 from datetime import datetime
-from typing import Any, Dict, List, Literal, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional
 
-import numpy as np
-import pandas as pd
-import plotly.graph_objects as go
 import requests
 from dotenv import load_dotenv
-from plotly.subplots import make_subplots
+
+# The plotting stack is OPTIONAL and must stay that way.
+#
+# This module has two halves: two thin fetchers the ETL uses
+# (get_weather_api_key / fetch_weather_timeline, which need nothing but
+# requests) and a set of Plotly chart builders used only from notebooks.
+# requirements-dev.txt says of pandas/plotly "Not installed by the scheduled
+# GitHub Actions runs", and requirements.txt lists neither — so importing them
+# at module scope made the ENTIRE ETL unimportable without them.
+#
+# That went unnoticed because the Actions runner image happened to ship numpy,
+# so the scheduled runs were quietly depending on an incidental system package.
+# When that stopped being true every run died at import with
+# "ModuleNotFoundError: No module named 'numpy'" before it could record a row
+# in etl_runs — the daily and both intraday tiers at once.
+#
+# `from __future__ import annotations` above makes every annotation a string,
+# so the type hints below cost nothing at runtime.
+if TYPE_CHECKING:  # pragma: no cover
+    import numpy as np
+    import pandas as pd
+
+try:
+    import numpy as np
+    import pandas as pd
+    import plotly.graph_objects as go
+    from plotly.subplots import make_subplots
+
+    _CHARTS_AVAILABLE = True
+except ModuleNotFoundError:
+    np = pd = go = make_subplots = None  # type: ignore[assignment]
+    _CHARTS_AVAILABLE = False
 
 load_dotenv()
 
@@ -38,6 +66,20 @@ RIBBON_FILL = "rgba(72, 209, 204, 0.35)"
 DEFAULT_ICON_PATH = "/assets/misc/weather-icons/"
 
 Resolution = Literal["daily", "hourly"]
+
+
+def _require_charts() -> None:
+    """Fail loudly, and usefully, if a chart helper is called without its deps.
+
+    Without this the first use of `pd`/`np` raises a bare
+    "NoneType has no attribute ...", which says nothing about the real fix.
+    """
+    if not _CHARTS_AVAILABLE:
+        raise ModuleNotFoundError(
+            "weather.py chart helpers need pandas/plotly, which the scheduled "
+            "ETL deliberately does not install. Run `pip install -r "
+            "requirements-dev.txt` for notebook use."
+        )
 
 
 def get_weather_api_key() -> str:
@@ -124,6 +166,7 @@ def timeline_to_hourly_df(data: Optional[Dict[str, Any]]) -> pd.DataFrame:
     Adds ``date``, ``tempmin_day``, ``tempmax_day``, ``feelslikemin_day``, ``feelslikemax_day``
     from each parent day.
     """
+    _require_charts()
     if not data:
         return pd.DataFrame()
 
@@ -154,6 +197,7 @@ def timeline_to_hourly_df(data: Optional[Dict[str, Any]]) -> pd.DataFrame:
 
 def timeline_to_daily_df(data: Optional[Dict[str, Any]]) -> pd.DataFrame:
     """Build a DataFrame with one row per day from ``days``."""
+    _require_charts()
     if not data or not data.get("days"):
         return pd.DataFrame()
     return pd.DataFrame(data["days"])
@@ -236,6 +280,7 @@ def build_temperature_chart(
     **resolution=\"hourly\":** one point per hour. Ribbon uses a diurnal envelope from each
     day's min/max (requires ``include`` with ``hours`` in the API request).
     """
+    _require_charts()
     if df.empty or "datetime" not in df.columns:
         fig = go.Figure()
         _apply_brand_layout(fig, title=title or "Temperature")
@@ -443,6 +488,7 @@ def build_precipitation_chart(
     title: Optional[str] = None,
 ) -> go.Figure:
     """Bar chart of daily precipitation or cumulative total over the range."""
+    _require_charts()
     fig = go.Figure()
     if daily_df.empty:
         _apply_brand_layout(fig, title=title or "Precipitation", height=380)
@@ -517,6 +563,7 @@ def build_wind_chart(
 
     **resolution=\"hourly\":** uses flattened hourly rows (request API ``include`` with ``hours``).
     """
+    _require_charts()
     fig = make_subplots(specs=[[{"secondary_y": True}]])
 
     if df.empty or "datetime" not in df.columns:
@@ -626,6 +673,7 @@ def build_daily_overview_chart(
     Icons load from ``icon_url_prefix`` (defaults to ``NEXT_PUBLIC_SITE_URL`` +
     ``/assets/misc/weather-icons/``) via layout images on the bottom subplot.
     """
+    _require_charts()
     prefix = icon_url_prefix if icon_url_prefix is not None else _default_icon_url_prefix()
 
     fig = make_subplots(
