@@ -1,5 +1,7 @@
 import Link from "next/link";
 import { unstable_cache } from "next/cache";
+import { CategoryNav } from "@/components/category-nav";
+import { SectionFilterProvider } from "@/components/section-filter";
 import { ThemeSwitcher } from "@/components/theme-switcher";
 import { createClient, createStaticClient } from "@/lib/supabase/server";
 import { FooterTickers } from "@/components/footer-tickers";
@@ -107,12 +109,15 @@ const getEtlHealth = unstable_cache(
   { tags: ["etl-data"], revalidate: 60 },
 );
 
+// `domain` ties each link to the Command Center sections it covers, so a tap
+// on a phone can filter the dashboard instead of navigating (see CategoryNav
+// and SECTION_DOMAIN in lib/home-sections.ts).
 const NAV_LINKS = [
-  { href: "/news", label: "NEWS", accent: "hsl(220 90% 52%)" },
-  { href: "/sports", label: "SPORTS", accent: "hsl(25 95% 50%)" },
-  { href: "/markets", label: "MARKETS", accent: "hsl(142 65% 42%)" },
-  { href: "/media", label: "MEDIA", accent: "hsl(340 78% 50%)" },
-  { href: "/misc", label: "MISC", accent: "hsl(265 70% 55%)" },
+  { href: "/news", label: "NEWS", accent: "hsl(220 90% 52%)", domain: "news" },
+  { href: "/sports", label: "SPORTS", accent: "hsl(25 95% 50%)", domain: "sports" },
+  { href: "/markets", label: "MARKETS", accent: "hsl(142 65% 42%)", domain: "markets" },
+  { href: "/media", label: "MEDIA", accent: "hsl(340 78% 50%)", domain: "media" },
+  { href: "/misc", label: "MISC", accent: "hsl(265 70% 55%)", domain: "misc" },
 ];
 
 export default async function PublicLayout({ children }: { children: React.ReactNode }) {
@@ -159,6 +164,9 @@ export default async function PublicLayout({ children }: { children: React.React
     (claimsData?.claims?.email as string | undefined)?.slice(0, 2).toUpperCase() ?? "??";
 
   return (
+    // The nav sets the mobile dashboard filter and the card list inside
+    // `children` reads it, so the provider has to sit above both.
+    <SectionFilterProvider>
     <div className="min-h-screen bg-background flex flex-col">
       {/* Header */}
       <header className="sticky top-0 z-50 bg-background border-b border-border">
@@ -209,23 +217,7 @@ export default async function PublicLayout({ children }: { children: React.React
         </div>
 
         {/* Category nav — evenly spaced on mobile, left-aligned from sm up */}
-        <nav className="px-2 sm:px-6 flex items-center">
-          <div className="flex items-center w-full sm:w-auto sm:gap-1">
-            {NAV_LINKS.map((item) => (
-              <Link
-                key={item.href}
-                href={item.href}
-                className="relative flex-1 sm:flex-none text-center px-2 sm:px-4 py-2.5 text-[11px] sm:text-xs font-mono tracking-widest uppercase text-muted-foreground hover:text-foreground transition-colors group"
-              >
-                {item.label}
-                <span
-                  className="absolute bottom-0 left-0 right-0 h-0.5 scale-x-0 group-hover:scale-x-100 transition-transform origin-left"
-                  style={{ backgroundColor: item.accent }}
-                />
-              </Link>
-            ))}
-          </div>
-        </nav>
+        <CategoryNav links={NAV_LINKS} />
       </header>
 
       <main className="flex-1">{children}</main>
@@ -234,5 +226,6 @@ export default async function PublicLayout({ children }: { children: React.React
         <FooterTickers quotes={await getTickerItems()} games={await getSportsTickerItems()} />
       </FooterGate>
     </div>
+    </SectionFilterProvider>
   );
 }

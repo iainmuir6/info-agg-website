@@ -57,3 +57,31 @@ export const DEFAULT_HOME_ORDER: HomeSectionKey[] = HOME_SECTIONS.map((s) => s.k
 export function sectionLabel(key: string): string {
   return HOME_SECTIONS.find((s) => s.key === key)?.label ?? key;
 }
+
+/** Which nav category each Command Center section belongs to.
+ *
+ *  Drives the mobile nav filter: tapping SPORTS on the dashboard shows every
+ *  sports card and hides the rest. Keys here must stay in step with NAV_LINKS
+ *  in app/(public)/layout.tsx.
+ */
+export const SECTION_DOMAIN: Record<HomeSectionKey, string> = {
+  stocks: "markets",
+  etfs: "markets",
+  forex: "markets",
+  commodities: "markets",
+  crypto: "markets",
+  econ: "markets",
+  stock_news: "markets",
+  market_news: "markets",
+  nyt: "news",
+  nyt_more: "news",
+  sports: "sports",
+  spotify: "media",
+  podcasts: "media",
+  youtube: "media",
+  weather: "misc",
+  calendar: "misc",
+  country: "misc",
+  onthisday: "misc",
+  almanac: "misc",
+};

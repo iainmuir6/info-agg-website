@@ -46,6 +46,7 @@ export function CollapsibleCard({
           onClick={() => setOpen((v) => !v)}
           className="flex items-center gap-1.5 min-w-0 flex-1 text-left group"
           aria-label={open ? "Collapse" : "Expand"}
+          aria-expanded={open}
         >
           <div className="w-1 h-3 shrink-0" style={{ backgroundColor: accent }} />
           {icon && (

@@ -12,7 +12,7 @@ import {
   WeatherGridMini,
 } from "@/components/misc-cards";
 import Link from "next/link";
-import { DEFAULT_HOME_ORDER, type HomeSectionKey } from "@/lib/home-sections";
+import { DEFAULT_HOME_ORDER, SECTION_DOMAIN, type HomeSectionKey } from "@/lib/home-sections";
 import { TickerHoverChart } from "@/components/ticker-hover-chart";
 import { compactStatus, formatGameTime, isGameToday, formatGameDateShort, leadingDaySlate } from "@/lib/sports-status";
 import { latestSeasonOnly, topNPerGroup, type StandingRow, type StandingsGroup } from "@/lib/standings";
@@ -34,7 +34,8 @@ import {
   type Favorites,
 } from "@/lib/favorites";
 import { CollapsibleCard } from "@/components/collapsible-card";
-import { MasonryColumns } from "@/components/masonry-columns";
+import { CommandCenterCards, type CardMeta } from "@/components/command-center-cards";
+import type { PackHint } from "@/components/masonry-columns";
 import { forexPairName } from "@/lib/currencies";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -353,6 +354,58 @@ type CoreAssetRow = {
     quote_timestamp: string;
   }[] | null;
 };
+
+
+/** Rough rendered height of a card, used only to balance the masonry columns.
+ *
+ *  Read off each card's own `count` prop rather than threading a weight
+ *  through ~20 push sites. The numbers are deliberately coarse — they decide
+ *  which column a card lands in, nothing else, so being 20px out is harmless
+ *  while being 200px out (a 12-row news list treated like a 3-row grid) is
+ *  what left the last column nearly empty.
+ */
+const CARD_HEADER_PX = 30;
+
+function estimateCardHeight(section: HomeSectionKey, count: number): number {
+  switch (section) {
+    // Ticker grids lay out 3 across, so N tickers is only ceil(N/3) rows.
+    case "stocks":
+      return CARD_HEADER_PX + Math.ceil(count / 2) * 30; // `large`, 2 columns
+    case "etfs":
+    case "forex":
+    case "commodities":
+    case "crypto":
+      return CARD_HEADER_PX + Math.ceil(count / 3) * 28;
+    case "econ":
+      return CARD_HEADER_PX + Math.ceil(count / 2) * 22 + 60; // grouped headers
+    // Stacked lists of wrapping headlines.
+    case "nyt":
+    case "nyt_more":
+    case "market_news":
+    case "stock_news":
+      return CARD_HEADER_PX + count * 32;
+    case "youtube":
+      return CARD_HEADER_PX + Math.min(count, 8) * 30;
+    case "podcasts":
+      return CARD_HEADER_PX + count * 27;
+    case "spotify":
+      return 240; // fixed-height iframe embeds
+    case "sports":
+      return CARD_HEADER_PX + count * 34 + 90; // score rows + standings block
+    case "weather":
+      return CARD_HEADER_PX + 96; // fixed 2x3 grid
+    case "country":
+      return CARD_HEADER_PX + 115 + 24 + 3 * 34; // map + flag + 3 fact rows
+    case "onthisday":
+      return CARD_HEADER_PX + Math.min(count, 5) * 34;
+    case "calendar":
+      return CARD_HEADER_PX + Math.min(count, 5) * 32;
+    case "almanac":
+      return CARD_HEADER_PX + count * 30;
+    default:
+      return CARD_HEADER_PX + count * 30;
+  }
+}
 
 async function getCoreAssetsByType(supabase: Awaited<ReturnType<typeof createClient>>) {
   try {
@@ -1676,13 +1729,46 @@ export default async function CommandCenter() {
         (sectionPos.get(a.section) ?? 99) - (sectionPos.get(b.section) ?? 99) || a.i - b.i
     );
 
+  // Card elements carry their own row count, so the height model can read it
+  // straight off the props instead of every push site passing a weight.
+  // Card elements carry their own label, href, accent and row count, so both
+  // the height model and the mobile focus toolbar read straight off the props
+  // instead of every one of ~19 push sites passing them again.
+  type CardProps = { count?: number; label?: string; href?: string; accent?: string };
+  // Explicit placement for the two cards whose position is an editorial call
+  // rather than something height-balancing could work out:
+  //   misc      — pinned to the first column
+  //   onthisday — sits directly beneath Country of the Day, which it follows
+  //               in DEFAULT_HOME_ORDER
+  const CARD_PLACEMENT: Partial<Record<HomeSectionKey, PackHint>> = {
+    almanac: { column: 0 },
+    onthisday: { follow: true },
+  };
+
+  const cardWeights: number[] = [];
+  const cardHints: PackHint[] = [];
+  const cardMeta: CardMeta[] = [];
+  for (const c of visibleCards) {
+    const el = c.node as React.ReactElement<CardProps>;
+    const count = typeof el?.props?.count === "number" ? el.props.count : 6;
+    cardWeights.push(estimateCardHeight(c.section, count));
+    cardHints.push(CARD_PLACEMENT[c.section] ?? {});
+    cardMeta.push({
+      section: c.section,
+      domain: SECTION_DOMAIN[c.section] ?? "misc",
+      label: el?.props?.label ?? c.section,
+      href: el?.props?.href ?? "/",
+      accent: el?.props?.accent ?? "hsl(220 6% 50%)",
+    });
+  }
+
   return (
     <div className="px-3 md:px-4 py-3 md:py-4">
-      <MasonryColumns>
+      <CommandCenterCards meta={cardMeta} weights={cardWeights} hints={cardHints}>
         {visibleCards.map((c, i) => (
           <Fragment key={`${c.section}-${i}`}>{c.node}</Fragment>
         ))}
-      </MasonryColumns>
+      </CommandCenterCards>
     </div>
   );
 }
