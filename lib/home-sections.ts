@@ -18,12 +18,16 @@ export type HomeSectionKey =
   | "podcasts"
   | "youtube"
   | "weather"
+  | "calendar"
+  | "country"
+  | "onthisday"
   | "almanac";
 
 export const HOME_SECTIONS: { key: HomeSectionKey; label: string }[] = [
   { key: "stocks", label: "Stocks" },
   { key: "nyt", label: "NYT Top Stories" },
   { key: "weather", label: "Weather" },
+  { key: "calendar", label: "Calendar" },
   { key: "sports", label: "Sports" },
   { key: "nyt_more", label: "NYT More Headlines" },
   { key: "market_news", label: "Market News" },
@@ -36,6 +40,8 @@ export const HOME_SECTIONS: { key: HomeSectionKey; label: string }[] = [
   { key: "spotify", label: "Spotify" },
   { key: "podcasts", label: "Top Podcasts" },
   { key: "youtube", label: "YouTube" },
+  { key: "onthisday", label: "On This Day" },
+  { key: "country", label: "Country of the Day" },
   { key: "almanac", label: "Almanac" },
 ];
 

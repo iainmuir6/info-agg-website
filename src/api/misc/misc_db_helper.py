@@ -29,15 +29,15 @@ from etl_lib import chunked_upsert
 try:
     from .weather import fetch_weather_timeline, get_weather_api_key
     from .holidays import fetch_upcoming_holidays, get_calendar_api_key
-    from .wikipedia import fetch_random_wikipedia_summary
-    from .countries import fetch_country_by_code, get_countries_api_key
+    from .wikipedia import fetch_on_this_day, fetch_random_wikipedia_summary
+    from .countries import fetch_all_countries, fetch_country_by_code, get_countries_api_key
     from .words import fetch_merriam_webster_wotd
     from .facts import fetch_useless_fact
 except ImportError:
     from weather import fetch_weather_timeline, get_weather_api_key
     from holidays import fetch_upcoming_holidays, get_calendar_api_key
-    from wikipedia import fetch_random_wikipedia_summary
-    from countries import fetch_country_by_code, get_countries_api_key
+    from wikipedia import fetch_on_this_day, fetch_random_wikipedia_summary
+    from countries import fetch_all_countries, fetch_country_by_code, get_countries_api_key
     from words import fetch_merriam_webster_wotd
     from facts import fetch_useless_fact
 
@@ -47,12 +47,25 @@ except ImportError:
 WEATHER_LOCATIONS: List[str] = [
     "New York,NY",
     "Charlottesville,VA",
+    "Chicago,IL",
     "Brora,Scotland",
     "Aspen,CO",
+    "Bangkok,Thailand",
 ]
 
 # The card renders 5 days; fetching more would be billed and never shown.
 FORECAST_DAYS = 5
+
+# The almanac card shows several of each per day rather than one.
+WIKI_COUNT = 3
+FACT_COUNT = 3
+ONTHISDAY_COUNT = 8
+
+# Population/area ranks need every country, which is 3 paginated requests.
+# Against a 1,000-per-MONTH budget that is only worth spending occasionally —
+# the ranks of 254 countries do not move on a daily timescale.
+RANKS_KEY = 'ranks'
+RANKS_MAX_AGE_DAYS = 30
 
 HOLIDAY_COUNTRY = "US"
 
@@ -131,6 +144,80 @@ def _weather_payload(raw: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def _prune_extra_keys(supabase: Client, kind: str, keep: List[str]) -> None:
+    """Delete rows of `kind` whose key is not in `keep`.
+
+    The multi-row kinds are stored under index keys ('0', '1', ...). If the
+    count shrinks — or a kind used to be a singleton at key '' — the leftovers
+    would linger forever and the page would render stale extras.
+    """
+    try:
+        q = supabase.table('misc_content').delete().eq('kind', kind)
+        if keep:
+            q = q.not_.in_('key', keep)
+        q.execute()
+    except Exception as e:
+        print(f"Could not prune stale '{kind}' rows: {e}")
+
+
+def _ensure_country_ranks(
+    supabase: Client, stats: Dict[str, Any]
+) -> Optional[Dict[str, Any]]:
+    """Return {population: {cca2: rank}, area: {...}, total: int}, refreshing
+    it at most every RANKS_MAX_AGE_DAYS.
+
+    Ranking needs every country, which costs 3 paginated requests against a
+    budget measured per MONTH. Population and area rankings do not move on a
+    daily timescale, so this is cached and refreshed monthly — about 3
+    requests a month rather than 90.
+    """
+    try:
+        res = (
+            supabase.table('misc_content')
+            .select('payload, fetched_at')
+            .eq('kind', 'country')
+            .eq('key', RANKS_KEY)
+            .limit(1)
+            .execute()
+        )
+        rows = res.data or []
+        if rows:
+            fetched = datetime.fromisoformat(
+                str(rows[0]['fetched_at']).replace('Z', '+00:00')
+            )
+            age = datetime.now(timezone.utc) - fetched.astimezone(timezone.utc)
+            payload = rows[0].get('payload') or {}
+            if age.days < RANKS_MAX_AGE_DAYS and payload.get('population'):
+                return payload
+    except Exception as e:
+        print(f"Could not read country ranks: {e}")
+
+    everyone = fetch_all_countries()
+    if not everyone:
+        stats['notes'].append('Country ranks unavailable — ranks omitted')
+        return None
+
+    def _rank_by(field: str) -> Dict[str, int]:
+        ranked = sorted(
+            (c for c in everyone if c.get(field) and c.get('cca2')),
+            key=lambda c: c[field],
+            reverse=True,
+        )
+        return {c['cca2']: i + 1 for i, c in enumerate(ranked)}
+
+    payload = {
+        'population': _rank_by('population'),
+        'area': _rank_by('area_km2'),
+        'total': len(everyone),
+        'computed_at': datetime.now(timezone.utc).isoformat(),
+    }
+    try:
+        upsert_misc(supabase, [_record('country', RANKS_KEY, payload)])
+    except Exception as e:
+        print(f"Could not store country ranks: {e}")
+    return payload
+
+
 def _country_is_current(supabase: Client, code: str, now: datetime) -> bool:
     """True when the stored country row is already today's rotation pick.
 
@@ -173,6 +260,7 @@ def sync_misc_data(supabase: Client) -> Dict[str, Any]:
         'countries_upserted': 0,
         'words_upserted': 0,
         'facts_upserted': 0,
+        'onthisday_upserted': 0,
         'errors': [],
         'notes': [],
     }
@@ -215,16 +303,36 @@ def sync_misc_data(supabase: Client) -> Dict[str, Any]:
         except Exception as e:
             stats['errors'].append(f'Error fetching holidays: {e}')
 
-    # ── Wikipedia ────────────────────────────────────────────
+    # ── Wikipedia — several random articles per day ───────────
+    wiki_keys: List[str] = []
+    seen_titles: set = set()
+    for i in range(WIKI_COUNT):
+        try:
+            page = fetch_random_wikipedia_summary()
+            # /page/random can repeat; a duplicate would render as two
+            # identical cards, so skip it rather than storing it.
+            if not page or page.get('title') in seen_titles:
+                continue
+            seen_titles.add(page.get('title'))
+            key = str(len(wiki_keys))
+            records.append(_record('wikipedia', key, page))
+            wiki_keys.append(key)
+        except Exception as e:
+            stats['errors'].append(f'Error fetching Wikipedia summary: {e}')
+    stats['wikipedia_upserted'] = len(wiki_keys)
+    if not wiki_keys:
+        stats['errors'].append('Wikipedia fetch returned nothing')
+
+    # ── Wikipedia — on this day ──────────────────────────────
     try:
-        page = fetch_random_wikipedia_summary()
-        if page:
-            records.append(_record('wikipedia', '', page))
-            stats['wikipedia_upserted'] = 1
+        events = fetch_on_this_day(limit=ONTHISDAY_COUNT)
+        if events:
+            records.append(_record('onthisday', '', {'events': events}))
+            stats['onthisday_upserted'] = 1
         else:
-            stats['errors'].append('Wikipedia fetch returned nothing')
+            stats['errors'].append('On This Day fetch returned nothing')
     except Exception as e:
-        stats['errors'].append(f'Error fetching Wikipedia summary: {e}')
+        stats['errors'].append(f'Error fetching On This Day: {e}')
 
     # ── Country of the day ───────────────────────────────────
     #
@@ -247,6 +355,11 @@ def sync_misc_data(supabase: Client) -> Dict[str, Any]:
             else:
                 country = fetch_country_by_code(code)
                 if country:
+                    ranks = _ensure_country_ranks(supabase, stats)
+                    if ranks:
+                        country['population_rank'] = (ranks.get('population') or {}).get(country['cca2'])
+                        country['area_rank'] = (ranks.get('area') or {}).get(country['cca2'])
+                        country['ranked_of'] = ranks.get('total')
                     # Single key: the card shows one country a day, so a new row
                     # per country would grow forever for no reader.
                     records.append(_record('country', '', country))
@@ -267,19 +380,30 @@ def sync_misc_data(supabase: Client) -> Dict[str, Any]:
     except Exception as e:
         stats['errors'].append(f'Error fetching word of the day: {e}')
 
-    # ── Useless fact ─────────────────────────────────────────
-    try:
-        fact = fetch_useless_fact()
-        if fact:
-            records.append(_record('fact', '', fact))
-            stats['facts_upserted'] = 1
-        else:
-            stats['errors'].append('Useless fact fetch returned nothing')
-    except Exception as e:
-        stats['errors'].append(f'Error fetching useless fact: {e}')
+    # ── Useless facts — several per day ──────────────────────
+    fact_keys: List[str] = []
+    seen_facts: set = set()
+    for i in range(FACT_COUNT):
+        try:
+            fact = fetch_useless_fact()
+            if not fact or fact.get('text') in seen_facts:
+                continue
+            seen_facts.add(fact.get('text'))
+            key = str(len(fact_keys))
+            records.append(_record('fact', key, fact))
+            fact_keys.append(key)
+        except Exception as e:
+            stats['errors'].append(f'Error fetching useless fact: {e}')
+    stats['facts_upserted'] = len(fact_keys)
+    if not fact_keys:
+        stats['errors'].append('Useless fact fetch returned nothing')
 
     if records:
         upsert_misc(supabase, records, errors=stats['errors'])
+        if wiki_keys:
+            _prune_extra_keys(supabase, 'wikipedia', wiki_keys)
+        if fact_keys:
+            _prune_extra_keys(supabase, 'fact', fact_keys)
 
     return stats
 

@@ -2,6 +2,7 @@ import type {
   CountryPayload,
   FactPayload,
   Holiday,
+  OnThisDayEvent,
   WeatherPayload,
   WikipediaPayload,
   WordPayload,
@@ -33,6 +34,21 @@ const WEATHER_GLYPH: Record<string, string> = {
 const glyph = (icon: string | null | undefined) =>
   (icon && WEATHER_GLYPH[icon]) || "○";
 
+/** Display name for a weather row.
+ *
+ *  Derived from the ETL key ("Bangkok,Thailand"), NOT from Visual Crossing's
+ *  `resolvedAddress` — that comes back in the location's own language, which
+ *  rendered Bangkok as กรุงเทพมหานคร. The key is always the English string we
+ *  asked for.
+ */
+function cityLabel(key: string, parts = 1): string {
+  return key
+    .split(",")
+    .slice(0, parts)
+    .map((p) => p.trim())
+    .join(", ");
+}
+
 function CardShell({
   title,
   meta,
@@ -43,8 +59,8 @@ function CardShell({
   children: React.ReactNode;
 }) {
   return (
-    <section className="bg-background p-4 flex flex-col">
-      <div className="flex items-baseline justify-between gap-2 mb-3">
+    <section className="bg-background p-3 flex flex-col">
+      <div className="flex items-baseline justify-between gap-2 mb-2">
         <h3 className="text-xs font-mono font-bold tracking-wider uppercase">
           <span style={{ color: MISC_ACCENT }}>▪</span> {title}
         </h3>
@@ -68,10 +84,7 @@ export function WeatherCard({
 }) {
   const c = data.current;
   const round = (n: number | null) => (n == null ? "—" : Math.round(n));
-  // The ETL key ("New York,NY") is the fallback; the resolved address is
-  // friendlier but can be long, so trim it to city + region.
-  const label =
-    data.resolved_address?.split(",").slice(0, 2).join(", ") ?? city;
+  const label = cityLabel(city, 2);
 
   return (
     <CardShell title={label} meta={c.conditions}>
@@ -117,7 +130,7 @@ export function WeatherCard({
 export function HolidaysCard({ holidays }: { holidays: Holiday[] }) {
   return (
     <CardShell title="Upcoming Holidays" meta={`${holidays.length}`}>
-      <ul className="space-y-2">
+      <ul className="space-y-1">
         {holidays.slice(0, 6).map((h) => (
           <li key={`${h.date}-${h.name}`} className="flex gap-3 items-baseline">
             <span className="text-[10px] font-mono text-muted-foreground tabular-nums shrink-0 w-14">
@@ -134,43 +147,153 @@ export function HolidaysCard({ holidays }: { holidays: Holiday[] }) {
   );
 }
 
-export function WikipediaCard({ page }: { page: WikipediaPayload }) {
+export function WikipediaCard({ pages }: { pages: WikipediaPayload[] }) {
   return (
-    <CardShell title="From Wikipedia" meta="RANDOM">
-      <a
-        href={page.url ?? "#"}
-        target="_blank"
-        rel="noopener noreferrer"
-        className="group block"
-      >
-        <p
-          className="text-base font-bold leading-tight group-hover:underline"
-          style={{ fontFamily: "Georgia, serif" }}
-        >
-          {page.title}
-        </p>
-        {page.description && (
-          <p className="text-[10px] font-mono text-muted-foreground uppercase tracking-wide mt-0.5">
-            {page.description}
-          </p>
-        )}
-        {page.extract && (
-          <p className="text-xs leading-relaxed text-muted-foreground mt-2 line-clamp-6">
-            {page.extract}
-          </p>
-        )}
-      </a>
+    <CardShell title="From Wikipedia" meta={`${pages.length} RANDOM`}>
+      <div className="space-y-2">
+        {pages.map((page, i) => (
+          <a
+            key={page.title}
+            href={page.url ?? "#"}
+            target="_blank"
+            rel="noopener noreferrer"
+            className={`group block ${i > 0 ? "pt-2 border-t border-border" : ""}`}
+          >
+            <div className="flex gap-2.5">
+              {page.thumbnail && (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img
+                  src={page.thumbnail}
+                  alt=""
+                  loading="lazy"
+                  className="w-12 h-12 object-cover border border-border shrink-0"
+                />
+              )}
+              <div className="min-w-0">
+                <p
+                  className="text-sm font-bold leading-tight group-hover:underline"
+                  style={{ fontFamily: "Georgia, serif" }}
+                >
+                  {page.title}
+                </p>
+                {page.description && (
+                  <p className="text-[10px] font-mono text-muted-foreground uppercase tracking-wide mt-0.5 line-clamp-1">
+                    {page.description}
+                  </p>
+                )}
+              </div>
+            </div>
+            {page.extract && (
+              <p className="text-xs leading-relaxed text-muted-foreground mt-1.5 line-clamp-3">
+                {page.extract}
+              </p>
+            )}
+          </a>
+        ))}
+      </div>
     </CardShell>
+  );
+}
+
+export function OnThisDayCard({ events }: { events: OnThisDayEvent[] }) {
+  const today = new Date().toLocaleDateString("en-US", {
+    month: "long",
+    day: "numeric",
+  });
+  return (
+    <CardShell title="On This Day" meta={today}>
+      <ul className="space-y-1">
+        {events.map((e, i) => {
+          const body = (
+            <>
+              <span
+                className="text-[10px] font-mono font-bold tabular-nums shrink-0 w-9"
+                style={{ color: MISC_ACCENT }}
+              >
+                {e.year}
+              </span>
+              <span className="text-xs leading-snug min-w-0">{e.text}</span>
+            </>
+          );
+          return (
+            <li key={`${e.year}-${i}`}>
+              {e.url ? (
+                <a
+                  href={e.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="flex gap-2 items-baseline group hover:underline"
+                >
+                  {body}
+                </a>
+              ) : (
+                <div className="flex gap-2 items-baseline">{body}</div>
+              )}
+            </li>
+          );
+        })}
+      </ul>
+    </CardShell>
+  );
+}
+
+/** Rank badge, colored by percentile: better rank = greener.
+ *
+ *  The scale is relative to the field size, not the raw number — #20 means
+ *  something very different out of 254 than out of 30. Buckets rather than a
+ *  gradient so the colors stay distinguishable at 9px, and both hues come from
+ *  the palette the rest of the site already uses for up/down.
+ */
+const RANK_SCALE = [
+  { max: 0.1, color: "hsl(142 70% 38%)" },  // top 10%
+  { max: 0.33, color: "hsl(142 55% 45%)" }, // top third
+  { max: 0.66, color: "hsl(220 6% 50%)" },  // middle — deliberately neutral
+  { max: 0.9, color: "hsl(15 75% 52%)" },   // bottom third
+  { max: Infinity, color: "hsl(0 72% 50%)" }, // bottom 10%
+];
+
+function rankColor(rank: number, of?: number | null): string {
+  // With no field size we cannot say whether the rank is good, so stay neutral.
+  if (!of || of <= 1) return "hsl(220 6% 50%)";
+  const pct = (rank - 1) / (of - 1);
+  return (RANK_SCALE.find((b) => pct <= b.max) ?? RANK_SCALE[2]).color;
+}
+
+/** "#11 of 254" — the rank is meaningless without the field size. */
+function Rank({ rank, of }: { rank?: number | null; of?: number | null }) {
+  if (!rank) return null;
+  const color = rankColor(rank, of);
+  return (
+    <span
+      className="ml-1.5 text-[9px] font-mono font-bold px-1 py-px rounded-sm align-middle whitespace-nowrap"
+      style={{ background: `color-mix(in srgb, ${color} 15%, transparent)`, color }}
+      title={of ? `Ranked ${rank} of ${of} countries` : undefined}
+    >
+      #{rank}
+      {of ? <span className="opacity-55">/{of}</span> : null}
+    </span>
   );
 }
 
 export function CountryCard({ country }: { country: CountryPayload }) {
   const fmt = (n: number | null) => (n == null ? "—" : n.toLocaleString());
-  const rows: [string, string][] = [
+  const rows: [string, React.ReactNode][] = [
     ["CAPITAL", country.capital ?? "—"],
     ["REGION", [country.region, country.subregion].filter(Boolean).join(" · ") || "—"],
-    ["POPULATION", fmt(country.population)],
-    ["AREA", country.area_km2 ? `${fmt(country.area_km2)} km²` : "—"],
+    [
+      "POPULATION",
+      <>
+        {fmt(country.population)}
+        <Rank rank={country.population_rank} of={country.ranked_of} />
+      </>,
+    ],
+    [
+      "AREA",
+      <>
+        {country.area_km2 ? `${fmt(country.area_km2)} km²` : "—"}
+        <Rank rank={country.area_rank} of={country.ranked_of} />
+      </>,
+    ],
     ["LANGUAGES", country.languages.slice(0, 3).join(", ") || "—"],
     [
       "CURRENCY",
@@ -178,6 +301,8 @@ export function CountryCard({ country }: { country: CountryPayload }) {
         .map((c) => [c.code, c.symbol && `(${c.symbol})`].filter(Boolean).join(" "))
         .join(", ") || "—",
     ],
+    ["TIMEZONES", country.timezones.length ? `${country.timezones.length}` : "—"],
+    ["BORDERS", country.borders.length ? country.borders.join(", ") : "None (island)"],
   ];
 
   return (
@@ -207,7 +332,7 @@ export function CountryCard({ country }: { country: CountryPayload }) {
             <dt className="text-[9px] font-mono text-muted-foreground w-20 shrink-0">
               {k}
             </dt>
-            <dd className="text-xs leading-snug">{v}</dd>
+            <dd className="text-xs leading-snug min-w-0">{v}</dd>
           </div>
         ))}
       </dl>
@@ -240,20 +365,302 @@ export function WordCard({ word }: { word: WordPayload }) {
   );
 }
 
-export function FactCard({ fact }: { fact: FactPayload }) {
+export function FactCard({ facts }: { facts: FactPayload[] }) {
   return (
-    <CardShell title="Useless Fact" meta="DID YOU KNOW">
-      <p
-        className="text-sm leading-relaxed"
-        style={{ fontFamily: "Georgia, serif" }}
-      >
-        {fact.text}
-      </p>
-      {fact.source && (
-        <p className="text-[10px] font-mono text-muted-foreground mt-2">
-          — {fact.source}
-        </p>
-      )}
+    <CardShell title="Useless Facts" meta="DID YOU KNOW">
+      <ul className="space-y-1.5">
+        {facts.map((fact, i) => (
+          <li
+            key={fact.text}
+            className={`flex gap-2 ${i > 0 ? "pt-1.5 border-t border-border" : ""}`}
+          >
+            <span
+              className="text-xs font-mono shrink-0 leading-relaxed"
+              style={{ color: MISC_ACCENT }}
+              aria-hidden
+            >
+              ›
+            </span>
+            <p
+              className="text-sm leading-relaxed"
+              style={{ fontFamily: "Georgia, serif" }}
+            >
+              {fact.text}
+            </p>
+          </li>
+        ))}
+      </ul>
     </CardShell>
+  );
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+// Command Center variants
+//
+// The homepage renders these inside a narrow masonry column (~250px), so they
+// are not the /misc cards scaled down — they drop the forecast strip and the
+// prose and keep only what survives at that width. The glyph map and the
+// weather semantics are shared with the full cards above.
+// ───────────────────────────────────────────────────────────────────────────
+
+/** 2 rows x 3 columns of cities, matching the /misc glyphs and formatting. */
+export function WeatherGridMini({
+  cities,
+}: {
+  cities: { key: string; payload: WeatherPayload }[];
+}) {
+  const round = (n: number | null) => (n == null ? "—" : Math.round(n));
+
+  return (
+    <div className="grid grid-cols-3">
+      {cities.slice(0, 6).map((c, i) => {
+        const cur = c.payload.current;
+        const today = c.payload.forecast[0];
+        return (
+          <div
+            key={c.key}
+            className={`flex flex-col items-center text-center px-1 py-1 border-border
+              ${i % 3 !== 2 ? "border-r" : ""} ${i < 3 ? "border-b" : ""}`}
+            title={cur.conditions ?? undefined}
+          >
+            <span className="text-[8px] font-mono text-muted-foreground uppercase truncate w-full leading-[11px]">
+              {cityLabel(c.key)}
+            </span>
+            <span className="flex items-center gap-1 leading-none">
+              <span className="text-sm" aria-hidden>{glyph(cur.icon)}</span>
+              <span className="text-sm font-black tabular-nums">{round(cur.temp)}°</span>
+            </span>
+            {today && (
+              <span className="text-[8px] font-mono text-muted-foreground tabular-nums leading-[11px]">
+                {round(today.tempmax)}/{round(today.tempmin)}
+              </span>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+/** Apple/Google-style day tiles: a colored month cap over a large day number. */
+export function CalendarMini({ holidays }: { holidays: Holiday[] }) {
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+
+  return (
+    <div>
+      {holidays.slice(0, 5).map((h) => {
+        const d = new Date(`${h.date}T12:00:00`);
+        const days = Math.round((d.getTime() - today.getTime()) / 86_400_000);
+        const away =
+          days <= 0 ? "today" : days === 1 ? "tomorrow" : `in ${days} days`;
+
+        return (
+          <div
+            key={`${h.date}-${h.name}`}
+            className="flex items-center gap-2 px-2 py-0.5 min-h-[30px] border-b border-border last:border-0"
+          >
+            {/* The tile is the calendar affordance: month cap, then the number. */}
+            <div className="shrink-0 w-7 border border-border rounded-sm overflow-hidden bg-background">
+              <div
+                className="text-[7px] font-mono font-bold text-center leading-[9px] text-white uppercase"
+                style={{ background: MISC_ACCENT }}
+              >
+                {d.toLocaleDateString("en-US", { month: "short" })}
+              </div>
+              <div className="text-[11px] font-black text-center leading-[13px] tabular-nums">
+                {d.getDate()}
+              </div>
+            </div>
+            <p className="min-w-0 flex-1 text-[10px] font-semibold leading-tight line-clamp-2">
+              {h.name}
+            </p>
+            <span className="text-[8px] font-mono text-muted-foreground shrink-0 text-right leading-tight">
+              {away}
+            </span>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+/** Country facts + ranks, as a two-column grid in the narrow homepage column.
+ *
+ *  Values are abbreviated (122.7M, not 122,680,000) because a full-precision
+ *  population plus a rank badge does not fit half of a ~250px column.
+ */
+export function CountryMini({ country }: { country: CountryPayload }) {
+  const compact = (n: number | null) => {
+    if (n == null) return "—";
+    if (n >= 1_000_000_000) return `${(n / 1_000_000_000).toFixed(1)}B`;
+    if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
+    if (n >= 1_000) return `${(n / 1_000).toFixed(0)}K`;
+    return n.toLocaleString();
+  };
+
+  const cells: [string, React.ReactNode][] = [
+    ["Capital", country.capital ?? "—"],
+    ["Region", country.subregion || country.region || "—"],
+    [
+      "Population",
+      <>
+        {compact(country.population)}
+        <Rank rank={country.population_rank} of={country.ranked_of} />
+      </>,
+    ],
+    [
+      "Area",
+      <>
+        {country.area_km2 ? `${compact(country.area_km2)} km²` : "—"}
+        <Rank rank={country.area_rank} of={country.ranked_of} />
+      </>,
+    ],
+    ["Languages", country.languages.slice(0, 2).join(", ") || "—"],
+    ["Currency", country.currencies.map((c) => c.code).join(", ") || "—"],
+  ];
+
+  return (
+    <div>
+      <div className="flex items-center gap-1.5 px-2 py-1 border-b border-border">
+        <span className="text-base leading-none" aria-hidden>
+          {country.flag_emoji}
+        </span>
+        <p
+          className="text-[11px] font-bold leading-tight min-w-0"
+          style={{ fontFamily: "Georgia, serif" }}
+        >
+          {country.name_common}
+        </p>
+      </div>
+      <div className="grid grid-cols-2">
+        {cells.map(([k, v], i) => (
+          <div
+            key={k}
+            className={`px-2 py-1 border-border min-w-0
+              ${i % 2 === 0 ? "border-r" : ""}
+              ${i < cells.length - 2 ? "border-b" : ""}`}
+          >
+            <div className="text-[8px] font-mono text-muted-foreground uppercase leading-[10px]">
+              {k}
+            </div>
+            <div className="text-[10px] leading-[14px] truncate">{v}</div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/** Word of the day, then the day's Wikipedia articles, then the facts. */
+export function AlmanacMini({
+  word,
+  pages,
+  facts,
+}: {
+  word: WordPayload | null;
+  pages: WikipediaPayload[];
+  facts: FactPayload[];
+}) {
+  const row = "px-2 py-1 border-b border-border last:border-0";
+
+  return (
+    <div>
+      {word && (
+        <a
+          href={word.link ?? "#"}
+          target="_blank"
+          rel="noopener noreferrer"
+          className={`${row} block group hover:bg-secondary/50 transition-colors`}
+        >
+          <span className="text-[7px] font-mono uppercase tracking-wider leading-none" style={{ color: MISC_ACCENT }}>
+            Word of the day
+          </span>
+          <p
+            className="text-[13px] font-black leading-tight group-hover:underline"
+            style={{ fontFamily: "Georgia, serif" }}
+          >
+            {word.title}
+          </p>
+        </a>
+      )}
+
+      {pages.map((p) => (
+        <a
+          key={p.title}
+          href={p.url ?? "#"}
+          target="_blank"
+          rel="noopener noreferrer"
+          className={`${row} flex gap-2 group hover:bg-secondary/50 transition-colors`}
+        >
+          {p.thumbnail ? (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img
+              src={p.thumbnail}
+              alt=""
+              loading="lazy"
+              className="w-6 h-6 object-cover border border-border shrink-0"
+            />
+          ) : (
+            <span className="w-6 h-6 shrink-0 border border-border flex items-center justify-center text-[9px] font-mono text-muted-foreground">
+              W
+            </span>
+          )}
+          <div className="min-w-0">
+            <p className="text-[10px] font-semibold leading-[13px] line-clamp-1 group-hover:underline">
+              {p.title}
+            </p>
+            {p.description && (
+              <p className="text-[8px] font-mono text-muted-foreground leading-[11px] line-clamp-1">
+                {p.description}
+              </p>
+            )}
+          </div>
+        </a>
+      ))}
+
+      {facts.map((f) => (
+        <div key={f.text} className={`${row} flex gap-1.5`}>
+          <span className="text-[9px] font-mono shrink-0" style={{ color: MISC_ACCENT }} aria-hidden>
+            ›
+          </span>
+          <p className="text-[10px] leading-[13px] line-clamp-2">{f.text}</p>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/** On This Day, compact: year gutter + event text. */
+export function OnThisDayMini({ events }: { events: OnThisDayEvent[] }) {
+  return (
+    <div>
+      {events.slice(0, 5).map((e, i) => {
+        const body = (
+          <>
+            <span
+              className="text-[10px] font-mono font-bold tabular-nums shrink-0 w-8"
+              style={{ color: MISC_ACCENT }}
+            >
+              {e.year}
+            </span>
+            <span className="text-[10px] leading-[13px] line-clamp-2 min-w-0">
+              {e.text}
+            </span>
+          </>
+        );
+        const cls =
+          "flex items-baseline gap-1.5 px-2 py-0.5 border-b border-border last:border-0 hover:bg-secondary/50 transition-colors group";
+        return e.url ? (
+          <a key={`${e.year}-${i}`} href={e.url} target="_blank" rel="noopener noreferrer" className={cls}>
+            {body}
+          </a>
+        ) : (
+          <div key={`${e.year}-${i}`} className={cls}>
+            {body}
+          </div>
+        );
+      })}
+    </div>
   );
 }

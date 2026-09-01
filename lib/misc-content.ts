@@ -47,6 +47,12 @@ export type WikipediaPayload = {
   thumbnail?: string | null;
 };
 
+export type OnThisDayEvent = {
+  year: number | null;
+  text: string;
+  url?: string | null;
+};
+
 export type CountryPayload = {
   cca2: string | null;
   name_common: string | null;
@@ -64,6 +70,9 @@ export type CountryPayload = {
   flag_emoji: string | null;
   flag_png: string | null;
   map_url: string | null;
+  population_rank?: number | null;
+  area_rank?: number | null;
+  ranked_of?: number | null;
 };
 
 export type WordPayload = {
@@ -90,10 +99,11 @@ export type MiscRow = {
 export type MiscContent = {
   weather: { key: string; payload: WeatherPayload; fetched_at: string }[];
   holidays: Holiday[];
-  wikipedia: WikipediaPayload | null;
+  wikipedia: WikipediaPayload[];
+  onThisDay: OnThisDayEvent[];
   country: CountryPayload | null;
   word: WordPayload | null;
-  fact: FactPayload | null;
+  facts: FactPayload[];
   fetchedAt: string | null;
 };
 
@@ -124,6 +134,12 @@ function asFact(p: unknown): FactPayload | null {
     ? (p as unknown as FactPayload)
     : null;
 }
+function asOnThisDay(p: unknown): OnThisDayEvent[] {
+  if (!isRecord(p) || !Array.isArray(p.events)) return [];
+  return (p.events as unknown[]).filter(
+    (e): e is OnThisDayEvent => isRecord(e) && typeof e.text === "string"
+  );
+}
 function asHolidays(p: unknown): Holiday[] {
   if (!isRecord(p) || !Array.isArray(p.holidays)) return [];
   return (p.holidays as unknown[]).filter(
@@ -135,9 +151,14 @@ function asHolidays(p: unknown): Holiday[] {
 export const WEATHER_ORDER = [
   "New York,NY",
   "Charlottesville,VA",
+  "Chicago,IL",
   "Brora,Scotland",
   "Aspen,CO",
+  "Bangkok,Thailand",
 ] as const;
+
+/** The ('country','ranks') row is an ETL-side rank cache, not a card. */
+const RANKS_KEY = "ranks";
 
 export async function getMiscContent(
   supabase?: Awaited<ReturnType<typeof createClient>>
@@ -148,7 +169,12 @@ export async function getMiscContent(
     .select("kind, key, payload, fetched_at");
 
   const rows = (data ?? []) as MiscRow[];
-  const byKind = (kind: string) => rows.filter((r) => r.kind === kind);
+  const byKind = (kind: string) =>
+    rows
+      .filter((r) => r.kind === kind && r.key !== RANKS_KEY)
+      // Multi-row kinds are keyed '0','1',... — keep that order, not the
+      // database's.
+      .sort((a, b) => a.key.localeCompare(b.key, undefined, { numeric: true }));
   const one = (kind: string) => byKind(kind)[0]?.payload;
 
   const weather = byKind("weather")
@@ -171,10 +197,15 @@ export async function getMiscContent(
   return {
     weather,
     holidays: asHolidays(one("holiday")),
-    wikipedia: asWikipedia(one("wikipedia")),
+    wikipedia: byKind("wikipedia")
+      .map((r) => asWikipedia(r.payload))
+      .filter((p): p is WikipediaPayload => p !== null),
+    onThisDay: asOnThisDay(one("onthisday")),
     country: asCountry(one("country")),
     word: asWord(one("word")),
-    fact: asFact(one("fact")),
+    facts: byKind("fact")
+      .map((r) => asFact(r.payload))
+      .filter((p): p is FactPayload => p !== null),
     fetchedAt,
   };
 }

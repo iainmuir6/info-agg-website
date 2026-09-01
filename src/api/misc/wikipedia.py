@@ -4,7 +4,7 @@ wikipedia.py
 Lightweight helpers for the Wikipedia REST API.
 """
 
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 from datetime import datetime
 import os
 import requests
@@ -50,8 +50,10 @@ def fetch_wikipedia_summary(title: str, lang: str = "en") -> Optional[Dict[str, 
             "description": data.get("description"),
             "extract": data.get("extract"),
             "lang": data.get("lang", lang),
-            "content_urls": data.get("content_urls", {}),
-            "thumbnail": data.get("thumbnail", {}),
+            # Flattened: the card wants a href and an <img src>, and the
+            # nested envelopes made every link render as "#".
+            "url": ((data.get("content_urls") or {}).get("desktop") or {}).get("page"),
+            "thumbnail": (data.get("thumbnail") or {}).get("source"),
             "fetched_at": data["fetched_at"],
         }
     except requests.exceptions.RequestException as e:
@@ -60,6 +62,51 @@ def fetch_wikipedia_summary(title: str, lang: str = "en") -> Optional[Dict[str, 
     except ValueError as e:
         print(f"Error parsing Wikipedia summary for '{title}': {e}")
         return None
+
+
+def fetch_on_this_day(
+    month: Optional[int] = None,
+    day: Optional[int] = None,
+    limit: int = 8,
+    lang: str = "en",
+) -> List[Dict[str, Any]]:
+    """
+    Fetch historical events for a calendar day from the Wikimedia feed API.
+
+    Keyless. Returns newest-first (the feed's own order), trimmed to `limit`.
+    """
+    now = datetime.utcnow()
+    mm = f"{month or now.month:02d}"
+    dd = f"{day or now.day:02d}"
+    url = _build_url(f"/feed/onthisday/events/{mm}/{dd}", lang=lang)
+
+    try:
+        response = requests.get(
+            url, headers={"User-Agent": "InfoAggETL/1.0 (infoagg@gmail.com)"}, timeout=10
+        )
+        response.raise_for_status()
+        data = response.json()
+    except requests.exceptions.RequestException as e:
+        print(f"Error fetching Wikipedia On This Day: {e}")
+        return []
+    except ValueError as e:
+        print(f"Error parsing Wikipedia On This Day: {e}")
+        return []
+
+    events: List[Dict[str, Any]] = []
+    for ev in (data.get("events") or [])[:limit]:
+        # The first linked page is the event's own article often enough to be
+        # a useful "read more" target; the rest are incidental mentions.
+        pages = ev.get("pages") or []
+        link = None
+        if pages:
+            link = ((pages[0].get("content_urls") or {}).get("desktop") or {}).get("page")
+        events.append({
+            "year": ev.get("year"),
+            "text": ev.get("text"),
+            "url": link,
+        })
+    return events
 
 
 def fetch_random_wikipedia_summary(lang: str = "en") -> Optional[Dict[str, Any]]:
@@ -85,8 +132,10 @@ def fetch_random_wikipedia_summary(lang: str = "en") -> Optional[Dict[str, Any]]
             "description": data.get("description"),
             "extract": data.get("extract"),
             "lang": data.get("lang", lang),
-            "content_urls": data.get("content_urls", {}),
-            "thumbnail": data.get("thumbnail", {}),
+            # Flattened: the card wants a href and an <img src>, and the
+            # nested envelopes made every link render as "#".
+            "url": ((data.get("content_urls") or {}).get("desktop") or {}).get("page"),
+            "thumbnail": (data.get("thumbnail") or {}).get("source"),
             "fetched_at": data["fetched_at"],
         }
     except requests.exceptions.RequestException as e:

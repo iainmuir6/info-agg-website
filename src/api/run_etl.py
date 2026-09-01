@@ -436,6 +436,7 @@ def run_misc_etl(supabase: Client) -> Dict[str, Any]:
             misc_stats.get(k, 0) for k in (
                 'weather_upserted', 'holidays_upserted', 'wikipedia_upserted',
                 'countries_upserted', 'words_upserted', 'facts_upserted',
+                'onthisday_upserted',
             )
         )
         stats = {
@@ -445,6 +446,7 @@ def run_misc_etl(supabase: Client) -> Dict[str, Any]:
             'countries': misc_stats.get('countries_upserted', 0),
             'words': misc_stats.get('words_upserted', 0),
             'facts': misc_stats.get('facts_upserted', 0),
+            'onthisday': misc_stats.get('onthisday_upserted', 0),
             'errors': misc_stats.get('errors', []),
         }
         if misc_stats.get('notes'):
@@ -756,7 +758,8 @@ def run_full_etl(
                     f"wiki={s.get('wikipedia',0)}  "
                     f"country={s.get('countries',0)}  "
                     f"word={s.get('words',0)}  "
-                    f"fact={s.get('facts',0)}")
+                    f"fact={s.get('facts',0)}  "
+                    f"otd={s.get('onthisday',0)}")
         return ''
 
     passed = failed = skipped = warned = 0

@@ -9,14 +9,18 @@
 -- two places instead: the `kind` CHECK below, and the discriminated union in
 -- lib/misc-content.ts that every reader goes through.
 --
--- `key` disambiguates rows within a kind — a city for weather, an ISO code for
--- a country — and is '' for the singleton kinds (fact, word, wikipedia).
+-- `key` disambiguates rows within a kind: a city for weather, an index ('0',
+-- '1', ...) for the kinds that store several rows a day (wikipedia, fact), and
+-- '' for the singletons (word, holiday, onthisday, country-of-the-day). The
+-- one non-content row is ('country', 'ranks'), an ETL-side cache of population
+-- and area rankings — readers must exclude it, which lib/misc-content.ts does.
 -- ============================================================
 
 CREATE TABLE IF NOT EXISTS info_agg.misc_content (
     id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    kind        TEXT NOT NULL CHECK (kind IN (
-                    'weather', 'holiday', 'wikipedia', 'country', 'word', 'fact'
+    kind        TEXT NOT NULL CONSTRAINT misc_content_kind_check CHECK (kind IN (
+                    'weather', 'holiday', 'wikipedia', 'onthisday',
+                    'country', 'word', 'fact'
                 )),
     key         TEXT NOT NULL DEFAULT '',
     payload     JSONB NOT NULL,

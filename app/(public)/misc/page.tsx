@@ -4,6 +4,7 @@ import {
   FactCard,
   HolidaysCard,
   MISC_ACCENT,
+  OnThisDayCard,
   WeatherCard,
   WikipediaCard,
   WordCard,
@@ -21,8 +22,13 @@ export default async function MiscPage() {
     ),
     misc.country && <CountryCard key="country" country={misc.country} />,
     misc.word && <WordCard key="word" word={misc.word} />,
-    misc.wikipedia && <WikipediaCard key="wikipedia" page={misc.wikipedia} />,
-    misc.fact && <FactCard key="fact" fact={misc.fact} />,
+    misc.onThisDay.length > 0 && (
+      <OnThisDayCard key="onthisday" events={misc.onThisDay} />
+    ),
+    misc.wikipedia.length > 0 && (
+      <WikipediaCard key="wikipedia" pages={misc.wikipedia} />
+    ),
+    misc.facts.length > 0 && <FactCard key="fact" facts={misc.facts} />,
   ].filter(Boolean);
 
   return (
@@ -46,7 +52,7 @@ export default async function MiscPage() {
           )}
         </div>
         <p className="text-xs font-mono text-muted-foreground mt-1 tracking-wider">
-          WEATHER · HOLIDAYS · COUNTRY · WORD · WIKIPEDIA · FACTS
+          WEATHER · HOLIDAYS · COUNTRY · WORD · ON THIS DAY · WIKIPEDIA · FACTS
         </p>
       </div>
 
