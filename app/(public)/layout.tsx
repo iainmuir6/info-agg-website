@@ -112,7 +112,7 @@ const NAV_LINKS = [
   { href: "/sports", label: "SPORTS", accent: "hsl(25 95% 50%)" },
   { href: "/markets", label: "MARKETS", accent: "hsl(142 65% 42%)" },
   { href: "/media", label: "MEDIA", accent: "hsl(340 78% 50%)" },
-  { href: "/misc", label: "ALMANAC", accent: "hsl(265 70% 55%)" },
+  { href: "/misc", label: "MISC", accent: "hsl(265 70% 55%)" },
 ];
 
 export default async function PublicLayout({ children }: { children: React.ReactNode }) {

@@ -282,3 +282,28 @@
 .score-grid > *:nth-child(even) {
   border-left: 1px solid hsl(var(--border));
 }
+
+/* Country map: OSM requires attribution, but the default control is a large
+   chip over a ~115px-tall card. Shrink it to a discreet corner mark. */
+.country-map .ol-attribution {
+  font-size: 8px;
+  line-height: 1.2;
+  background: transparent;
+  bottom: 0;
+  right: 0;
+  padding: 0;
+}
+.country-map .ol-attribution button {
+  width: 12px;
+  height: 12px;
+  min-height: 12px;
+  font-size: 8px;
+  line-height: 12px;
+  background: color-mix(in srgb, var(--background) 70%, transparent);
+  border-radius: 2px;
+}
+.country-map .ol-attribution ul {
+  font-size: 8px;
+  padding: 1px 3px;
+  background: color-mix(in srgb, var(--background) 85%, transparent);
+}

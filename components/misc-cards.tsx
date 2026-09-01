@@ -347,6 +347,7 @@ export function CountryCard({ country }: { country: CountryPayload }) {
           lat={country.lat}
           lng={country.lng}
           name={country.name_common}
+          ccn3={country.ccn3}
           areaKm2={country.area_km2}
           className="h-[150px] border border-border mb-3"
         />
@@ -582,6 +583,7 @@ export function CountryMini({ country }: { country: CountryPayload }) {
           lat={country.lat}
           lng={country.lng}
           name={country.name_common}
+          ccn3={country.ccn3}
           areaKm2={country.area_km2}
           className="h-[115px] border-b border-border"
         />
@@ -630,7 +632,7 @@ export function AlmanacMini({
         >
           {/* Pill is its own column so the definition wraps beside it rather
               than underneath, matching the Wiki and Fact rows. */}
-          <div className="flex gap-1.5 items-start">
+          <div className="flex gap-1.5 items-center">
             <Pill label="Word" />
             <div className="min-w-0">
               <div className="flex items-baseline gap-1.5">
@@ -662,7 +664,7 @@ export function AlmanacMini({
           href={p.url ?? "#"}
           target="_blank"
           rel="noopener noreferrer"
-          className={`${row} flex gap-1.5 items-start group hover:bg-secondary/50 transition-colors`}
+          className={`${row} flex gap-1.5 items-center group hover:bg-secondary/50 transition-colors`}
         >
           <Pill label="Wiki" />
           {p.thumbnail && (

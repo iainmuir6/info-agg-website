@@ -42,7 +42,7 @@ export const HOME_SECTIONS: { key: HomeSectionKey; label: string }[] = [
   { key: "youtube", label: "YouTube" },
   { key: "country", label: "Country of the Day" },
   { key: "onthisday", label: "On This Day" },
-  { key: "almanac", label: "Almanac" },
+  { key: "almanac", label: "Misc" },
 ];
 
 // Deliberately interleaved: markets / news / sports alternate instead of

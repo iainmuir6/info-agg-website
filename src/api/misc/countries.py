@@ -48,6 +48,9 @@ def _normalize_country(raw: Dict[str, Any]) -> Dict[str, Any]:
     return {
         "cca2": codes.get("alpha_2"),
         "cca3": codes.get("alpha_3"),
+        # Numeric ISO 3166-1: how world-atlas keys its TopoJSON features, so
+        # the map can find this country's polygon.
+        "ccn3": codes.get("ccn3"),
         "name_common": names.get("common"),
         "name_official": names.get("official"),
         "region": raw.get("region"),

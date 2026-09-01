@@ -55,6 +55,7 @@ export type OnThisDayEvent = {
 
 export type CountryPayload = {
   cca2: string | null;
+  ccn3?: string | null;
   name_common: string | null;
   name_official: string | null;
   region: string | null;

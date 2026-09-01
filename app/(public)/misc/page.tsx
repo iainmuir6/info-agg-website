@@ -40,7 +40,7 @@ export default async function MiscPage() {
             className="text-2xl font-black tracking-tight"
             style={{ fontFamily: "Georgia, serif" }}
           >
-            <span style={{ color: MISC_ACCENT }}>◎</span> ALMANAC
+            <span style={{ color: MISC_ACCENT }}>◎</span> MISC
           </h2>
           {misc.fetchedAt && (
             <span className="text-xs font-mono text-muted-foreground">
@@ -59,7 +59,7 @@ export default async function MiscPage() {
       {cards.length === 0 ? (
         <div className="border border-border p-12 text-center">
           <p className="text-xs font-mono text-muted-foreground tracking-wider">
-            NO ALMANAC DATA YET
+            NO MISC DATA YET
           </p>
           <p className="text-xs font-mono text-muted-foreground/70 mt-3">
             The next scheduled sync should populate this page — check back shortly.

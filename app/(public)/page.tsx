@@ -1182,7 +1182,7 @@ export default async function CommandCenter() {
     const almanacCount =
       (misc.word ? 1 : 0) + misc.wikipedia.length + misc.facts.length;
     cards.push({ section: "almanac", node: (
-      <CollapsibleCard label="Almanac" accent={MISC_ACCENT} href="/misc"
+      <CollapsibleCard label="Misc" accent={MISC_ACCENT} href="/misc"
         count={almanacCount}>
         <AlmanacMini word={misc.word} pages={misc.wikipedia} facts={misc.facts} />
       </CollapsibleCard>
