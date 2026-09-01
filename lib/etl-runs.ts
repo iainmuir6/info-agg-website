@@ -28,7 +28,7 @@ export type EtlRun = {
   cleanupTotal: number | null;
 };
 
-export const DOMAIN_ORDER = ["sports", "markets", "news", "media"] as const;
+export const DOMAIN_ORDER = ["sports", "markets", "news", "media", "misc"] as const;
 
 export const STATUS_COLOR: Record<string, string> = {
   success: "hsl(142 65% 42%)",
@@ -42,6 +42,7 @@ export const DOMAIN_ACCENT: Record<string, string> = {
   markets: "hsl(142 65% 42%)",
   news: "hsl(220 90% 52%)",
   media: "hsl(340 78% 50%)",
+  misc: "hsl(265 70% 55%)",
 };
 
 export const STATE_LABEL: Record<DomainOutcome["state"], string> = {

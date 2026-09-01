@@ -1,185 +1,170 @@
 """
 countries.py
 
-Wrappers for the REST Countries API.
+Wrapper for the REST Countries API (v5).
+
+v3.1 was deprecated in 2026 and now 301-redirects to a JSON stub whose body
+parses cleanly but carries none of the expected keys — so the old normalizer
+returned a dict of Nones without ever raising. v5 fixes that but is a
+different API: new host, bearer auth, a `data.objects[]` envelope, and
+restructured fields (`codes.alpha_2` not `cca2`, `area` an object not a float,
+`currencies`/`languages` arrays of objects not maps).
 """
 
+import os
 from typing import Any, Dict, List, Optional
-from datetime import datetime
+from datetime import datetime, timezone
 import requests
 
 from dotenv import load_dotenv
 
 load_dotenv()
 
-REST_COUNTRIES_BASE = "https://restcountries.com/v3.1"
+REST_COUNTRIES_BASE = "https://api.restcountries.com/countries/v5"
 
-# See: https://gitlab.com/restcountries/restcountries/-/blob/master/FIELDS.md
+# Trimmed to what the card renders; the full record is ~30 top-level keys
+# including paid-plan placeholders.
 COUNTRY_FIELDS = [
-    "name",             # object: {common, official, nativeName}
-    "altSpellings",
-    "cca2",             # 2-letter code
-    "cca3",             # 3-letter code
-    "ccn3",             # numeric code string (was "numeric" in old API)
-    "cioc",             # IOC country code
-    "independent",
-    "status",
-    "unMember",
-    "currencies",       # object
-    "idd",              # object (international direct dialing)
-    "capital",          # [string]
-    "latlng",           # [latitude, longitude]
-    "region",
-    "subregion",
-    "languages",        # object
-    "translations",
-    "landlocked",
-    "borders",
-    "area",             # float
-    "demonyms",
-    "flag",
-    "maps",
-    "population",
-    "fifa",
-    "car",
-    "timezones",
-    "continents",
-    "flags",
-    "coatOfArms",
-    "startOfWeek",
-    "capitalInfo",
-    "postalCode",
-    "tld",
+    "names", "codes", "capitals", "flag", "region", "subregion",
+    "area", "population", "currencies", "languages", "timezones",
+    "continents", "borders", "links",
 ]
 
 
+def get_countries_api_key() -> str:
+    """Return COUNTRIES_API_KEY, or '' when unset (caller degrades)."""
+    return os.getenv("COUNTRIES_API_KEY", "")
+
+
 def _normalize_country(raw: Dict[str, Any]) -> Dict[str, Any]:
-    name = raw.get("name", {})
+    names = raw.get("names") or {}
+    codes = raw.get("codes") or {}
+    capitals = raw.get("capitals") or []
+    flag = raw.get("flag") or {}
+    area = raw.get("area") or {}
+    links = raw.get("links") or {}
+
     return {
-        "cca2": raw.get("cca2"),
-        "cca3": raw.get("cca3"),
-        "name_common": name.get("common"),
-        "name_official": name.get("official"),
+        "cca2": codes.get("alpha_2"),
+        "cca3": codes.get("alpha_3"),
+        "name_common": names.get("common"),
+        "name_official": names.get("official"),
         "region": raw.get("region"),
         "subregion": raw.get("subregion"),
-        "capital": (raw.get("capital") or [None])[0],
+        "capital": (capitals[0].get("name") if capitals else None),
         "population": raw.get("population"),
-        "area": raw.get("area"),
-        "currencies": list((raw.get("currencies") or {}).keys()),
-        "languages": list((raw.get("languages") or {}).values()),
-        "flag": raw.get("flag"),
-        "fetched_at": datetime.utcnow().isoformat(),
+        "area_km2": area.get("kilometers"),
+        "currencies": [
+            {"code": c.get("code"), "name": c.get("name"), "symbol": c.get("symbol")}
+            for c in (raw.get("currencies") or [])
+        ],
+        "languages": [l.get("name") for l in (raw.get("languages") or []) if l.get("name")],
+        "timezones": raw.get("timezones") or [],
+        "continents": raw.get("continents") or [],
+        "borders": raw.get("borders") or [],
+        "flag_emoji": flag.get("emoji"),
+        "flag_png": flag.get("url_png"),
+        "flag_svg": flag.get("url_svg"),
+        "map_url": links.get("google_maps"),
+        "fetched_at": datetime.now(timezone.utc).isoformat(),
     }
 
 
-def fetch_all_countries(fields: Optional[List[str]] = COUNTRY_FIELDS) -> Optional[List[Dict[str, Any]]]:
-    """
-    Fetch all countries from REST Countries, batching field requests into
-    chunks of at most 10 fields and merging them back together.
-
-    Args:
-        fields: Optional list of field names to request from the API.
-
-    Returns:
-        List of raw country dicts (merged across batches), or None on error.
-    """
-    url = f"{REST_COUNTRIES_BASE}/all"
+def _get(path: str, params: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
+    api_key = get_countries_api_key()
+    if not api_key:
+        print("COUNTRIES_API_KEY not set — skipping REST Countries fetch")
+        return None
 
     try:
-        # Always ensure cca3 is requested so we can merge batches.
-        effective_fields: List[str] = fields[:] if fields is not None else COUNTRY_FIELDS[:]
-        if "cca3" not in effective_fields:
-            effective_fields.append("cca3")
-
-        # Simple case: <= 10 fields total — single request.
-        if len(effective_fields) <= 10:
-            params: Dict[str, Any] = {"fields": ",".join(effective_fields)}
-            response = requests.get(url, params=params, timeout=10)
-            response.raise_for_status()
-            return response.json()
-
-        # Batch non-id fields into chunks of at most 9, always including cca3.
-        non_id_fields = [f for f in effective_fields if f != "cca3"]
-        max_non_id_per_batch = 9
-
-        batched_fields: List[List[str]] = []
-        current: List[str] = []
-        for f in non_id_fields:
-            current.append(f)
-            if len(current) == max_non_id_per_batch:
-                batched_fields.append(current)
-                current = []
-        if current:
-            batched_fields.append(current)
-
-        merged: Dict[str, Dict[str, Any]] = {}
-
-        for chunk in batched_fields:
-            fields_param = ["cca3"] + chunk
-            params = {"fields": ",".join(fields_param)}
-            resp = requests.get(url, params=params, timeout=10)
-            resp.raise_for_status()
-            data = resp.json()
-            for raw in data:
-                key = raw.get("cca3")
-                if not key:
-                    continue
-                existing = merged.get(key)
-                if existing is None:
-                    merged[key] = dict(raw)
-                else:
-                    existing.update(raw)
-
-        return list(merged.values())
-
+        response = requests.get(
+            f"{REST_COUNTRIES_BASE}{path}",
+            params=params or {},
+            headers={"Authorization": f"Bearer {api_key}"},
+            timeout=15,
+        )
+        response.raise_for_status()
+        payload = response.json()
     except requests.exceptions.RequestException as e:
-        print(f"Error fetching countries from REST Countries: {e}")
+        print(f"Error fetching from REST Countries: {e}")
         return None
     except ValueError as e:
-        print(f"Error parsing countries from REST Countries: {e}")
+        print(f"Error parsing REST Countries response: {e}")
         return None
+
+    # v5 reports application errors in a 200 body, so check explicitly rather
+    # than trusting the status code — this is exactly how v3.1 failed silently.
+    if payload.get("errors"):
+        print(f"REST Countries returned errors: {payload['errors']}")
+        return None
+
+    data = payload.get("data")
+    if not isinstance(data, dict):
+        print("REST Countries response missing a 'data' object")
+        return None
+    return data
 
 
 def fetch_country_by_code(
     code: str,
-    fields: Optional[List[str]] = None,
+    fields: Optional[List[str]] = COUNTRY_FIELDS,
 ) -> Optional[Dict[str, Any]]:
-    """
-    Fetch a single country by ISO code (2- or 3-letter).
-    """
-    url = f"{REST_COUNTRIES_BASE}/alpha/{code}"
-    params = {}
+    """Fetch a single country by ISO alpha-2 (or alpha-3) code."""
+    key = "codes.alpha_3" if len(code) == 3 else "codes.alpha_2"
+    params: Dict[str, Any] = {}
     if fields:
-        params["fields"] = ",".join(fields)
+        params["response_fields"] = ",".join(fields)
 
-    try:
-        response = requests.get(url, params=params, timeout=10)
-        response.raise_for_status()
-        data = response.json()
-        if isinstance(data, list) and data:
-            return _normalize_country(data[0])
-        if isinstance(data, dict):
-            return _normalize_country(data)
+    data = _get(f"/{key}/{code.upper()}", params)
+    if not data:
         return None
-    except requests.exceptions.RequestException as e:
-        print(f"Error fetching country '{code}' from REST Countries: {e}")
+
+    objects = data.get("objects") or []
+    if not objects:
+        print(f"REST Countries returned no country for '{code}'")
         return None
-    except ValueError as e:
-        print(f"Error parsing country '{code}' from REST Countries: {e}")
-        return None
+    return _normalize_country(objects[0])
+
+
+def fetch_all_countries(
+    fields: Optional[List[str]] = COUNTRY_FIELDS,
+    page_limit: int = 100,
+) -> Optional[List[Dict[str, Any]]]:
+    """
+    Fetch every country, following v5's offset pagination.
+
+    The free plan caps `limit` at 100, so ~249 countries is 3 requests.
+    """
+    params: Dict[str, Any] = {"limit": page_limit, "offset": 0}
+    if fields:
+        params["response_fields"] = ",".join(fields)
+
+    out: List[Dict[str, Any]] = []
+    while True:
+        data = _get("", params)
+        if data is None:
+            # Return what we have rather than losing a near-complete page set.
+            return out or None
+
+        out.extend(_normalize_country(o) for o in (data.get("objects") or []))
+
+        meta = data.get("meta") or {}
+        if not meta.get("more"):
+            break
+        params["offset"] = meta.get("offset", 0) + meta.get("count", page_limit)
+
+    return out or None
 
 
 if __name__ == "__main__":
     print("=" * 60)
-    print("Testing REST Countries API")
+    print("Testing REST Countries v5")
     print("=" * 60)
 
     us = fetch_country_by_code("US")
     if us:
-        print(f"{us['name_common']} ({us['cca2']}): {us['region']}, capital={us['capital']}")
+        print(f"{us['flag_emoji']} {us['name_common']} ({us['cca2']}): "
+              f"{us['region']}, capital={us['capital']}, pop={us['population']:,}")
 
-    all_countries = fetch_all_countries()
-    if all_countries:
-        print(f"Found {len(all_countries)} countries")
-        for country in all_countries:
-            print(f"{country['name']['common']} ({country['cca2']}): {country['region']}, capital={country['capital']}")
+    everyone = fetch_all_countries()
+    print(f"Fetched {len(everyone) if everyone else 0} countries")

@@ -16,11 +16,14 @@ export type HomeSectionKey =
   | "sports"
   | "spotify"
   | "podcasts"
-  | "youtube";
+  | "youtube"
+  | "weather"
+  | "almanac";
 
 export const HOME_SECTIONS: { key: HomeSectionKey; label: string }[] = [
   { key: "stocks", label: "Stocks" },
   { key: "nyt", label: "NYT Top Stories" },
+  { key: "weather", label: "Weather" },
   { key: "sports", label: "Sports" },
   { key: "nyt_more", label: "NYT More Headlines" },
   { key: "market_news", label: "Market News" },
@@ -33,6 +36,7 @@ export const HOME_SECTIONS: { key: HomeSectionKey; label: string }[] = [
   { key: "spotify", label: "Spotify" },
   { key: "podcasts", label: "Top Podcasts" },
   { key: "youtube", label: "YouTube" },
+  { key: "almanac", label: "Almanac" },
 ];
 
 // Deliberately interleaved: markets / news / sports alternate instead of

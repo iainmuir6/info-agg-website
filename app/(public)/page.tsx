@@ -1,5 +1,7 @@
 import { Fragment } from "react";
 import { createClient } from "@/lib/supabase/server";
+import { getMiscContent } from "@/lib/misc-content";
+import { MISC_ACCENT } from "@/components/misc-cards";
 import Link from "next/link";
 import { DEFAULT_HOME_ORDER, type HomeSectionKey } from "@/lib/home-sections";
 import { TickerHoverChart } from "@/components/ticker-hover-chart";
@@ -989,6 +991,7 @@ export default async function CommandCenter() {
     nytAll,
     youtubeVideos,
     econIndicators,
+    misc,
     nba, mlb, nfl, nhl, ncaab, ncaaf, wnba,
   ] = await Promise.all([
     getCompanyNews(supabase, assets.coreTickers),
@@ -997,6 +1000,7 @@ export default async function CommandCenter() {
     getAllNyt(supabase),
     getYouTubeVideos(supabase),
     getEconomicIndicators(supabase),
+    getMiscContent(supabase),
     getLeagueSnapshot(supabase, "basketball", "nba"),
     getLeagueSnapshot(supabase, "baseball", "mlb"),
     getLeagueSnapshot(supabase, "football", "nfl"),
@@ -1116,6 +1120,96 @@ export default async function CommandCenter() {
       <CollapsibleCard label="Stocks" accent="hsl(142 65% 42%)" href="/markets"
         count={assets.stocks.length} summary={`${assets.stocks.length} stocks`}>
         <TickerGrid rows={assets.stocks} href="/markets" columns={2} large favoriteTickers={favorites.tickers} />
+      </CollapsibleCard>
+    )});
+  }
+
+  if (misc.weather.length > 0) {
+    cards.push({ section: "weather", node: (
+      <CollapsibleCard label="Weather" accent={MISC_ACCENT} href="/misc"
+        count={misc.weather.length} summary={`${misc.weather.length} cities`}>
+        <div>
+          {misc.weather.map((w) => {
+            const c = w.payload.current;
+            const city = w.payload.resolved_address?.split(",")[0] ?? w.key;
+            const round = (n: number | null) => (n == null ? "—" : Math.round(n));
+            const today = w.payload.forecast[0];
+            return (
+              <div key={w.key}
+                className="flex items-center min-h-[30px] gap-2 px-2 py-0.5 border-b border-border last:border-0">
+                <span className="min-w-0 flex-1 text-[10px] font-semibold leading-tight truncate">
+                  {city}
+                </span>
+                <span className="text-[10px] font-mono text-muted-foreground truncate max-w-[90px]">
+                  {c.conditions}
+                </span>
+                <span className="text-[11px] font-mono font-bold tabular-nums shrink-0">
+                  {round(c.temp)}°
+                </span>
+                {today && (
+                  <span className="text-[9px] font-mono text-muted-foreground tabular-nums shrink-0 w-12 text-right">
+                    {round(today.tempmax)}/{round(today.tempmin)}
+                  </span>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      </CollapsibleCard>
+    )});
+  }
+
+  // One card for the remaining almanac odds and ends — six separate cards
+  // would crowd the Command Center, and /misc is where the full set lives.
+  const almanacRows: { label: string; text: string; href?: string }[] = [
+    misc.word && {
+      label: "word",
+      text: misc.word.title,
+      href: misc.word.link ?? undefined,
+    },
+    misc.holidays[0] && {
+      label: "next",
+      text: `${misc.holidays[0].name} — ${new Date(
+        `${misc.holidays[0].date}T12:00:00`,
+      ).toLocaleDateString("en-US", { month: "short", day: "numeric" })}`,
+    },
+    misc.country && {
+      label: "country",
+      text: `${misc.country.flag_emoji ?? ""} ${misc.country.name_common}`.trim(),
+    },
+    misc.wikipedia && {
+      label: "wiki",
+      text: misc.wikipedia.title,
+      href: misc.wikipedia.url ?? undefined,
+    },
+    misc.fact && { label: "fact", text: misc.fact.text },
+  ].filter(Boolean) as { label: string; text: string; href?: string }[];
+
+  if (almanacRows.length > 0) {
+    cards.push({ section: "almanac", node: (
+      <CollapsibleCard label="Almanac" accent={MISC_ACCENT} href="/misc"
+        count={almanacRows.length}>
+        <div>
+          {almanacRows.map((row) => {
+            const body = (
+              <>
+                <HubCap label={row.label} />
+                <span className="min-w-0 text-[10px] font-semibold leading-tight line-clamp-2 group-hover:underline">
+                  {row.text}
+                </span>
+              </>
+            );
+            const cls =
+              "tap-row flex items-center min-h-[30px] gap-1.5 px-2 py-0.5 border-b border-border last:border-0 hover:bg-secondary/50 transition-colors group";
+            return row.href ? (
+              <a key={row.label} href={row.href} target="_blank" rel="noopener noreferrer" className={cls}>
+                {body}
+              </a>
+            ) : (
+              <div key={row.label} className={cls}>{body}</div>
+            );
+          })}
+        </div>
       </CollapsibleCard>
     )});
   }

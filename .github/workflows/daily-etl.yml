@@ -46,6 +46,11 @@ jobs:
       ALPHA_VANTAGE_API_KEY_2:         ${{ secrets.ALPHA_VANTAGE_API_KEY_2 }}
       ALPHA_VANTAGE_API_KEY_3:         ${{ secrets.ALPHA_VANTAGE_API_KEY_3 }}
       YOUTUBE_API_KEY:                 ${{ secrets.YOUTUBE_API_KEY }}
+      # Misc domain. Each is optional: an unset key makes that one card skip
+      # with a note rather than failing the domain (see sync_misc_data).
+      WEATHER_API_KEY:                 ${{ secrets.WEATHER_API_KEY }}
+      CALENDAR_API_KEY:                ${{ secrets.CALENDAR_API_KEY }}
+      COUNTRIES_API_KEY:               ${{ secrets.COUNTRIES_API_KEY }}
       # YouTube Data API v3 accepts a plain Google Cloud API key, so either
       # secret works; get_youtube_api_key() falls back to this one. Whichever
       # is absent resolves to empty and is simply ignored.

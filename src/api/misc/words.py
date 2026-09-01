@@ -7,6 +7,8 @@ Helpers for Merriam-Webster Word of the Day (RSS feed).
 from typing import Any, Dict, List
 from datetime import datetime
 import requests
+import html
+import re
 import xml.etree.ElementTree as ET
 
 from dotenv import load_dotenv
@@ -14,6 +16,22 @@ from dotenv import load_dotenv
 load_dotenv()
 
 MERRIAM_WOTD_RSS = "https://www.merriam-webster.com/wotd/feed/rss2"
+
+_TAG_RE = re.compile(r"<[^>]+>")
+_WS_RE = re.compile(r"\s+")
+
+
+def _strip_html(raw: str) -> str:
+    """Flatten the RSS description's HTML into readable prose.
+
+    The feed ships a full HTML fragment (<font>, <strong>, entity-escaped
+    pronunciation markup). Stored verbatim it renders as visible tag soup, so
+    unescape entities first, then drop tags, then collapse whitespace. Entities
+    are unescaped twice because the feed double-encodes them (&amp;#149;).
+    """
+    text = html.unescape(html.unescape(raw or ""))
+    text = _TAG_RE.sub(" ", text)
+    return _WS_RE.sub(" ", text).strip()
 
 
 def fetch_merriam_webster_wotd(limit: int = 1) -> List[Dict[str, Any]]:
@@ -51,7 +69,7 @@ def fetch_merriam_webster_wotd(limit: int = 1) -> List[Dict[str, Any]]:
         title = (item.findtext("title") or "").strip()
         link = (item.findtext("link") or "").strip()
         pub_date = (item.findtext("pubDate") or "").strip()
-        description = (item.findtext("description") or "").strip()
+        description = _strip_html(item.findtext("description") or "")
 
         items.append(
             {

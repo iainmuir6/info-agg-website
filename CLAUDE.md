@@ -20,6 +20,7 @@ python src/api/run_etl.py --sports-only
 python src/api/run_etl.py --markets-only                    # Quotes + news + sentiment + economic indicators
 python src/api/run_etl.py --news-only
 python src/api/run_etl.py --media-only
+python src/api/run_etl.py --misc-only                       # Weather, holidays, country, word, wiki, fact
 python src/api/run_etl.py --skip-sentiment                  # Skip AV sentiment (quotes + news only)
 python src/api/run_etl.py --cleanup --season-schedules      # What the daily cron runs (+ retention cleanup)
 python src/api/run_etl.py --test                            # Dry-run: hit every external API once, no DB writes
@@ -90,6 +91,9 @@ is ours (always fails).
 
 **Supabase Auth → URL configuration:** Add redirect URLs for the auth callback route, e.g. `http://localhost:3000/auth/callback` and `${NEXT_PUBLIC_SITE_URL}/auth/callback`.
 - API keys for fetchers: `NYT_API_KEY_1`, `NYT_API_KEY_2`, `FINNHUB_API_KEY_1`, `FINNHUB_API_KEY_2`, `FMP_API_KEY`, `ALPHA_VANTAGE_API_KEY` (+ `_1/_2`)
+- `WEATHER_API_KEY` — Visual Crossing timeline API. Powers the weather cards. Billed per *day of data*, so cost is `WEATHER_LOCATIONS` × `FORECAST_DAYS` (currently 4 cities × 5 days = 20 records/run) against 1,000/day.
+- `CALENDAR_API_KEY` — Calendarific. Powers the upcoming-holidays card. 500/month free; the daily run uses ~30.
+- `COUNTRIES_API_KEY` — REST Countries **v5** (`api.restcountries.com`, bearer auth). **Its free tier is 1,000 requests per MONTH, not per day** — `misc_db_helper._country_is_current()` therefore skips the fetch when today's rotation pick is already stored, capping it at one call per calendar day however often the daily run is dispatched. v3.1 is deprecated and silently returns a stub that parses as JSON with none of the expected keys, which is how the old fetcher produced a row of `None`s without raising.
 - `YOUTUBE_API_KEY` — YouTube Data API v3 key (API key only, no OAuth). Powers the trending-videos feed. `videos.list` with `chart=mostPopular` costs 1 unit against a 10,000/day quota, so a daily run is negligible. Create at https://console.cloud.google.com/apis/credentials with the YouTube Data API v3 enabled.
 - Spotify playlists/podcast embeds (`lib/top-podcasts.ts`) need no backend fetch — they're live `<iframe>`s, not ETL-synced. `SPOTIFY_CLIENT_ID`/`SPOTIFY_CLIENT_SECRET` are still required, though: `app/api/podcasts/search` uses them (client-credentials flow, `lib/spotify-search.ts`) to power the "search a podcast to favorite" UI on `/profile`. Reddit was removed.
 - `GITHUB_DISPATCH_TOKEN` — fine-grained PAT with Actions read/write on this repo. Required by `POST /api/etl` (the `/dashboard` admin trigger button) to fire `workflow_dispatch` against `.github/workflows/daily-etl.yml` / `intraday-refresh.yml`, since Vercel serverless has no Python runtime to run the ETL in-process.
@@ -104,7 +108,7 @@ This is a personal information aggregator ("Info Hub") with two layers:
 ### Next.js Frontend (`app/`, `components/`, `lib/`)
 
 **Route groups:**
-- `app/(public)/` — Public-facing pages with a shared newspaper-style layout (`layout.tsx`). Routes: `/` (Command Center dashboard), `/news`, `/sports`, `/sports/[league]`, `/[league]/[team]`, `/markets`, `/markets/[ticker]`, `/media`, `/economy`, `/profile` (favorites + podcast search, signed-in users), `/dashboard` (ETL run monitoring + trigger, `super_admin` only)
+- `app/(public)/` — Public-facing pages with a shared newspaper-style layout (`layout.tsx`). Routes: `/` (Command Center dashboard), `/news`, `/sports`, `/sports/[league]`, `/[league]/[team]`, `/markets`, `/markets/[ticker]`, `/media`, `/misc` (Almanac), `/economy`, `/profile` (favorites + podcast search, signed-in users), `/dashboard` (ETL run monitoring + trigger, `super_admin` only)
 - `app/(auth)/auth/` — Auth pages: login, sign-up, forgot-password, update-password
 - `app/auth/callback/route.ts` — Supabase PKCE exchange (`GET /auth/callback?code=…&next=…`)
 - `app/api/etl/` — `POST /api/etl` (`super_admin` only) fires a `workflow_dispatch` against `.github/workflows/daily-etl.yml` (or `intraday-refresh.yml` with `{ mode: "quick" }`) and returns immediately — Vercel serverless has no Python runtime, so the ETL always runs on GitHub Actions, never in-process. Progress shows up in `info_agg.etl_runs` and the Actions tab.
@@ -142,7 +146,7 @@ Each domain follows the same pattern:
 - `markets/` → Finnhub API (daily quotes, company news, market news) + FMP API (company profiles, ETF holdings, historical backfill) + Alpha Vantage (news sentiment)
 - `news/` → NYT Top Stories + Most Popular API (NewsAPI is not used anywhere in this codebase, despite what an earlier version of this doc claimed)
 - `media/` → YouTube Data API (trending videos). Spotify (playlists, Top Podcasts) is live-embedded on the frontend with no fetcher. Reddit was removed.
-- `misc/` — working fetchers (countries, facts, holidays, weather, wikipedia, words) that exist but aren't wired into `run_etl.py`; not a placeholder, just unintegrated
+- `misc/` → six single-call feeds behind one domain: Visual Crossing (weather, 4 cities), Calendarific (US holidays), REST Countries v5 (country of the day, rotating), Wikipedia REST (random summary), Merriam-Webster RSS (word of the day), uselessfacts. All land in `misc_content` as JSONB; each source degrades independently, and the domain never fails the run
 - `archive/` — retired scripts kept for reference, not run by anything (`run_db_seed.py`, `seed.py`, `av_seed.py`, plus old schema docs)
 
 Python venv: `_agg_venv/` (at repo root). Dependencies: `requirements.txt` (repo root).
@@ -163,6 +167,11 @@ All tables live in the `info_agg` schema. Apply migrations in order:
    anon's unused SELECT on the `watchlist_*`/`user_home_prefs` tables, and removes the
    `ALTER DEFAULT PRIVILEGES … GRANT SELECT TO anon` in `01` that made every new `info_agg` table
    world-readable by default. **New public tables now need an explicit `GRANT SELECT`.**
+10. `10_misc_content.sql` — `misc_content`, the single JSONB-payload table behind the six almanac
+   cards (weather, holidays, country, word, Wikipedia, fact), keyed on `(kind, key)`, plus its
+   index, RLS policy and the explicit `GRANT SELECT` that `09` now requires. One table rather than
+   six: the feeds are small, display-only and read whole, with no joins or cross-row filters. The
+   payload shape is enforced in `lib/misc-content.ts`, not by Postgres.
 
 > This Supabase project is shared with other apps, separated by schema. Keep `info_agg` migrations
 > scoped to `info_agg` — do not modify `public` or another app's schema from this repo.
@@ -172,6 +181,7 @@ All tables live in the `info_agg` schema. Apply migrations in order:
 - Markets: `stocks`, `stock_quotes`, `etf_holdings`, `company_news`, `market_news`, `news_sentiment`
 - News: `news_articles`
 - Media: `youtube_videos` (Spotify playlists/podcasts are embedded, not stored)
+- Misc: `misc_content` — one JSONB row per (kind, key) for all six almanac cards
 - User prefs: `watchlist_stocks`, `watchlist_leagues`, `watchlist_teams`, `watchlist_podcasts`, `user_home_prefs`
 - Ops: `etl_runs` — one row per ETL run (status, tier, timing, per-domain stats/errors), read by `/dashboard`
 

@@ -46,6 +46,7 @@ from markets.markets_db_helper import (
 )
 from news.news_db_helper import sync_nyt_data
 from media.media_db_helper import sync_youtube_data
+from misc.misc_db_helper import sync_misc_data
 
 load_dotenv()
 
@@ -420,6 +421,44 @@ def run_media_etl(supabase: Client) -> Dict[str, Any]:
                 'stats': {'youtube_videos': 0, 'errors': [f"media failed: {e}"]}}
 
 
+def run_misc_etl(supabase: Client) -> Dict[str, Any]:
+    """Run misc ETL: weather, holidays, Wikipedia, country, word, fact.
+
+    Six unrelated single-call feeds behind one table. Like media, this is the
+    least load-bearing data on the site and must never take the pipeline down:
+    each source already degrades individually inside sync_misc_data, and a
+    domain that writes nothing at all lands the run on 'partial', not 'failed'.
+    """
+    try:
+        misc_stats = sync_misc_data(supabase)
+
+        written = sum(
+            misc_stats.get(k, 0) for k in (
+                'weather_upserted', 'holidays_upserted', 'wikipedia_upserted',
+                'countries_upserted', 'words_upserted', 'facts_upserted',
+            )
+        )
+        stats = {
+            'weather': misc_stats.get('weather_upserted', 0),
+            'holidays': misc_stats.get('holidays_upserted', 0),
+            'wikipedia': misc_stats.get('wikipedia_upserted', 0),
+            'countries': misc_stats.get('countries_upserted', 0),
+            'words': misc_stats.get('words_upserted', 0),
+            'facts': misc_stats.get('facts_upserted', 0),
+            'errors': misc_stats.get('errors', []),
+        }
+        if misc_stats.get('notes'):
+            stats['notes'] = misc_stats['notes']
+
+        if written == 0:
+            stats['errors'].append('misc wrote 0 rows from any source')
+            return {'success': True, 'degraded': True, 'stats': stats}
+        return {'success': True, 'stats': stats}
+    except Exception as e:
+        return {'success': True, 'degraded': True,
+                'stats': {'weather': 0, 'errors': [f"misc failed: {e}"]}}
+
+
 def run_etfdb_etl(supabase: Client) -> None:
     """Scrape ETF info and top-15 holdings from etfdb.com. Manual trigger only.
 
@@ -492,6 +531,7 @@ def run_full_etl(
     skip_markets: bool = False,
     skip_news: bool = False,
     skip_media: bool = False,
+    skip_misc: bool = False,
     skip_sentiment: bool = False,
     triggered_by: str = 'manual',
     run_cleanup: bool = False,
@@ -527,6 +567,7 @@ def run_full_etl(
         'markets': None,
         'news': None,
         'media': None,
+        'misc': None,
     }
 
     # Observability: record the run (best-effort — never blocks the pipeline).
@@ -537,10 +578,10 @@ def run_full_etl(
     in_scope = [
         d for d, skipped in (
             ('sports', skip_sports), ('markets', skip_markets),
-            ('news', skip_news), ('media', skip_media),
+            ('news', skip_news), ('media', skip_media), ('misc', skip_misc),
         ) if not skipped
     ]
-    tier = 'daily' if len(in_scope) == 4 else f"scoped:{'+'.join(in_scope) or 'none'}"
+    tier = 'daily' if len(in_scope) == 5 else f"scoped:{'+'.join(in_scope) or 'none'}"
 
     try:
         run_supabase = get_supabase_client()
@@ -562,6 +603,8 @@ def run_full_etl(
         domain_fns['news'] = lambda: run_news_etl(get_supabase_client())
     if not skip_media:
         domain_fns['media'] = lambda: run_media_etl(get_supabase_client())
+    if not skip_misc:
+        domain_fns['misc'] = lambda: run_misc_etl(get_supabase_client())
 
     # Run all domains in parallel. Each domain thread fetches from external APIs then
     # writes to Supabase in batch upserts per table.
@@ -648,7 +691,7 @@ def run_full_etl(
 
     # Roll up run status: failed > partial > success
     active = {d: r for d, r in results.items()
-              if d in ('sports', 'markets', 'news', 'media') and r is not None}
+              if d in ('sports', 'markets', 'news', 'media', 'misc') and r is not None}
     all_errors = collect_domain_errors(active)
     if any(not r.get('success') for r in active.values()):
         run_status = 'failed'
@@ -687,7 +730,7 @@ def run_full_etl(
     print(f"Started: {start_time.strftime('%Y-%m-%d %H:%M:%S')}  ·  Duration: {duration:.1f}s")
     print("=" * W)
 
-    DOMAIN_ORDER = ['sports', 'markets', 'news', 'media']
+    DOMAIN_ORDER = ['sports', 'markets', 'news', 'media', 'misc']
 
     def _stat_str(domain: str, result: Dict[str, Any]) -> str:
         s = result.get('stats', {})
@@ -707,6 +750,13 @@ def run_full_etl(
                     f"articles={s.get('articles_inserted',0)}")
         if domain == 'media':
             return f"youtube={s.get('youtube_videos',0)}"
+        if domain == 'misc':
+            return (f"weather={s.get('weather',0)}  "
+                    f"holidays={s.get('holidays',0)}  "
+                    f"wiki={s.get('wikipedia',0)}  "
+                    f"country={s.get('countries',0)}  "
+                    f"word={s.get('words',0)}  "
+                    f"fact={s.get('facts',0)}")
         return ''
 
     passed = failed = skipped = warned = 0
@@ -757,12 +807,14 @@ def main():
     parser.add_argument('--skip-markets', action='store_true', help='Skip markets ETL')
     parser.add_argument('--skip-news',    action='store_true', help='Skip news ETL')
     parser.add_argument('--skip-media',   action='store_true', help='Skip media ETL')
+    parser.add_argument('--skip-misc',    action='store_true', help='Skip misc ETL')
 
     # ── Domain "only" shortcuts ───────────────────────────────────────────────
     parser.add_argument('--sports-only',  action='store_true', help='Run sports ETL only')
     parser.add_argument('--markets-only', action='store_true', help='Run markets ETL only (quotes + news + sentiment)')
     parser.add_argument('--news-only',    action='store_true', help='Run news ETL only')
     parser.add_argument('--media-only',   action='store_true', help='Run media ETL only')
+    parser.add_argument('--misc-only',    action='store_true', help='Run misc ETL only')
 
     # ── Markets options ───────────────────────────────────────────────────────
     parser.add_argument('--scrape-etf-info', action='store_true',
@@ -810,13 +862,15 @@ def main():
 
     # Expand "only" shortcuts into skip flags
     if args.sports_only:
-        args.skip_markets = args.skip_news = args.skip_media = True
+        args.skip_markets = args.skip_news = args.skip_media = args.skip_misc = True
     elif args.markets_only:
-        args.skip_sports = args.skip_news = args.skip_media = True
+        args.skip_sports = args.skip_news = args.skip_media = args.skip_misc = True
     elif args.news_only:
-        args.skip_sports = args.skip_markets = args.skip_media = True
+        args.skip_sports = args.skip_markets = args.skip_media = args.skip_misc = True
     elif args.media_only:
-        args.skip_sports = args.skip_markets = args.skip_news = True
+        args.skip_sports = args.skip_markets = args.skip_news = args.skip_misc = True
+    elif args.misc_only:
+        args.skip_sports = args.skip_markets = args.skip_news = args.skip_media = True
 
     # Preflight: fail fast on a hopeless environment, log degradations
     fatal, env_warnings = preflight_env()
@@ -833,6 +887,7 @@ def main():
         skip_markets=args.skip_markets,
         skip_news=args.skip_news,
         skip_media=args.skip_media,
+        skip_misc=args.skip_misc,
         skip_sentiment=args.skip_sentiment,
         triggered_by=args.triggered_by,
         run_cleanup=args.cleanup,
