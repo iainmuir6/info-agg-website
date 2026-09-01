@@ -376,12 +376,12 @@ export function WordCard({ word }: { word: WordPayload }) {
         className="group block"
       >
         <p
-          className="text-2xl font-black leading-tight group-hover:underline"
+          className="text-base font-black leading-tight group-hover:underline"
           style={{ fontFamily: "Georgia, serif" }}
         >
           {word.title}
         </p>
-        <p className="text-[10px] font-mono text-muted-foreground mt-0.5">
+        <p className="text-[9px] font-mono text-muted-foreground mt-0.5">
           {word.pronunciation && <span>\{word.pronunciation}\</span>}
           {word.part_of_speech && (
             <span className="italic ml-1.5">{word.part_of_speech}</span>
@@ -637,7 +637,7 @@ export function AlmanacMini({
             <div className="min-w-0">
               <div className="flex items-baseline gap-1.5">
                 <span
-                  className="text-[13px] font-black leading-tight group-hover:underline"
+                  className="text-[11px] font-black leading-tight group-hover:underline"
                   style={{ fontFamily: "Georgia, serif" }}
                 >
                   {word.title}

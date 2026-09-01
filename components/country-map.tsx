@@ -3,28 +3,30 @@
 import { useEffect, useRef } from "react";
 import Map from "ol/Map";
 import View from "ol/View";
-import TileLayer from "ol/layer/Tile";
 import VectorLayer from "ol/layer/Vector";
 import VectorSource from "ol/source/Vector";
-import OSM from "ol/source/OSM";
 import GeoJSON from "ol/format/GeoJSON";
-import Attribution from "ol/control/Attribution";
-import { Fill, Stroke, Style } from "ol/style";
+import { Fill, Stroke, Style, Text } from "ol/style";
 import { fromLonLat } from "ol/proj";
+import type { FeatureLike } from "ol/Feature";
 import "ol/ol.css";
 
 const ACCENT = "hsl(265 70% 55%)";
 
-/** Minimal OpenLayers map that highlights the country itself.
+/** Minimal vector map that highlights one country.
  *
- *  Deliberately inert: no zoom buttons, no scroll-wheel zoom, no drag. The
- *  card is a glance surface inside a scrolling dashboard, and a pannable map
- *  there would swallow page scroll on touch.
+ *  There are no raster tiles. OSM's standard tiles label places in each
+ *  country's own language (Japan rendered as 日本, its neighbours in Chinese
+ *  and Korean), and every keyless English-labelled basemap now wants an API
+ *  key — Carto's light_nolabels stamps "API KEY REQUIRED" over unkeyed tiles.
+ *  Drawing straight from world-atlas' 110m TopoJSON solves both at once: its
+ *  `properties.name` is already English, it is public-domain Natural Earth so
+ *  no attribution control is needed, and it is the same fetch that supplies
+ *  the highlight — so the whole map costs one lazy import and no tile traffic.
  *
- *  Tiles are plain OSM desaturated in CSS rather than a styled basemap —
- *  Carto's light_nolabels stamps "API KEY REQUIRED" across unkeyed tiles, and
- *  OSM needs no key. Borders come from world-atlas' 110m TopoJSON, loaded on
- *  demand so ~100KB of geometry stays out of the homepage bundle.
+ *  Deliberately inert: no zoom buttons, no wheel zoom, no drag. The card is a
+ *  glance surface inside a scrolling page, and a pannable map would swallow
+ *  page scroll on touch.
  */
 export function CountryMap({
   lat,
@@ -53,46 +55,65 @@ export function CountryMap({
       ? explicit === "dark"
       : !!window.matchMedia?.("(prefers-color-scheme: dark)").matches;
 
-    const shapes = new VectorSource();
-    const borders = new VectorSource();
+    const land = isDark ? "hsl(220 6% 26%)" : "hsl(220 10% 90%)";
+    const border = isDark ? "hsl(220 6% 38%)" : "hsl(220 8% 78%)";
+    const label = isDark ? "hsl(220 8% 68%)" : "hsl(220 8% 45%)";
+    const halo = isDark ? "hsl(220 10% 16%)" : "hsl(0 0% 100%)";
+
+    const world = new VectorSource();
+    const target = ccn3 ? String(Number(ccn3)) : null;
+
+    const worldStyle = (f: FeatureLike) => {
+      const isTarget = target != null && String(Number(f.getId())) === target;
+      return new Style({
+        fill: new Fill({ color: isTarget ? "hsl(265 70% 55% / 0.45)" : land }),
+        stroke: new Stroke({
+          color: isTarget ? ACCENT : border,
+          width: isTarget ? 0.75 : 0.4,
+        }),
+        // declutter drops labels that collide, so small countries simply go
+        // unlabelled instead of overprinting their neighbours.
+        text: new Text({
+          text: String(f.get("name") ?? ""),
+          font: "600 8px ui-monospace, SFMono-Regular, Menlo, monospace",
+          fill: new Fill({ color: isTarget ? ACCENT : label }),
+          stroke: new Stroke({ color: halo, width: 2.5 }),
+          overflow: false,
+        }),
+      });
+    };
+
     const map = new Map({
       target: el,
-      layers: [
-        new TileLayer({ source: new OSM() }),
-        // World borders sit under the highlight so the country reads as part
-        // of a map rather than a shape floating on a tile.
-        new VectorLayer({
-          source: borders,
-          style: new Style({
-            stroke: new Stroke({ color: "hsl(220 6% 55% / 0.5)", width: 0.5 }),
-          }),
-        }),
-        new VectorLayer({
-          source: shapes,
-          style: new Style({
-            fill: new Fill({ color: "hsl(265 70% 55% / 0.42)" }),
-            stroke: new Stroke({ color: ACCENT, width: 0.75 }),
-          }),
-        }),
-      ],
-      // Fallback framing until the polygon loads (and if it never does).
+      layers: [new VectorLayer({ source: world, style: worldStyle, declutter: true })],
+      // Fallback framing until the geometry loads (and if it never does).
       view: new View({
         center: fromLonLat([lng, lat]),
         zoom: zoomForArea(areaKm2),
         enableRotation: false,
       }),
-      controls: [new Attribution({ collapsible: true, collapsed: true })],
+      controls: [],
       interactions: [],
     });
 
-    // Filter the tile layer's own element so the highlight and the attribution
-    // keep their real colors.
-    const tiles = el.querySelector<HTMLElement>(".ol-layer");
-    if (tiles) {
-      tiles.style.filter = isDark
-        ? "grayscale(1) invert(0.92) contrast(0.8) brightness(1.05)"
-        : "grayscale(1) contrast(0.8) brightness(1.07)";
-    }
+    // The card body is a CSS grid that animates from 0fr, and on mobile a card
+    // can mount while collapsed — so the container is routinely 0x0 at mount,
+    // which made OpenLayers warn and render nothing. Watch for the first real
+    // size, then tell the map to measure again and re-fit.
+    let fitExtent: number[] | null = null;
+    const refit = () => {
+      if (!el.clientWidth || !el.clientHeight) return;
+      map.updateSize();
+      if (fitExtent) {
+        map.getView().fit(fitExtent, {
+          size: map.getSize(),
+          padding: [24, 24, 24, 24],
+          maxZoom: 6,
+        });
+      }
+    };
+    const observer = new ResizeObserver(refit);
+    observer.observe(el);
 
     let cancelled = false;
     (async () => {
@@ -110,38 +131,24 @@ export function CountryMap({
           topology,
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           (topology as any).objects.countries
-        ) as unknown as { features: { id?: string | number }[] };
+        ) as unknown as object;
 
-        const reader = new GeoJSON();
-        const opts = {
+        const features = new GeoJSON().readFeatures(collection, {
           dataProjection: "EPSG:4326",
           featureProjection: "EPSG:3857",
-        } as const;
+        });
+        world.addFeatures(features);
 
-        borders.addFeatures(reader.readFeatures(collection, opts));
-
-        // world-atlas ids are numeric ISO codes; ccn3 is zero-padded ("392").
-        if (!ccn3) return;
-        const target = String(Number(ccn3));
-        const match = collection.features.find(
-          (f) => String(Number(f.id)) === target
-        );
-        if (!match) return;
-
-        shapes.addFeatures(reader.readFeatures(match, opts));
+        if (!target) return;
+        const match = features.find((f) => String(Number(f.getId())) === target);
+        const extent = match?.getGeometry()?.getExtent();
+        if (!extent || !Number.isFinite(extent[0])) return;
 
         // Fit to the country's real extent — exact framing beats an
         // area-derived guess, and guarantees the whole country is in shot.
-        const extent = shapes.getExtent();
-        if (extent && Number.isFinite(extent[0])) {
-          map.getView().fit(extent, {
-            size: map.getSize(),
-            // Generous padding is what shows where the country sits in the
-            // world rather than filling the frame with it.
-            padding: [22, 22, 22, 22],
-            maxZoom: 6,
-          });
-        }
+        // Remembered so refit() can reapply it once the card has a size.
+        fitExtent = extent;
+        refit();
       } catch {
         // Keep the centered fallback view.
       }
@@ -149,6 +156,7 @@ export function CountryMap({
 
     return () => {
       cancelled = true;
+      observer.disconnect();
       map.setTarget(undefined);
     };
   }, [lat, lng, ccn3, areaKm2]);
@@ -156,7 +164,7 @@ export function CountryMap({
   return (
     <div
       ref={ref}
-      className={`w-full ${className} bg-secondary country-map`}
+      className={`w-full ${className} country-map`}
       role="img"
       aria-label={name ? `Map showing the location of ${name}` : "Country location map"}
     />
