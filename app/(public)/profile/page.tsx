@@ -22,6 +22,7 @@ import {
 import { HomeSectionPrefs } from "@/components/home-section-prefs";
 import { EtlTriggerButton } from "@/components/etl-trigger";
 import { formatDateLong } from "@/lib/format-date";
+import { leagueLabel } from "@/lib/leagues";
 
 /** Matches the chrome the self-contained watchlist cards already render, so a
  *  wrapped section and an unwrapped one are indistinguishable in the grid. */
@@ -148,7 +149,7 @@ export default async function ProfilePage() {
     id: row.id,
     team_name: row.team_name,
     league: row.leagues?.league ?? "",
-    league_label: (row.leagues?.league ?? "").toUpperCase(),
+    league_label: leagueLabel(row.leagues?.league ?? ""),
   }));
   /* eslint-enable @typescript-eslint/no-explicit-any */
 

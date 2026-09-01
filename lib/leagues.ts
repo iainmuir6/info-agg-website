@@ -43,6 +43,15 @@ export function leagueBySlug(slug: string): LeagueMeta | undefined {
   return LEAGUES.find((l) => l.slug === slug.toLowerCase());
 }
 
+/** Short display label for a league slug ("college-football" -> "NCAAF").
+ *
+ *  Callers used to uppercase the raw slug, which spilled "COLLEGE-FOOTBALL"
+ *  across two lines in the fixed-width favorites gutter. Falls back to the
+ *  uppercased slug for any league not in LEAGUES. */
+export function leagueLabel(slug: string): string {
+  return leagueBySlug(slug)?.label ?? slug.toUpperCase();
+}
+
 /** ESPN gamecast URL for a game in this league. */
 export function espnGameUrl(leagueSlug: string, eventId: string): string {
   const meta = leagueBySlug(leagueSlug);

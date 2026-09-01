@@ -734,6 +734,10 @@ const LABEL_ABBREVS: Record<string, string> = {
   "realestate":           "RE",       // 10 chars
   "automobiles":          "AUTO",     // 11 chars
   "obituaries":           "OBIT",     // 10 chars
+  // ── League slugs (ESPN's own, all > 8 chars) ──────────────────────────────
+  "college-football":         "NCAAF",  // 16 chars
+  "mens-college-basketball":  "NCAAM",  // 23 chars
+  "womens-college-basketball":"NCAAW",  // 25 chars
 };
 
 /**

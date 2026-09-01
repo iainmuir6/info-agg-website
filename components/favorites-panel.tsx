@@ -3,6 +3,7 @@
 import { useState } from "react";
 import Link from "next/link";
 import { createClient } from "@/lib/supabase/client";
+import { leagueLabel } from "@/lib/leagues";
 
 export type FavoriteStock = {
   stock_id: string;
@@ -228,7 +229,7 @@ export function FavoritesPanel({
           id: inserted.id as string,
           team_name: hit.teamName,
           league: hit.league,
-          league_label: hit.league.toUpperCase(),
+          league_label: leagueLabel(hit.league),
         },
       ]);
       resetSearch();
