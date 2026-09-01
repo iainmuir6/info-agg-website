@@ -47,6 +47,7 @@ from markets.markets_db_helper import (
 from news.news_db_helper import sync_nyt_data
 from media.media_db_helper import sync_youtube_data
 from misc.misc_db_helper import sync_misc_data
+from summary.summary_db_helper import sync_summaries
 
 load_dotenv()
 
@@ -461,6 +462,39 @@ def run_misc_etl(supabase: Client) -> Dict[str, Any]:
                 'stats': {'weather': 0, 'errors': [f"misc failed: {e}"]}}
 
 
+def run_summary_etl(supabase: Client) -> Dict[str, Any]:
+    """Run the AI briefing ETL: Summary of the Day and Summary of the Week.
+
+    Unlike every other domain this one has no upstream of its own — it
+    summarises the rows the other four just wrote, which is why run_full_etl
+    calls it sequentially after the parallel block instead of alongside them.
+
+    Never fails the run. Both summaries are gated on freshness and degrade to
+    the previously stored briefing, so a Gemini outage costs the card its
+    newness, not its content.
+    """
+    try:
+        summary_stats = sync_summaries(supabase)
+
+        stats = {
+            'day': summary_stats.get('day_generated', 0),
+            'week': summary_stats.get('week_generated', 0),
+            'model': summary_stats.get('model'),
+            'errors': summary_stats.get('errors', []),
+        }
+        if summary_stats.get('notes'):
+            stats['notes'] = summary_stats['notes']
+
+        # Nothing generated is the normal case on a re-dispatched run (both
+        # already current), so it is only degraded when something went wrong.
+        if stats['errors']:
+            return {'success': True, 'degraded': True, 'stats': stats}
+        return {'success': True, 'stats': stats}
+    except Exception as e:
+        return {'success': True, 'degraded': True,
+                'stats': {'day': 0, 'week': 0, 'errors': [f"summary failed: {e}"]}}
+
+
 def run_etfdb_etl(supabase: Client) -> None:
     """Scrape ETF info and top-15 holdings from etfdb.com. Manual trigger only.
 
@@ -534,6 +568,7 @@ def run_full_etl(
     skip_news: bool = False,
     skip_media: bool = False,
     skip_misc: bool = False,
+    skip_summary: bool = False,
     skip_sentiment: bool = False,
     triggered_by: str = 'manual',
     run_cleanup: bool = False,
@@ -570,6 +605,7 @@ def run_full_etl(
         'news': None,
         'media': None,
         'misc': None,
+        'summary': None,
     }
 
     # Observability: record the run (best-effort — never blocks the pipeline).
@@ -581,9 +617,10 @@ def run_full_etl(
         d for d, skipped in (
             ('sports', skip_sports), ('markets', skip_markets),
             ('news', skip_news), ('media', skip_media), ('misc', skip_misc),
+            ('summary', skip_summary),
         ) if not skipped
     ]
-    tier = 'daily' if len(in_scope) == 5 else f"scoped:{'+'.join(in_scope) or 'none'}"
+    tier = 'daily' if len(in_scope) == 6 else f"scoped:{'+'.join(in_scope) or 'none'}"
 
     try:
         run_supabase = get_supabase_client()
@@ -674,6 +711,26 @@ def run_full_etl(
 
     run_deadline.clear()   # cleanup + run recording are not part of the budget
 
+    # ── AI briefings — sequential, and last on purpose ────────────────────────
+    #
+    # The summary domain reads what the four domains above have just written.
+    # Running it inside the parallel block would race them and summarise
+    # yesterday's rows. It sits outside the cooperative budget because it makes
+    # a single bounded call (25s ceiling in gemini.py) rather than a fan-out,
+    # but it still counts toward the run duration reported below.
+    if not skip_summary:
+        t0 = et_now()
+        try:
+            results['summary'] = run_summary_etl(get_supabase_client())
+        except Exception as e:
+            results['summary'] = {'success': True, 'degraded': True,
+                                  'stats': {'day': 0, 'week': 0,
+                                            'errors': [f"summary failed: {e}"]}}
+        domain_elapsed['summary'] = (et_now() - t0).total_seconds()
+        r = results['summary']
+        status = 'WARN' if r.get('degraded') else 'OK  '
+        print(f"  [{status}] {'summary':<8}  {domain_elapsed['summary']:.1f}s")
+
     end_time = et_now()
     duration = (end_time - start_time).total_seconds()
     results['completed_at'] = end_time.isoformat()
@@ -693,7 +750,8 @@ def run_full_etl(
 
     # Roll up run status: failed > partial > success
     active = {d: r for d, r in results.items()
-              if d in ('sports', 'markets', 'news', 'media', 'misc') and r is not None}
+              if d in ('sports', 'markets', 'news', 'media', 'misc', 'summary')
+              and r is not None}
     all_errors = collect_domain_errors(active)
     if any(not r.get('success') for r in active.values()):
         run_status = 'failed'
@@ -732,7 +790,7 @@ def run_full_etl(
     print(f"Started: {start_time.strftime('%Y-%m-%d %H:%M:%S')}  ·  Duration: {duration:.1f}s")
     print("=" * W)
 
-    DOMAIN_ORDER = ['sports', 'markets', 'news', 'media', 'misc']
+    DOMAIN_ORDER = ['sports', 'markets', 'news', 'media', 'misc', 'summary']
 
     def _stat_str(domain: str, result: Dict[str, Any]) -> str:
         s = result.get('stats', {})
@@ -760,6 +818,10 @@ def run_full_etl(
                     f"word={s.get('words',0)}  "
                     f"fact={s.get('facts',0)}  "
                     f"otd={s.get('onthisday',0)}")
+        if domain == 'summary':
+            model = s.get('model')
+            return (f"day={s.get('day',0)}  week={s.get('week',0)}"
+                    + (f"  model={model}" if model else ''))
         return ''
 
     passed = failed = skipped = warned = 0
@@ -811,6 +873,7 @@ def main():
     parser.add_argument('--skip-news',    action='store_true', help='Skip news ETL')
     parser.add_argument('--skip-media',   action='store_true', help='Skip media ETL')
     parser.add_argument('--skip-misc',    action='store_true', help='Skip misc ETL')
+    parser.add_argument('--skip-summary', action='store_true', help='Skip the AI briefing ETL')
 
     # ── Domain "only" shortcuts ───────────────────────────────────────────────
     parser.add_argument('--sports-only',  action='store_true', help='Run sports ETL only')
@@ -818,6 +881,7 @@ def main():
     parser.add_argument('--news-only',    action='store_true', help='Run news ETL only')
     parser.add_argument('--media-only',   action='store_true', help='Run media ETL only')
     parser.add_argument('--misc-only',    action='store_true', help='Run misc ETL only')
+    parser.add_argument('--summary-only', action='store_true', help='Run the AI briefing ETL only')
 
     # ── Markets options ───────────────────────────────────────────────────────
     parser.add_argument('--scrape-etf-info', action='store_true',
@@ -864,16 +928,28 @@ def main():
         return
 
     # Expand "only" shortcuts into skip flags
+    # A scoped run must also drop the summary: it reads every other domain's
+    # rows, so generating it from one refreshed domain and four stale ones
+    # would overwrite the day's briefing with a worse one. --summary-only is
+    # the way to regenerate it alone.
     if args.sports_only:
         args.skip_markets = args.skip_news = args.skip_media = args.skip_misc = True
+        args.skip_summary = True
     elif args.markets_only:
         args.skip_sports = args.skip_news = args.skip_media = args.skip_misc = True
+        args.skip_summary = True
     elif args.news_only:
         args.skip_sports = args.skip_markets = args.skip_media = args.skip_misc = True
+        args.skip_summary = True
     elif args.media_only:
         args.skip_sports = args.skip_markets = args.skip_news = args.skip_misc = True
+        args.skip_summary = True
     elif args.misc_only:
         args.skip_sports = args.skip_markets = args.skip_news = args.skip_media = True
+        args.skip_summary = True
+    elif args.summary_only:
+        args.skip_sports = args.skip_markets = args.skip_news = True
+        args.skip_media = args.skip_misc = True
 
     # Preflight: fail fast on a hopeless environment, log degradations
     fatal, env_warnings = preflight_env()
@@ -891,6 +967,7 @@ def main():
         skip_news=args.skip_news,
         skip_media=args.skip_media,
         skip_misc=args.skip_misc,
+        skip_summary=args.skip_summary,
         skip_sentiment=args.skip_sentiment,
         triggered_by=args.triggered_by,
         run_cleanup=args.cleanup,

@@ -21,6 +21,7 @@ python src/api/run_etl.py --markets-only                    # Quotes + news + se
 python src/api/run_etl.py --news-only
 python src/api/run_etl.py --media-only
 python src/api/run_etl.py --misc-only                       # Weather, holidays, country, word, wiki, fact
+python src/api/run_etl.py --summary-only                    # Regenerate the AI briefings alone (day + week)
 python src/api/run_etl.py --skip-sentiment                  # Skip AV sentiment (quotes + news only)
 python src/api/run_etl.py --cleanup --season-schedules      # What the daily cron runs (+ retention cleanup)
 python src/api/run_etl.py --test                            # Dry-run: hit every external API once, no DB writes
@@ -96,6 +97,12 @@ is ours (always fails).
 - `COUNTRIES_API_KEY` — REST Countries **v5** (`api.restcountries.com`, bearer auth). **Its free tier is 1,000 requests per MONTH, not per day** — `misc_db_helper._country_is_current()` therefore skips the fetch when today's rotation pick is already stored, capping it at one call per calendar day however often the daily run is dispatched. v3.1 is deprecated and silently returns a stub that parses as JSON with none of the expected keys, which is how the old fetcher produced a row of `None`s without raising.
 - `YOUTUBE_API_KEY` — YouTube Data API v3 key (API key only, no OAuth). Powers the trending-videos feed. `videos.list` with `chart=mostPopular` costs 1 unit against a 10,000/day quota, so a daily run is negligible. Create at https://console.cloud.google.com/apis/credentials with the YouTube Data API v3 enabled.
 - Spotify playlists/podcast embeds (`lib/top-podcasts.ts`) need no backend fetch — they're live `<iframe>`s, not ETL-synced. `SPOTIFY_CLIENT_ID`/`SPOTIFY_CLIENT_SECRET` are still required, though: `app/api/podcasts/search` uses them (client-credentials flow, `lib/spotify-search.ts`) to power the "search a podcast to favorite" UI on `/profile`. Reddit was removed.
+- `GEMINI_API_KEY` — Google Gemini (AI Studio). Powers the two AI briefing cards. Optional: unset
+  means both cards skip with a note, exactly like the misc keys. Free tier is ~1,500 req/day and the
+  daily run spends **at most 2**, so the quota is never the constraint — availability is. Create at
+  https://aistudio.google.com/apikey. `GEMINI_MODEL` optionally pins a model ahead of the built-in
+  candidate list. **Not** the same as `GOOGLE_API_KEY`, which is the YouTube Data API key; the
+  summary domain deliberately does not fall back to it.
 - `GITHUB_DISPATCH_TOKEN` — fine-grained PAT with Actions read/write on this repo. Required by `POST /api/etl` (the `/dashboard` admin trigger button) to fire `workflow_dispatch` against `.github/workflows/daily-etl.yml` / `intraday-refresh.yml`, since Vercel serverless has no Python runtime to run the ETL in-process.
 - `GITHUB_REPOSITORY` (default `iainmuir6/info-agg-website`) / `GITHUB_DISPATCH_REF` (default `main`) — override the target repo/branch for the workflow dispatch above.
 - `CRON_SECRET` — **required for the site to refresh at all.** Vercel Cron (`vercel.json`) attaches `Authorization: Bearer $CRON_SECRET` to its invocations of `GET /api/cron/etl` only when this variable is set on the project; the route fails closed (503) without it, and no ETL runs. Neither workflow has a `schedule:` trigger any more — see the ETL Scheduling section below.
@@ -134,7 +141,8 @@ This is a personal information aggregator ("Info Hub") with two layers:
 
 ### Python ETL (`src/api/`)
 
-Orchestrator: `src/api/run_etl.py` — runs all four domain ETL pipelines **in parallel** (`ThreadPoolExecutor`), which is what the <60s requirement above depends on. `run_quick_refresh.py` is the tiered intraday counterpart (Tier A every 15 min, Tier B hourly — no backfill, no daily API budget spent on Tier A); `run_test.py` dry-run-tests every external API endpoint with no DB writes; `backfill_scores.py` is the standalone recovery tool for historical ESPN scores.
+Orchestrator: `src/api/run_etl.py` — runs the four fetch-domain ETL pipelines **in parallel** (`ThreadPoolExecutor`), which is what the <60s requirement above depends on. `run_quick_refresh.py` is the tiered intraday counterpart (Tier A every 15 min, Tier B hourly — no backfill, no daily API budget spent on Tier A); `run_test.py` dry-run-tests every external API endpoint with no DB writes; `backfill_scores.py` is the standalone recovery tool for historical ESPN scores. The fifth
+domain, `summary/`, runs sequentially after the parallel block because it reads what the others wrote.
 
 Each domain follows the same pattern:
 - `{domain}/{domain}_fetcher.py` — calls external APIs
@@ -147,6 +155,15 @@ Each domain follows the same pattern:
 - `news/` → NYT Top Stories + Most Popular API (NewsAPI is not used anywhere in this codebase, despite what an earlier version of this doc claimed)
 - `media/` → YouTube Data API (trending videos). Spotify (playlists, Top Podcasts) is live-embedded on the frontend with no fetcher. Reddit was removed.
 - `misc/` → six single-call feeds behind one domain: Visual Crossing (weather, 4 cities), Calendarific (US holidays), REST Countries v5 (country of the day, rotating), Wikipedia REST (random summary + On This Day), Merriam-Webster RSS (word of the day), uselessfacts. All land in `misc_content` as JSONB; each source degrades independently, and the domain never fails the run
+- `summary/` → Google Gemini (AI briefings: "Summary of the Day" and "Summary of the Week"). The only
+  domain with **no upstream of its own** — it summarises the rows the other four just wrote, which is
+  why `run_full_etl` calls it **sequentially after** the parallel block instead of inside it. Running
+  it in parallel would summarise yesterday's data. Everything the model may assert is supplied in a
+  context bundle built from the database, and the forward-looking half of the daily card is grounded
+  in the only forward-looking rows the schema holds (scheduled games, upcoming holidays) plus
+  unresolved threads in stories already in the bundle. Both briefings are freshness-gated — the daily
+  on the Eastern calendar day, the weekly on the ISO week — so a re-dispatched run costs no
+  generation, and any failure leaves the previous briefing in place rather than emptying the card
 - `archive/` — retired scripts kept for reference, not run by anything (`run_db_seed.py`, `seed.py`, `av_seed.py`, plus old schema docs)
 
 Python venv: `_agg_venv/` (at repo root). Dependencies: `requirements.txt` (repo root).
@@ -172,6 +189,11 @@ All tables live in the `info_agg` schema. Apply migrations in order:
    index, RLS policy and the explicit `GRANT SELECT` that `09` now requires. One table rather than
    six: the feeds are small, display-only and read whole, with no joins or cross-row filters. The
    payload shape is enforced in `lib/misc-content.ts`, not by Postgres.
+
+11. `11_ai_summaries.sql` — widens `misc_content`'s `kind` CHECK to allow `'summary'`, the two AI
+   briefing rows (keys `day` and `week`). No new table: same small, display-only, read-whole shape
+   that `10` was built for. Index, RLS policy and grant are table-wide and already cover it. The
+   payload shape is enforced in `lib/ai-summary.ts`.
 
 > This Supabase project is shared with other apps, separated by schema. Keep `info_agg` migrations
 > scoped to `info_agg` — do not modify `public` or another app's schema from this repo.

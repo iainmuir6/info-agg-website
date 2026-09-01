@@ -86,4 +86,24 @@ would spend another request for a card that only changes once a day — hence th
 day no matter how often the run fires. `fetch_all_countries()` paginates at 100/page (3 requests
 for all 254) and is **not** called by the ETL; it exists for one-off use.
 
+## Google Gemini (AI briefings)
 
+| | |
+|---|---|
+| Key | `GEMINI_API_KEY` (AI Studio — https://aistudio.google.com/apikey) |
+| Free tier | ~1,500 requests/day · 15 RPM · 1M TPM |
+| Daily run spends | **at most 2** (one daily briefing, plus one weekly on the first run of an ISO week) |
+
+Quota is not the constraint here and never will be at two calls a day — **availability** is. The
+headline Flash models are frequently capacity-limited on the free tier: measured 2026-09-01,
+`gemini-3.7-flash` took 29.6s to return a 503 and `gemini-flash-latest` timed out at 30s, while the
+lite models answered in under a second.
+
+`summary/gemini.py` is built around that. It tries a list of models ordered by **responsiveness
+rather than capability**, falls through on 404/429/503 (model-specific faults) but not on 4xx
+(request faults, which would fail identically everywhere), and caps each request at 12s. The
+domain as a whole is capped at `SUMMARY_BUDGET_S` (30s), and the weekly briefing is deferred to
+the next run if the daily one has already spent it — the <60s run requirement wins over a
+same-day weekly refresh.
+
+Measured worst case (both briefings generating from scratch): **6.7s**.

@@ -51,6 +51,11 @@ jobs:
       WEATHER_API_KEY:                 ${{ secrets.WEATHER_API_KEY }}
       CALENDAR_API_KEY:                ${{ secrets.CALENDAR_API_KEY }}
       COUNTRIES_API_KEY:               ${{ secrets.COUNTRIES_API_KEY }}
+      # Summary domain (AI briefings). Optional in the same way: unset means
+      # the two summary cards skip with a note. Intentionally NOT reusing
+      # GOOGLE_API_KEY below — that is the YouTube key, and the two are only
+      # interchangeable if one key has both APIs enabled.
+      GEMINI_API_KEY:                  ${{ secrets.GEMINI_API_KEY }}
       # YouTube Data API v3 accepts a plain Google Cloud API key, so either
       # secret works; get_youtube_api_key() falls back to this one. Whichever
       # is absent resolves to empty and is simply ignored.

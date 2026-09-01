@@ -212,6 +212,25 @@ Profile/info updates are **not** run daily — trigger manually with FMP (`run_f
 Same current-snapshot fetch the (now-broken) seed used to also do: scores, news, releases,
 posts — just without the seed's historical backfill.
 
+#### Summary (Gemini) — runs last, on purpose
+
+The AI briefings are the one domain that reads the database instead of an upstream API, so
+`run_full_etl` runs them **sequentially after** the parallel block. In parallel they would race the
+other four and summarise yesterday's rows.
+
+| Card | Key | Regenerates | Grounded on |
+|------|-----|-------------|-------------|
+| Summary of the Day | `('summary','day')` | once per **Eastern** calendar day | last 30h of news, market news, movers, completed games + scheduled games and upcoming holidays for the lookahead |
+| Summary of the Week | `('summary','week')` | once per **ISO week** | last 7 days of the same, no lookahead |
+
+The Eastern day boundary is deliberate: on UTC, an evening run would overwrite the morning's
+briefing. The ISO-week gate (rather than "is it Monday") means a Monday that failed retries every
+day until it succeeds.
+
+Neither can fail the run. On a Gemini outage the stored row is left untouched, so the card serves
+the previous briefing with its own visible timestamp rather than emptying — check the card's
+footer, not just the run status, when a briefing looks stale.
+
 ---
 
 ### Daily run variants
@@ -247,6 +266,8 @@ domain fell over.
 | markets | 0 quote rows                                        | market news / sentiment / econ writing 0 rows; on the intraday tiers, an isolated Finnhub outage |
 | news    | 0 articles                                          | per-section errors; sections skipped after a breaker trip; on the intraday tiers, an isolated NYT outage |
 | media   | never                                               | 0 videos → domain state `WARN`, run status `partial`       |
+| misc    | never                                               | each of the six feeds degrades on its own; a missing key is a note, not an error |
+| summary | never                                               | a Gemini outage or a spent budget → `WARN`/`partial`; the card keeps serving the previous briefing |
 
 Sports cannot use a row count on its own: a scores-only tier-A refresh at 04:07 UTC legitimately
 writes 0 rows. `_sports_outcome()` (in `run_etl.py`, shared with the intraday refresh) reads
