@@ -495,7 +495,7 @@ async function getYouTubeVideos(supabase: Awaited<ReturnType<typeof createClient
   try {
     const { data } = await supabase
       .from("youtube_videos")
-      .select("id, video_id, title, channel_title, view_count")
+      .select("id, video_id, title, channel_title, view_count, thumbnail_url")
       .order("view_count", { ascending: false })
       .limit(10);
     return data ?? [];
@@ -1541,7 +1541,19 @@ export default async function CommandCenter() {
             <a key={v.id} href={`https://www.youtube.com/watch?v=${v.video_id}`}
               target="_blank" rel="noopener noreferrer"
               className="tap-row flex items-center gap-2 px-2 py-1 border-b border-border last:border-0 hover:bg-secondary/50 transition-colors group">
-              <span className="text-[10px] shrink-0" style={{ color: "hsl(0 72% 50%)" }}>▶</span>
+              {v.thumbnail_url ? (
+                // Video thumbnails are 16:9, so this is wider than the square
+                // podcast art rather than cropped to match it.
+                // eslint-disable-next-line @next/next/no-img-element
+                <img
+                  src={v.thumbnail_url}
+                  alt=""
+                  loading="lazy"
+                  className="w-8 h-[18px] shrink-0 object-cover border border-border"
+                />
+              ) : (
+                <span className="w-8 h-[18px] shrink-0 flex items-center justify-center text-[10px]" style={{ color: "hsl(0 72% 50%)" }}>▶</span>
+              )}
               <div className="min-w-0 flex-1">
                 <p className="text-[10px] font-bold line-clamp-1 group-hover:underline">{v.title}</p>
                 <p className="text-[8px] text-muted-foreground line-clamp-1">{v.channel_title}</p>
