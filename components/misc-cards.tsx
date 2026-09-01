@@ -89,13 +89,16 @@ function CardShell({
   title,
   meta,
   children,
+  className,
 }: {
   title: string;
   meta?: string | null;
   children: React.ReactNode;
+  /** Grid-span overrides for cards that need more than one cell on /misc. */
+  className?: string;
 }) {
   return (
-    <section className="bg-background p-3 flex flex-col">
+    <section className={`bg-background p-3 flex flex-col${className ? ` ${className}` : ""}`}>
       <div className="flex items-baseline justify-between gap-2 mb-2">
         <h3 className="text-xs font-mono font-bold tracking-wider uppercase">
           <span style={{ color: MISC_ACCENT }}>▪</span> {title}
@@ -167,19 +170,37 @@ export function WeatherCard({
   );
 }
 
+/** Tear-off calendar tile: month cap over the day number.
+ *
+ *  Shared by the /misc Upcoming Holidays list and the Command Center's
+ *  CalendarMini so the two cannot drift apart. */
+function CalendarTile({ date }: { date: string }) {
+  const d = new Date(`${date}T12:00:00`);
+  return (
+    <div className="shrink-0 w-7 border border-border rounded-sm overflow-hidden bg-background">
+      <div
+        className="text-[7px] font-mono font-bold text-center leading-[9px] text-white uppercase"
+        style={{ background: MISC_ACCENT }}
+      >
+        {d.toLocaleDateString("en-US", { month: "short" })}
+      </div>
+      <div className="text-[11px] font-black text-center leading-[13px] tabular-nums">
+        {d.getDate()}
+      </div>
+    </div>
+  );
+}
+
 export function HolidaysCard({ holidays }: { holidays: Holiday[] }) {
   return (
     <CardShell title="Upcoming Holidays" meta={`${holidays.length}`}>
-      <ul className="space-y-1">
-        {holidays.slice(0, 6).map((h) => (
-          <li key={`${h.date}-${h.name}`} className="flex gap-3 items-baseline">
-            <span className="text-[10px] font-mono text-muted-foreground tabular-nums shrink-0 w-14">
-              {new Date(`${h.date}T12:00:00`).toLocaleDateString("en-US", {
-                month: "short",
-                day: "numeric",
-              })}
-            </span>
-            <span className="text-xs leading-snug">{h.name}</span>
+      {/* Two columns once there is room: eight holidays as one long list left
+          most of the cell empty beside the taller cards next to it. */}
+      <ul className="grid grid-cols-1 min-[420px]:grid-cols-2 gap-x-4 gap-y-1.5">
+        {holidays.slice(0, 8).map((h) => (
+          <li key={`${h.date}-${h.name}`} className="flex gap-2 items-center">
+            <CalendarTile date={h.date} />
+            <span className="text-xs leading-snug min-w-0">{h.name}</span>
           </li>
         ))}
       </ul>
@@ -346,7 +367,12 @@ export function CountryCard({ country }: { country: CountryPayload }) {
   ];
 
   return (
-    <CardShell title="Country of the Day" meta={country.cca2}>
+    // Two grid cells wide on /misc: a flag, a map and eight labelled facts do
+    // not fit one cell without the map shrinking to a stamp and every fact
+    // wrapping onto a second line.
+    <CardShell title="Country of the Day" meta={country.cca2} className="sm:col-span-2">
+      <div className="grid gap-4 sm:grid-cols-2 items-start">
+      <div>
       <div className="flex items-center gap-3 mb-3">
         <span className="text-3xl leading-none" aria-hidden>
           {country.flag_emoji}
@@ -373,12 +399,22 @@ export function CountryCard({ country }: { country: CountryPayload }) {
           name={country.name_common}
           ccn3={country.ccn3}
           areaKm2={country.area_km2}
-          className="h-[150px] border border-border mb-3"
+          className="h-[170px] border border-border mb-3"
         />
       )}
-      <dl className="space-y-1">
+      </div>
+      {/* Facts run in their own column beside the map, and split again into
+          two on a wide screen. BORDERS is the one row that can list a dozen
+          neighbours, so it spans the full width rather than forcing the
+          column to the width of its longest value. */}
+      <dl className="grid grid-cols-1 min-[560px]:grid-cols-2 gap-x-4 gap-y-1 content-start">
         {rows.map(([k, v]) => (
-          <div key={k} className="flex gap-3 items-baseline">
+          <div
+            key={k}
+            className={`flex gap-2 items-baseline${
+              k === "BORDERS" ? " min-[560px]:col-span-2" : ""
+            }`}
+          >
             <dt className="text-[9px] font-mono text-muted-foreground w-20 shrink-0">
               {k}
             </dt>
@@ -386,6 +422,7 @@ export function CountryCard({ country }: { country: CountryPayload }) {
           </div>
         ))}
       </dl>
+      </div>
     </CardShell>
   );
 }
@@ -530,18 +567,7 @@ export function CalendarMini({ holidays }: { holidays: Holiday[] }) {
             key={`${h.date}-${h.name}`}
             className="flex items-center gap-2 px-2 py-0.5 min-h-[30px] border-b border-border last:border-0"
           >
-            {/* The tile is the calendar affordance: month cap, then the number. */}
-            <div className="shrink-0 w-7 border border-border rounded-sm overflow-hidden bg-background">
-              <div
-                className="text-[7px] font-mono font-bold text-center leading-[9px] text-white uppercase"
-                style={{ background: MISC_ACCENT }}
-              >
-                {d.toLocaleDateString("en-US", { month: "short" })}
-              </div>
-              <div className="text-[11px] font-black text-center leading-[13px] tabular-nums">
-                {d.getDate()}
-              </div>
-            </div>
+            <CalendarTile date={h.date} />
             <p className="min-w-0 flex-1 text-[10px] font-semibold leading-tight line-clamp-2">
               {h.name}
             </p>
