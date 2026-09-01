@@ -1,4 +1,6 @@
 import { Fragment } from "react";
+import { unstable_cache } from "next/cache";
+import { getShowImages } from "@/lib/spotify-search";
 import { createClient } from "@/lib/supabase/server";
 import { getMiscContent } from "@/lib/misc-content";
 import {
@@ -478,6 +480,15 @@ async function getAllNyt(
     return [];
   }
 }
+
+// Cover art for the podcast card. Spotify is not part of the ETL, so this is
+// cached here rather than stored: one call covers the whole list, and the
+// artwork changes far less often than the daily cache window.
+const getPodcastImages = unstable_cache(
+  async (ids: string[]) => getShowImages(ids),
+  ["podcast-images"],
+  { revalidate: 86400 },
+);
 
 async function getYouTubeVideos(supabase: Awaited<ReturnType<typeof createClient>>) {
   try {
@@ -1552,6 +1563,8 @@ export default async function CommandCenter() {
   }
 
   const homePodcasts = buildPodcastList(favoritePodcastRows).slice(0, 10);
+  const podcastImages = await getPodcastImages(homePodcasts.map((p) => p.showId));
+
   cards.push({ section: "podcasts", node: (
     <CollapsibleCard label="Spotify — Top Podcasts" accent="hsl(340 78% 50%)" href="/media"
       count={homePodcasts.length}>
@@ -1562,9 +1575,19 @@ export default async function CommandCenter() {
             href={`https://open.spotify.com/show/${p.showId}`}
             target="_blank"
             rel="noopener noreferrer"
-            className="flex items-center gap-2 px-2 py-1.5 border-b border-border last:border-0 hover:bg-secondary/50 transition-colors group"
+            className="flex items-center gap-2 px-2 py-1 border-b border-border last:border-0 hover:bg-secondary/50 transition-colors group"
           >
-            <span className="text-[10px] shrink-0" style={{ color: "hsl(340 78% 50%)" }}>🎙</span>
+            {(p.imageUrl ?? podcastImages[p.showId]) ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img
+                src={p.imageUrl ?? podcastImages[p.showId]}
+                alt=""
+                loading="lazy"
+                className="w-5 h-5 shrink-0 object-cover border border-border"
+              />
+            ) : (
+              <span className="w-5 h-5 shrink-0 flex items-center justify-center text-[10px]" style={{ color: "hsl(340 78% 50%)" }}>🎙</span>
+            )}
             <span className="text-[10px] font-bold line-clamp-1 group-hover:underline flex-1 min-w-0">{p.name}</span>
             <FavoritePodcastButton
               showId={p.showId}
@@ -1580,14 +1603,39 @@ export default async function CommandCenter() {
     </CollapsibleCard>
   )});
 
-  // Apply user prefs: hide, then stable-sort by section position
-  const orderList =
-    userOrder && userOrder.length > 0
-      ? [
-          ...userOrder.filter((k) => (DEFAULT_HOME_ORDER as string[]).includes(k)),
-          ...DEFAULT_HOME_ORDER.filter((k) => !userOrder!.includes(k)),
-        ]
-      : (DEFAULT_HOME_ORDER as string[]);
+  // Apply user prefs: hide, then stable-sort by section position.
+  //
+  // Sections added after a user saved their layout are spliced in at their
+  // DEFAULT_HOME_ORDER neighbourhood, not appended. Appending meant every new
+  // card landed at the bottom of the page for anyone with saved prefs, and no
+  // amount of reordering DEFAULT_HOME_ORDER could move it — the saved list won
+  // for every key it knew about, and the rest were dumped at the end.
+  const orderList = (() => {
+    const saved = (userOrder ?? []).filter((k) =>
+      (DEFAULT_HOME_ORDER as string[]).includes(k)
+    );
+    if (saved.length === 0) return DEFAULT_HOME_ORDER as string[];
+
+    const savedSet = new Set(saved);
+    const result = [...saved];
+    for (const key of DEFAULT_HOME_ORDER as string[]) {
+      if (savedSet.has(key)) continue;
+      // Anchor on the closest earlier default-order key the user already has,
+      // so a new card appears where it was designed to sit rather than last.
+      const defaults = DEFAULT_HOME_ORDER as string[];
+      let anchor = -1;
+      for (let i = defaults.indexOf(key) - 1; i >= 0; i--) {
+        const at = result.indexOf(defaults[i]);
+        if (at !== -1) {
+          anchor = at;
+          break;
+        }
+      }
+      result.splice(anchor + 1, 0, key);
+      savedSet.add(key);
+    }
+    return result;
+  })();
   const sectionPos = new Map(orderList.map((k, i) => [k, i]));
   const visibleCards = cards
     .map((c, i) => ({ ...c, i }))

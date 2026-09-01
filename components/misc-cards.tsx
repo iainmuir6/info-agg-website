@@ -1,3 +1,4 @@
+import { CountryMap } from "@/components/country-map";
 import type {
   CountryPayload,
   FactPayload,
@@ -47,6 +48,21 @@ function cityLabel(key: string, parts = 1): string {
     .slice(0, parts)
     .map((p) => p.trim())
     .join(", ");
+}
+
+/** Row label chip, matching the HubCap pills on the homepage news rows. */
+function Pill({ label }: { label: string }) {
+  return (
+    <span
+      className="inline-flex shrink-0 items-center justify-center min-w-[5ch] px-1 py-0.5 rounded text-[7px] font-mono uppercase leading-none tracking-wide"
+      style={{
+        background: "color-mix(in srgb, " + MISC_ACCENT + " 15%, transparent)",
+        color: MISC_ACCENT,
+      }}
+    >
+      {label}
+    </span>
+  );
 }
 
 function CardShell({
@@ -326,6 +342,15 @@ export function CountryCard({ country }: { country: CountryPayload }) {
             )}
         </div>
       </div>
+      {country.lat != null && country.lng != null && (
+        <CountryMap
+          lat={country.lat}
+          lng={country.lng}
+          name={country.name_common}
+          areaKm2={country.area_km2}
+          className="h-[150px] border border-border mb-3"
+        />
+      )}
       <dl className="space-y-1">
         {rows.map(([k, v]) => (
           <div key={k} className="flex gap-3 items-baseline">
@@ -355,12 +380,31 @@ export function WordCard({ word }: { word: WordPayload }) {
         >
           {word.title}
         </p>
-        {word.description && (
-          <p className="text-xs leading-relaxed text-muted-foreground mt-2 line-clamp-5">
-            {word.description}
-          </p>
-        )}
+        <p className="text-[10px] font-mono text-muted-foreground mt-0.5">
+          {word.pronunciation && <span>\{word.pronunciation}\</span>}
+          {word.part_of_speech && (
+            <span className="italic ml-1.5">{word.part_of_speech}</span>
+          )}
+        </p>
       </a>
+
+      {word.definition && (
+        <p className="text-xs leading-relaxed mt-2">{word.definition}</p>
+      )}
+      {word.example && (
+        <p
+          className="text-xs leading-relaxed text-muted-foreground italic mt-2 pl-2 border-l-2"
+          style={{ borderColor: MISC_ACCENT }}
+        >
+          {word.example}
+        </p>
+      )}
+      {/* Nothing parsed out of the feed — show it whole rather than blank. */}
+      {!word.definition && word.description && (
+        <p className="text-xs leading-relaxed text-muted-foreground mt-2 line-clamp-5">
+          {word.description}
+        </p>
+      )}
     </CardShell>
   );
 }
@@ -533,6 +577,15 @@ export function CountryMini({ country }: { country: CountryPayload }) {
           {country.name_common}
         </p>
       </div>
+      {country.lat != null && country.lng != null && (
+        <CountryMap
+          lat={country.lat}
+          lng={country.lng}
+          name={country.name_common}
+          areaKm2={country.area_km2}
+          className="h-[115px] border-b border-border"
+        />
+      )}
       <div className="grid grid-cols-2">
         {cells.map(([k, v], i) => (
           <div
@@ -552,7 +605,9 @@ export function CountryMini({ country }: { country: CountryPayload }) {
   );
 }
 
-/** Word of the day, then the day's Wikipedia articles, then the facts. */
+/** Word of the day, then the day's Wikipedia articles, then the facts.
+ *  Each row carries a pill so the three sources stay distinguishable in a
+ *  single stacked list. */
 export function AlmanacMini({
   word,
   pages,
@@ -573,15 +628,31 @@ export function AlmanacMini({
           rel="noopener noreferrer"
           className={`${row} block group hover:bg-secondary/50 transition-colors`}
         >
-          <span className="text-[7px] font-mono uppercase tracking-wider leading-none" style={{ color: MISC_ACCENT }}>
-            Word of the day
-          </span>
-          <p
-            className="text-[13px] font-black leading-tight group-hover:underline"
-            style={{ fontFamily: "Georgia, serif" }}
-          >
-            {word.title}
-          </p>
+          {/* Pill is its own column so the definition wraps beside it rather
+              than underneath, matching the Wiki and Fact rows. */}
+          <div className="flex gap-1.5 items-start">
+            <Pill label="Word" />
+            <div className="min-w-0">
+              <div className="flex items-baseline gap-1.5">
+                <span
+                  className="text-[13px] font-black leading-tight group-hover:underline"
+                  style={{ fontFamily: "Georgia, serif" }}
+                >
+                  {word.title}
+                </span>
+                {word.part_of_speech && (
+                  <span className="text-[8px] font-mono italic text-muted-foreground">
+                    {word.part_of_speech}
+                  </span>
+                )}
+              </div>
+              {word.definition && (
+                <p className="text-[10px] leading-[13px] text-muted-foreground line-clamp-2">
+                  {word.definition}
+                </p>
+              )}
+            </div>
+          </div>
         </a>
       )}
 
@@ -591,9 +662,10 @@ export function AlmanacMini({
           href={p.url ?? "#"}
           target="_blank"
           rel="noopener noreferrer"
-          className={`${row} flex gap-2 group hover:bg-secondary/50 transition-colors`}
+          className={`${row} flex gap-1.5 items-start group hover:bg-secondary/50 transition-colors`}
         >
-          {p.thumbnail ? (
+          <Pill label="Wiki" />
+          {p.thumbnail && (
             // eslint-disable-next-line @next/next/no-img-element
             <img
               src={p.thumbnail}
@@ -601,10 +673,6 @@ export function AlmanacMini({
               loading="lazy"
               className="w-6 h-6 object-cover border border-border shrink-0"
             />
-          ) : (
-            <span className="w-6 h-6 shrink-0 border border-border flex items-center justify-center text-[9px] font-mono text-muted-foreground">
-              W
-            </span>
           )}
           <div className="min-w-0">
             <p className="text-[10px] font-semibold leading-[13px] line-clamp-1 group-hover:underline">
@@ -620,11 +688,11 @@ export function AlmanacMini({
       ))}
 
       {facts.map((f) => (
-        <div key={f.text} className={`${row} flex gap-1.5`}>
-          <span className="text-[9px] font-mono shrink-0" style={{ color: MISC_ACCENT }} aria-hidden>
-            ›
+        <div key={f.text} className={`${row} flex gap-1.5 items-center`}>
+          <Pill label="Fact" />
+          <span className="flex items-center h-[26px] min-w-0">
+            <span className="text-[10px] leading-[13px] line-clamp-2">{f.text}</span>
           </span>
-          <p className="text-[10px] leading-[13px] line-clamp-2">{f.text}</p>
         </div>
       ))}
     </div>
@@ -639,18 +707,21 @@ export function OnThisDayMini({ events }: { events: OnThisDayEvent[] }) {
         const body = (
           <>
             <span
-              className="text-[10px] font-mono font-bold tabular-nums shrink-0 w-8"
+              className="text-[10px] font-mono font-bold tabular-nums shrink-0 w-8 leading-[13px]"
               style={{ color: MISC_ACCENT }}
             >
               {e.year}
             </span>
-            <span className="text-[10px] leading-[13px] line-clamp-2 min-w-0">
-              {e.text}
+            {/* Fixed two-line box, not just line-clamp: clamping only caps the
+                height, so a one-line event still rendered a shorter row and the
+                list came out ragged. h-[26px] == 2 x leading-[13px]. */}
+            <span className="flex items-center h-[26px] min-w-0">
+              <span className="text-[10px] leading-[13px] line-clamp-2">{e.text}</span>
             </span>
           </>
         );
         const cls =
-          "flex items-baseline gap-1.5 px-2 py-0.5 border-b border-border last:border-0 hover:bg-secondary/50 transition-colors group";
+          "flex items-center gap-1.5 px-2 py-1 border-b border-border last:border-0 hover:bg-secondary/50 transition-colors group";
         return e.url ? (
           <a key={`${e.year}-${i}`} href={e.url} target="_blank" rel="noopener noreferrer" className={cls}>
             {body}

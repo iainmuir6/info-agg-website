@@ -143,10 +143,10 @@ Each domain follows the same pattern:
 
 **Domain → data sources:**
 - `sports/` → ESPN API (scores + news for NFL, NBA, NHL, MLB, EPL, etc.)
-- `markets/` → Finnhub API (daily quotes, company news, market news) + FMP API (company profiles, ETF holdings, historical backfill) + Alpha Vantage (news sentiment)
+- `markets/` → Finnhub API (daily quotes, company news, market news) + FMP API (company profiles, commodity quotes, treasury/econ, ETF holdings) + Alpha Vantage (news sentiment) + **Frankfurter** (forex — keyless ECB reference rates, all 10 pairs in one request; replaced 10 FMP calls per intraday Tier B run, cutting FMP from 78 to 18 calls/day. Trade-off: ECB publishes once per business day, so forex no longer moves intraday)
 - `news/` → NYT Top Stories + Most Popular API (NewsAPI is not used anywhere in this codebase, despite what an earlier version of this doc claimed)
 - `media/` → YouTube Data API (trending videos). Spotify (playlists, Top Podcasts) is live-embedded on the frontend with no fetcher. Reddit was removed.
-- `misc/` → six single-call feeds behind one domain: Visual Crossing (weather, 4 cities), Calendarific (US holidays), REST Countries v5 (country of the day, rotating), Wikipedia REST (random summary), Merriam-Webster RSS (word of the day), uselessfacts. All land in `misc_content` as JSONB; each source degrades independently, and the domain never fails the run
+- `misc/` → six single-call feeds behind one domain: Visual Crossing (weather, 4 cities), Calendarific (US holidays), REST Countries v5 (country of the day, rotating), Wikipedia REST (random summary + On This Day), Merriam-Webster RSS (word of the day), uselessfacts. All land in `misc_content` as JSONB; each source degrades independently, and the domain never fails the run
 - `archive/` — retired scripts kept for reference, not run by anything (`run_db_seed.py`, `seed.py`, `av_seed.py`, plus old schema docs)
 
 Python venv: `_agg_venv/` (at repo root). Dependencies: `requirements.txt` (repo root).

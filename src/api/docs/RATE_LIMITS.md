@@ -9,12 +9,20 @@
 | Markets | FMP               | `FMP_API_KEY`                               | 1    | None         | **250**               | Daily counter `_fmp_rate_check()` (thread-safe) + module-level `>=1s` minimum between requests | `GET /stable/profile` · `/quote` (forex+commodity) · `/treasury-rates` · `/economic-indicators`                                              |
 | News    | NYT               | `NYT_API_KEY_1` `NYT_API_KEY_2`            | 2    | 5/key        | 500                   | Daily run switches keys after 5 requests: first 5 top-stories calls on key1, next 5 calls on key2; `>=1s` minimum between NYT HTTP calls; batch upsert after all sections | `GET /topstories/v2/{section}.json` (9 sections) · `/mostpopular/v2/viewed/{period}.json`                                                   |
 | Media   | YouTube Data v3   | `YOUTUBE_API_KEY`                           | 1    | None         | **10,000 units**      | No limiter needed; 1 call/run, 1 unit cost                                                                | `GET /youtube/v3/videos?chart=mostPopular`                                                                                                   |
+| Markets | Frankfurter       | —                                           | 0    | None         | None                  | Keyless (ECB reference rates). **One request covers all 10 pairs** — replaced 10 FMP `/quote` calls per Tier B run. Published once per business day, so forex no longer moves intraday | `GET /v1/{start}..{end}?base=USD&symbols=…`                                                                                                  |
 | Misc    | Visual Crossing   | `WEATHER_API_KEY`                           | 1    | None         | **1,000 records/day** | No limiter; billed per *day of data returned*, so cost is cities x `FORECAST_DAYS` (4 x 5 = 20/run, daily only) | `GET /VisualCrossingWebServices/rest/services/timeline/{location}/{start}/{end}`                                                             |
 | Misc    | Calendarific      | `CALENDAR_API_KEY`                          | 1    | None         | **500/month**         | No limiter; 1 call/run on the daily run only (~30/month)                                                  | `GET /api/v2/holidays`                                                                                                                       |
 | Misc    | REST Countries v5 | `COUNTRIES_API_KEY`                         | 1    | None         | **1,000/MONTH**       | **Per-month, not per-day.** 1 call/run, and `_country_is_current()` skips the fetch entirely when today's rotation pick is already stored — so a re-dispatched daily run costs nothing. ~30/month | `GET /countries/v5/codes.alpha_2/{code}`                                                                                                     |
 | Misc    | Wikipedia REST    | —                                           | 0    | None         | None                  | Keyless; 1 call/run                                                                                       | `GET /api/rest_v1/page/random/summary`                                                                                                       |
 | Misc    | Merriam-Webster   | —                                           | 0    | None         | None                  | Keyless RSS; 1 call/run                                                                                   | `GET /wotd/feed/rss2`                                                                                                                        |
 | Misc    | uselessfacts      | —                                           | 0    | None         | None                  | Keyless; 1 call/run                                                                                       | `GET /random.json`                                                                                                                           |
+
+**Forex moved to Frankfurter.** Tier B used to spend 13 FMP calls a run — 10 forex pairs plus 3
+commodities — which at 6 runs a day was 78 of the 250/day cap. Frankfurter serves all 10 pairs in
+one keyless request, so Tier B now costs 3 FMP calls (commodities only): 18/day instead of 78.
+The trade-off is granularity — ECB publishes a daily reference rate, so forex rows change once per
+business day however often the tiers run. Commodities stay on FMP because there is no ECB
+equivalent.
 
 `NEWS_SENTIMENT` is queried by topic with **no `tickers` filter**: AV ANDs the ticker list with
 itself and with the topic, so a watchlist-sized list matched nothing and was rejected outright
@@ -62,7 +70,7 @@ matches the whole value). `finish_etl_run` redacts the same patterns out of `etl
 | API           | Keys | Budget      | Daily ETL usage                                               | Headroom |
 | ------------- | ---- | ----------- | ------------------------------------------------------------- | -------- |
 | Alpha Vantage | 3    | 75 req/day  | 10 (sentiment topics)                                         | +65      |
-| FMP           | 1    | 250 req/day | ~21–121 (profiles + forex/commodity quotes + treasury + econ) | ~129–229 |
+| FMP           | 1    | 250 req/day | ~24–39 (profiles + **commodity-only** quotes + treasury + econ) | ~211–226 |
 | NYT           | 2    | 500 req/day | 10 (9 top-stories sections + most-popular)                               | +490     |
 | Finnhub       | 2    | 120 req/min | ~100–150/run (quotes + news, 2 workers)                       | —        |
 | ESPN          | —    | Unknown     | 18 calls/run (9 leagues × news + scores), +9 on `--season-schedules` (standings) | —        |

@@ -160,6 +160,33 @@ def _prune_extra_keys(supabase: Client, kind: str, keep: List[str]) -> None:
         print(f"Could not prune stale '{kind}' rows: {e}")
 
 
+def _kind_is_current(supabase: Client, kind: str, now: datetime) -> bool:
+    """True when rows of `kind` were already written today (UTC).
+
+    Wikipedia and the useless facts pull a *random* item per call, so every run
+    replaced yesterday's picks with new ones — the cards churned each time the
+    ETL fired instead of being the day's selection. They are refreshed once a
+    calendar day now, like the country. Any read failure returns False so the
+    fetch still happens; a duplicate is cheaper than an empty card.
+    """
+    try:
+        res = (
+            supabase.table('misc_content')
+            .select('fetched_at')
+            .eq('kind', kind)
+            .order('fetched_at', desc=True)
+            .limit(1)
+            .execute()
+        )
+        rows = res.data or []
+        if not rows:
+            return False
+        fetched = datetime.fromisoformat(str(rows[0]['fetched_at']).replace('Z', '+00:00'))
+        return fetched.astimezone(timezone.utc).date() == now.date()
+    except Exception:
+        return False
+
+
 def _ensure_country_ranks(
     supabase: Client, stats: Dict[str, Any]
 ) -> Optional[Dict[str, Any]]:
@@ -304,24 +331,28 @@ def sync_misc_data(supabase: Client) -> Dict[str, Any]:
             stats['errors'].append(f'Error fetching holidays: {e}')
 
     # ── Wikipedia — several random articles per day ───────────
+    now_utc = datetime.now(timezone.utc)
     wiki_keys: List[str] = []
     seen_titles: set = set()
-    for i in range(WIKI_COUNT):
-        try:
-            page = fetch_random_wikipedia_summary()
-            # /page/random can repeat; a duplicate would render as two
-            # identical cards, so skip it rather than storing it.
-            if not page or page.get('title') in seen_titles:
-                continue
-            seen_titles.add(page.get('title'))
-            key = str(len(wiki_keys))
-            records.append(_record('wikipedia', key, page))
-            wiki_keys.append(key)
-        except Exception as e:
-            stats['errors'].append(f'Error fetching Wikipedia summary: {e}')
-    stats['wikipedia_upserted'] = len(wiki_keys)
-    if not wiki_keys:
-        stats['errors'].append('Wikipedia fetch returned nothing')
+    if _kind_is_current(supabase, 'wikipedia', now_utc):
+        stats['notes'].append("Wikipedia already picked today — kept the day's articles")
+    else:
+        for _ in range(WIKI_COUNT):
+            try:
+                page = fetch_random_wikipedia_summary()
+                # /page/random can repeat; a duplicate would render as two
+                # identical cards, so skip it rather than storing it.
+                if not page or page.get('title') in seen_titles:
+                    continue
+                seen_titles.add(page.get('title'))
+                key = str(len(wiki_keys))
+                records.append(_record('wikipedia', key, page))
+                wiki_keys.append(key)
+            except Exception as e:
+                stats['errors'].append(f'Error fetching Wikipedia summary: {e}')
+        stats['wikipedia_upserted'] = len(wiki_keys)
+        if not wiki_keys:
+            stats['errors'].append('Wikipedia fetch returned nothing')
 
     # ── Wikipedia — on this day ──────────────────────────────
     try:
@@ -383,20 +414,23 @@ def sync_misc_data(supabase: Client) -> Dict[str, Any]:
     # ── Useless facts — several per day ──────────────────────
     fact_keys: List[str] = []
     seen_facts: set = set()
-    for i in range(FACT_COUNT):
-        try:
-            fact = fetch_useless_fact()
-            if not fact or fact.get('text') in seen_facts:
-                continue
-            seen_facts.add(fact.get('text'))
-            key = str(len(fact_keys))
-            records.append(_record('fact', key, fact))
-            fact_keys.append(key)
-        except Exception as e:
-            stats['errors'].append(f'Error fetching useless fact: {e}')
-    stats['facts_upserted'] = len(fact_keys)
-    if not fact_keys:
-        stats['errors'].append('Useless fact fetch returned nothing')
+    if _kind_is_current(supabase, 'fact', now_utc):
+        stats['notes'].append("Facts already picked today — kept the day's facts")
+    else:
+        for _ in range(FACT_COUNT):
+            try:
+                fact = fetch_useless_fact()
+                if not fact or fact.get('text') in seen_facts:
+                    continue
+                seen_facts.add(fact.get('text'))
+                key = str(len(fact_keys))
+                records.append(_record('fact', key, fact))
+                fact_keys.append(key)
+            except Exception as e:
+                stats['errors'].append(f'Error fetching useless fact: {e}')
+        stats['facts_upserted'] = len(fact_keys)
+        if not fact_keys:
+            stats['errors'].append('Useless fact fetch returned nothing')
 
     if records:
         upsert_misc(supabase, records, errors=stats['errors'])

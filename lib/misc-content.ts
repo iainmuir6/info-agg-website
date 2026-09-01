@@ -70,6 +70,8 @@ export type CountryPayload = {
   flag_emoji: string | null;
   flag_png: string | null;
   map_url: string | null;
+  lat?: number | null;
+  lng?: number | null;
   population_rank?: number | null;
   area_rank?: number | null;
   ranked_of?: number | null;
@@ -80,6 +82,10 @@ export type WordPayload = {
   link?: string | null;
   pub_date?: string | null;
   description?: string | null;
+  pronunciation?: string | null;
+  part_of_speech?: string | null;
+  definition?: string | null;
+  example?: string | null;
 };
 
 export type FactPayload = {

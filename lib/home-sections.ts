@@ -40,8 +40,8 @@ export const HOME_SECTIONS: { key: HomeSectionKey; label: string }[] = [
   { key: "spotify", label: "Spotify" },
   { key: "podcasts", label: "Top Podcasts" },
   { key: "youtube", label: "YouTube" },
-  { key: "onthisday", label: "On This Day" },
   { key: "country", label: "Country of the Day" },
+  { key: "onthisday", label: "On This Day" },
   { key: "almanac", label: "Almanac" },
 ];
 

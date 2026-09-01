@@ -27,7 +27,7 @@ REST_COUNTRIES_BASE = "https://api.restcountries.com/countries/v5"
 COUNTRY_FIELDS = [
     "names", "codes", "capitals", "flag", "region", "subregion",
     "area", "population", "currencies", "languages", "timezones",
-    "continents", "borders", "links",
+    "continents", "borders", "links", "coordinates",
 ]
 
 
@@ -43,6 +43,7 @@ def _normalize_country(raw: Dict[str, Any]) -> Dict[str, Any]:
     flag = raw.get("flag") or {}
     area = raw.get("area") or {}
     links = raw.get("links") or {}
+    coords = raw.get("coordinates") or {}
 
     return {
         "cca2": codes.get("alpha_2"),
@@ -66,6 +67,8 @@ def _normalize_country(raw: Dict[str, Any]) -> Dict[str, Any]:
         "flag_png": flag.get("url_png"),
         "flag_svg": flag.get("url_svg"),
         "map_url": links.get("google_maps"),
+        "lat": coords.get("lat"),
+        "lng": coords.get("lng"),
         "fetched_at": datetime.now(timezone.utc).isoformat(),
     }
 

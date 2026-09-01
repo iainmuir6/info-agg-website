@@ -64,6 +64,11 @@ except ImportError:
     )
 
 try:
+    from .frankfurter import fetch_forex_quote
+except ImportError:
+    from frankfurter import fetch_forex_quote
+
+try:
     from .alpha_vantage import (
         AVQuotaExhausted,
         fetch_etf_holdings_av,
@@ -454,8 +459,17 @@ def sync_stock_data(
                 return stats
 
             if fetch_quotes:
-                fmp_key = get_fmp_api_key()
-                quote = fetch_fmp_quote(ticker, fmp_key)
+                # Forex comes from Frankfurter (ECB reference rates): keyless,
+                # and one request covers every pair, where FMP charged one
+                # call per pair — 10 of the 13 that Tier B spent against a
+                # 250/day cap. Commodities have no ECB equivalent and stay on
+                # FMP. Trade-off: ECB publishes once per business day, so forex
+                # rows no longer move intraday.
+                if asset_type == 'forex':
+                    quote = fetch_forex_quote(ticker)
+                else:
+                    fmp_key = get_fmp_api_key()
+                    quote = fetch_fmp_quote(ticker, fmp_key)
                 if quote:
                     # Map fetch_fmp_quote keys to insert_stock_quote expectations
                     quote_mapped = {
