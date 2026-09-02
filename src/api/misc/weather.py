@@ -84,14 +84,13 @@ def _require_charts() -> None:
 
 def get_weather_api_key() -> str:
     """
-    Get the Visual Crossing API key from environment variables.
+    Return WEATHER_API_KEY from .env/.env.local, or '' when unset.
 
-    Expects WEATHER_API_KEY to be set in .env/.env.local.
+    Empty rather than raising: sync_misc_data guards on the falsy value to
+    skip this one card with a note, and an exception here would escape its
+    per-source try blocks and take the whole misc domain down with it.
     """
-    api_key = os.getenv("WEATHER_API_KEY")
-    if not api_key:
-        raise ValueError("WEATHER_API_KEY must be set in environment variables")
-    return api_key
+    return os.getenv("WEATHER_API_KEY", "")
 
 
 def fetch_weather_timeline(
@@ -119,11 +118,10 @@ def fetch_weather_timeline(
         Parsed JSON dict on success, or None on error.
     """
     if api_key is None:
-        try:
-            api_key = get_weather_api_key()
-        except ValueError as e:
-            print(f"Weather API skipped: {e}")
-            return None
+        api_key = get_weather_api_key()
+    if not api_key:
+        print("Weather API skipped: WEATHER_API_KEY is not set")
+        return None
 
     if start_date is None:
         start_date = datetime.utcnow().strftime("%Y-%m-%d")

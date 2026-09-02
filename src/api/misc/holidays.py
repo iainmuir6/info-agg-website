@@ -18,14 +18,13 @@ CALENDARIFIC_HOLIDAYS_URL = "https://calendarific.com/api/v2/holidays"
 
 def get_calendar_api_key() -> str:
     """
-    Get the Calendarific holidays key from environment variables.
+    Return CALENDAR_API_KEY from .env/.env.local, or '' when unset.
 
-    Expects CALENDAR_API_KEY to be set in .env/.env.local.
+    Empty rather than raising: sync_misc_data guards on the falsy value to
+    skip this one card with a note, and an exception here would escape its
+    per-source try blocks and take the whole misc domain down with it.
     """
-    api_key = os.getenv("CALENDAR_API_KEY")
-    if not api_key:
-        raise ValueError("CALENDAR_API_KEY must be set in environment variables")
-    return api_key
+    return os.getenv("CALENDAR_API_KEY", "")
 
 
 def fetch_holidays(
@@ -52,11 +51,10 @@ def fetch_holidays(
         List of holiday dicts, or None on error.
     """
     if api_key is None:
-        try:
-            api_key = get_calendar_api_key()
-        except ValueError as e:
-            print(f"Calendar API skipped: {e}")
-            return None
+        api_key = get_calendar_api_key()
+    if not api_key:
+        print("Calendar API skipped: CALENDAR_API_KEY is not set")
+        return None
 
     today = date.today()
     if year is None:
