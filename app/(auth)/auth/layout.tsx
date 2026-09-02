@@ -1,5 +1,6 @@
 import Image from "next/image";
 import Link from "next/link";
+import { LOGO_SRC } from "@/lib/brand";
 import { ThemeSwitcher } from "@/components/theme-switcher";
 
 /**
@@ -9,9 +10,6 @@ import { ThemeSwitcher } from "@/components/theme-switcher";
  * starter. It collapses entirely below `lg`; on a phone the form is the page,
  * with a compact masthead bar above it.
  */
-
-/** The same mark that lands on the home screen when the site is installed. */
-const LOGO_SRC = "/assets/website_logos/info_agg.png";
 
 const SECTIONS = [
   { label: "NEWS", accent: "hsl(220 90% 52%)" },

@@ -1,4 +1,6 @@
+import Image from "next/image";
 import Link from "next/link";
+import { LOGO_SRC } from "@/lib/brand";
 import { unstable_cache } from "next/cache";
 import { CategoryNav } from "@/components/category-nav";
 import { SectionFilterProvider } from "@/components/section-filter";
@@ -172,14 +174,27 @@ export default async function PublicLayout({ children }: { children: React.React
       <header className="sticky top-0 z-50 bg-background border-b border-border">
         {/* Masthead */}
         <div className="px-4 sm:px-6 py-3 flex items-center justify-between gap-3 border-b border-border">
-          <Link href="/" className="flex flex-col group min-w-0">
-            <span
-              className="text-lg sm:text-xl font-black tracking-tighter leading-none group-hover:opacity-80 transition-opacity"
-              style={{ fontFamily: "Georgia, serif" }}
-            >
-              INFO HUB
+          <Link href="/" className="flex items-center gap-2 sm:gap-2.5 group min-w-0">
+            {/* The mark the installed app uses, so the masthead and the
+                home-screen icon agree. Decorative: the wordmark beside it
+                already names the site. */}
+            <Image
+              src={LOGO_SRC}
+              alt=""
+              width={36}
+              height={36}
+              priority
+              className="w-7 h-7 sm:w-9 sm:h-9 shrink-0 group-hover:opacity-80 transition-opacity"
+            />
+            <span className="flex flex-col min-w-0">
+              <span
+                className="text-lg sm:text-xl font-black tracking-tighter leading-none group-hover:opacity-80 transition-opacity"
+                style={{ fontFamily: "Georgia, serif" }}
+              >
+                INFO HUB
+              </span>
+              <HeaderDate initialLong={dateStr} initialShort={dateStrShort} />
             </span>
-            <HeaderDate initialLong={dateStr} initialShort={dateStrShort} />
           </Link>
 
           <div className="flex items-center gap-2.5 sm:gap-4 shrink-0">
