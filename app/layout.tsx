@@ -1,4 +1,4 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import localFont from "next/font/local";
 import { ThemeProvider } from "next-themes";
 import { getSiteUrl } from "@/lib/site-url";
@@ -52,6 +52,25 @@ export const metadata: Metadata = {
       "max-snippet": -1,
     },
   },
+};
+
+/**
+ * `maximumScale: 1` exists for one reason: iOS Safari zooms the page on focus
+ * for any input whose font-size is under 16px, and the auth fields are 12px so
+ * that typed text and placeholder share a scale. Without this the login field
+ * threw the panel half off-screen on every tap.
+ *
+ * Trade-off, and the reason it is spelled out rather than just set: capping the
+ * maximum scale is normally an accessibility smell. On iOS 10+ it is not —
+ * Safari honours it for the *automatic* focus zoom but still allows the user to
+ * pinch-zoom past it. Chrome on Android does enforce it, so pinch-zoom there is
+ * capped at 1x. If that ever matters more than the focus zoom, remove this and
+ * put the auth inputs back to 16px.
+ */
+export const viewport: Viewport = {
+  width: "device-width",
+  initialScale: 1,
+  maximumScale: 1,
 };
 
 const geistSans = localFont({

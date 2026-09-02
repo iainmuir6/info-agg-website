@@ -173,9 +173,11 @@ Input text and placeholder share one size (`text-[12px]`) so a field does not
 change scale as you type into it. This is a knowing trade-off: **iOS Safari
 zooms the page on focus for any input under 16px.** The 16px alternative needed
 the placeholder shrunk separately, which read as two type scales in one control.
-If the zoom becomes a problem the lever is `maximum-scale=1` on the viewport
-export — note that it suppresses focus zoom site-wide, so weigh it against
-pinch-zoom expectations before adding it.
+The zoom is suppressed by `maximumScale: 1` in the `viewport` export in
+`app/layout.tsx` — the two settings only make sense together, so **do not raise
+the input size or drop the viewport cap without reconsidering the other**. On
+iOS 10+ the cap is honoured for automatic focus zoom but the user can still
+pinch past it; Chrome on Android does enforce it, capping pinch-zoom at 1x.
 
 **AutoFill does not work in the installed PWA, and cannot be fixed here.**
 Safari and Chrome both fill correctly, which is the proof the markup is right.
