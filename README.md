@@ -4,7 +4,7 @@
 
 > Personal information aggregator — [info-agg-website.vercel.app](https://info-agg-website.vercel.app/)
 
-A single-page dashboard that pulls together news, sports scores, market data, and media into one clean interface. Data is refreshed by a scheduled ETL pipeline — a full nightly run plus a lighter intraday refresh every 15 minutes — and on-demand via an admin trigger.
+A dashboard that pulls together news, sports scores, market data, and media into one clean interface — a Command Center front page plus a section page for each domain. Data is refreshed by a scheduled ETL pipeline — a full nightly run plus a lighter intraday refresh every 15 minutes — and on-demand via an admin trigger.
 
 ## Features
 

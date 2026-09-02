@@ -133,7 +133,7 @@ This is a personal information aggregator ("Info Hub") with two layers:
 
 **Route groups:**
 - `app/(public)/` — Public-facing pages with a shared newspaper-style layout (`layout.tsx`). Routes: `/` (Command Center dashboard), `/news`, `/sports`, `/sports/[league]`, `/[league]/[team]`, `/markets`, `/markets/[ticker]`, `/media`, `/misc` (Almanac), `/summary` (the two AI briefings in full — reachable only from their Command Center cards, deliberately not in `NAV_LINKS`), `/economy`, `/profile` (favorites + podcast search, signed-in users), `/dashboard` (ETL run monitoring + trigger, `super_admin` only)
-- `app/(auth)/auth/` — Auth pages: login, sign-up, forgot-password, update-password
+- `app/(auth)/auth/` — Auth pages: login, sign-up, sign-up-success, forgot-password, update-password, error. Shared two-pane shell in `layout.tsx` (masthead pane on `lg+`, collapses on a phone)
 - `app/auth/callback/route.ts` — Supabase PKCE exchange (`GET /auth/callback?code=…&next=…`)
 - `app/api/etl/` — `POST /api/etl` (`super_admin` only) fires a `workflow_dispatch` against `.github/workflows/daily-etl.yml` (or `intraday-refresh.yml` with `{ mode: "quick" }`) and returns immediately — Vercel serverless has no Python runtime, so the ETL always runs on GitHub Actions, never in-process. Progress shows up in `info_agg.etl_runs` and the Actions tab.
 - `app/api/cron/etl/` — `GET /api/cron/etl?job=daily|a|b` (bearer `CRON_SECRET`) — the unattended scheduler. Called by the 16 cron entries in `vercel.json`; each fires a `workflow_dispatch` and records `triggered_by='cron'`. Shares `lib/github-dispatch.ts` with `POST /api/etl`.
@@ -153,8 +153,54 @@ This is a personal information aggregator ("Info Hub") with two layers:
 **UI:**
 - shadcn/ui components in `components/ui/` (badge, button, card, checkbox, dropdown-menu, input, label)
 - Custom components in `components/` (news ticker, theme switcher, auth forms, etc.)
+- `components/auth/auth-ui.tsx` — the panel/field/submit primitives every auth screen is built from, in the site's own hairline-and-mono language rather than stock shadcn Cards
+- `components/thumb-image.tsx` — every third-party thumbnail goes through this (see **Thumbnails** below)
+- `lib/brand.ts` — `LOGO_SRC`, the app mark shared by the public masthead and the auth screens. It is the same file the installed PWA uses as its home-screen icon, which is the point: the icon you tap and the header you land in should agree
 - Tailwind CSS with CSS variable-based theming; `next-themes` for dark/light mode
-- Geist Sans font loaded from local `node_modules/geist`
+- Geist Sans font loaded from local `node_modules/geist`. The auth screens are deliberately Georgia + system mono, so Chrome reports Geist's preloads as unused on those routes — cosmetic, not a bug
+
+**Auth form conventions (`components/*-form.tsx`)**
+
+Credential inputs must carry **both `name` and `autoComplete`** — `username` /
+`current-password` on login, `new-password` on sign-up and password change.
+Safari and Chrome key AutoFill off those attributes, and the forms originally
+shipped with only an `id`, so the iOS keychain suggestion silently stopped
+appearing. `UpdatePasswordForm` additionally renders a hidden read-only
+`username` input (its two callers pass the address in) because a lone password
+field gives the manager nothing to attach a *save* to.
+
+Inputs are 16px on mobile (`text-base sm:text-[13px]`); below 16px iOS Safari
+zooms the page on focus. The placeholder is sized down on its own
+(`placeholder:text-[12px]`) — iOS reads the **input's** font-size for that
+decision, not the placeholder's.
+
+**Known issue — sessions in the iOS home-screen PWA**
+
+An installed home-screen web app has its own cookie jar, separate from Safari's,
+so a sign-in in one never carries to the other and an emailed reset link (which
+opens in Safari) does not reach the PWA's session. On top of that,
+`@supabase/ssr`'s browser client writes the auth cookie with `document.cookie`
+asking for 400 days, and WebKit caps script-written cookies at **7 days**.
+`lib/supabase/proxy.ts` re-issues them as a real `Set-Cookie` (uncapped), but
+only inside `setAll`, which Supabase calls only when a token actually refreshes
+— so a PWA opened briefly and often can go a long time without ever receiving a
+server-issued cookie. The symptom is visible in `auth.sessions`: mobile rows
+have `refreshed_at` NULL and one unused refresh token each, while `not_after` is
+NULL everywhere (no server-side timebox — this is not Supabase expiring people).
+**Not yet fixed.** Cheap fix: re-issue the session cookies from the proxy on
+every request. Correct fix: move `signInWithPassword` into a server action so
+even the first cookie is server-set.
+
+**Thumbnails**
+
+Thumbnail URLs are third-party and frozen into the database at ETL time, so they
+rot — the row keeps a URL that no longer serves a picture. `{url && <img/>}`
+guards only the NULL column. `components/thumb-image.tsx` also covers `onError`
+**and** YouTube's grey "no thumbnail" tile, which arrives with a **200** and is
+identifiable only by coming back 120px wide whatever size was requested.
+`default.jpg` is excluded from that test: it is legitimately 120x90 and is the
+last entry in `src/api/media/youtube.py`'s preference list, so without the
+exclusion every video that only had a `default` thumbnail would be hidden.
 
 ### Python ETL (`src/api/`)
 
