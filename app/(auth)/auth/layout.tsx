@@ -1,3 +1,4 @@
+import Image from "next/image";
 import Link from "next/link";
 import { ThemeSwitcher } from "@/components/theme-switcher";
 
@@ -8,6 +9,9 @@ import { ThemeSwitcher } from "@/components/theme-switcher";
  * starter. It collapses entirely below `lg`; on a phone the form is the page,
  * with a compact masthead bar above it.
  */
+
+/** The same mark that lands on the home screen when the site is installed. */
+const LOGO_SRC = "/assets/website_logos/info_agg.png";
 
 const SECTIONS = [
   { label: "NEWS", accent: "hsl(220 90% 52%)" },
@@ -35,7 +39,15 @@ export default function AuthLayout({ children }: { children: React.ReactNode }) 
         />
 
         <div className="relative">
-          <Link href="/" className="inline-flex flex-col group">
+          <Link href="/" className="inline-flex flex-col gap-4 group">
+            <Image
+              src={LOGO_SRC}
+              alt=""
+              width={80}
+              height={80}
+              priority
+              className="w-16 h-16 xl:w-20 xl:h-20 group-hover:opacity-80 transition-opacity"
+            />
             <span
               className="text-5xl xl:text-6xl font-black tracking-tighter leading-none group-hover:opacity-80 transition-opacity"
               style={{ fontFamily: "Georgia, serif" }}
@@ -76,6 +88,14 @@ export default function AuthLayout({ children }: { children: React.ReactNode }) 
       <div className="flex flex-col min-h-screen">
         <header className="flex items-center justify-between gap-3 px-4 sm:px-6 py-3 border-b border-border">
           <Link href="/" className="flex items-center gap-2 group min-w-0">
+            <Image
+              src={LOGO_SRC}
+              alt=""
+              width={28}
+              height={28}
+              priority
+              className="lg:hidden w-7 h-7 shrink-0"
+            />
             <span
               className="lg:hidden text-lg font-black tracking-tighter"
               style={{ fontFamily: "Georgia, serif" }}
