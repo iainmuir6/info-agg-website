@@ -174,22 +174,45 @@ zooms the page on focus. The placeholder is sized down on its own
 (`placeholder:text-[12px]`) — iOS reads the **input's** font-size for that
 decision, not the placeholder's.
 
-**Known issue — sessions in the iOS home-screen PWA**
+**Sessions in the iOS home-screen PWA**
 
 An installed home-screen web app has its own cookie jar, separate from Safari's,
 so a sign-in in one never carries to the other and an emailed reset link (which
-opens in Safari) does not reach the PWA's session. On top of that,
-`@supabase/ssr`'s browser client writes the auth cookie with `document.cookie`
-asking for 400 days, and WebKit caps script-written cookies at **7 days**.
-`lib/supabase/proxy.ts` re-issues them as a real `Set-Cookie` (uncapped), but
-only inside `setAll`, which Supabase calls only when a token actually refreshes
-— so a PWA opened briefly and often can go a long time without ever receiving a
-server-issued cookie. The symptom is visible in `auth.sessions`: mobile rows
-have `refreshed_at` NULL and one unused refresh token each, while `not_after` is
-NULL everywhere (no server-side timebox — this is not Supabase expiring people).
-**Not yet fixed.** Cheap fix: re-issue the session cookies from the proxy on
-every request. Correct fix: move `signInWithPassword` into a server action so
-even the first cookie is server-set.
+opens in Safari) does not reach the PWA's session. That part is inherent to iOS.
+
+The part that was ours: `@supabase/ssr`'s browser client writes the auth cookie
+with `document.cookie` asking for 400 days, and WebKit caps anything written
+from script at **7 days**. Supabase only emits a real (uncapped) `Set-Cookie`
+from `setAll`, i.e. when it actually rotates tokens — so a PWA opened briefly
+and often could live on nothing but the 7-day script cookie and then lose it.
+`auth.sessions` showed it: mobile rows with `refreshed_at` NULL and one unused
+refresh token each.
+
+`lib/supabase/proxy.ts` now does a **sliding re-issue** — on an authenticated
+request that did *not* rotate, it re-sends the auth cookies the browser just
+sent, unchanged, as a server `Set-Cookie`. Constraints that make it safe, and
+that any edit here must preserve:
+
+- Only `sb-*-auth-token[.N]`. The PKCE `-code-verifier` is deliberately excluded
+  from the regex — it is meant to be short-lived.
+- Only when `rotated` is false. Supabase's own values always win.
+- Only when there are valid claims. An invalid token gets Supabase's `Max-Age=0`
+  clearing cookie instead, which is the behaviour to keep.
+- `SESSION_COOKIE_OPTIONS` mirrors @supabase/ssr's unexported
+  `DEFAULT_COOKIE_OPTIONS`. **Keep `path` in step with it**: the browser keys a
+  cookie on (name, domain, path), so a different path silently creates a second
+  cookie beside the real one instead of replacing it. `secure` is ours, added
+  only over HTTPS so local http dev still works.
+
+This changes only how long the *browser* keeps the credential, never whether it
+works — validity is still decided at Supabase. Which is worth knowing, because
+`not_after` is NULL on every row: there is **no session timebox or inactivity
+timeout configured**, so sessions now really do last. The lever for an actual
+ceiling is Supabase → Auth → Sessions, server-side.
+
+Still open: `signInWithPassword` runs client-side, so the *first* cookie after
+sign-in is script-written and 7-day capped until the first proxy request slides
+it. Moving it into a server action would close that gap.
 
 **Thumbnails**
 
