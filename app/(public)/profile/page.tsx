@@ -209,7 +209,7 @@ export default async function ProfilePage() {
 
             <SectionCard title="Change Password" accent="hsl(220 90% 52%)">
               <div className="px-3 py-2.5">
-                <UpdatePasswordForm />
+                <UpdatePasswordForm email={email} />
               </div>
             </SectionCard>
           </div>

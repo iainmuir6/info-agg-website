@@ -13,8 +13,14 @@ import { useState } from "react";
  */
 export function UpdatePasswordForm({
   className,
+  email,
   ...props
-}: React.ComponentPropsWithoutRef<"form">) {
+}: React.ComponentPropsWithoutRef<"form"> & {
+  /** The signed-in account's address. Rendered as a hidden `username` field so
+   *  iOS Keychain / Chrome can attach the new password to the right account —
+   *  a lone password input gives them nothing to key the save on. */
+  email?: string;
+}) {
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
@@ -47,6 +53,18 @@ export function UpdatePasswordForm({
 
   return (
     <form onSubmit={handleSubmit} className={cn("flex flex-col gap-2", className)} {...props}>
+      {email && (
+        <input
+          type="text"
+          name="username"
+          autoComplete="username"
+          value={email}
+          readOnly
+          hidden
+          aria-hidden
+          tabIndex={-1}
+        />
+      )}
       <div className="flex flex-col gap-1.5 sm:flex-row sm:items-center">
         <label
           htmlFor="password"
@@ -56,6 +74,7 @@ export function UpdatePasswordForm({
         </label>
         <input
           id="password"
+          name="new-password"
           type="password"
           autoComplete="new-password"
           placeholder="••••••••"

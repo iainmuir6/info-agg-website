@@ -1,9 +1,8 @@
+import type { Metadata } from "next";
 import { SignUpForm } from "@/components/sign-up-form";
 
+export const metadata: Metadata = { title: "Create account" };
+
 export default function Page() {
-  return (
-    <div className="w-full max-w-sm">
-      <SignUpForm />
-    </div>
-  );
+  return <SignUpForm />;
 }

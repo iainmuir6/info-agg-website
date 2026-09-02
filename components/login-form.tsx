@@ -2,19 +2,16 @@
 
 import { cn } from "@/lib/utils";
 import { createClient } from "@/lib/supabase/client";
-import { Button } from "@/components/ui/button";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
+import {
+  AuthError,
+  AuthField,
+  AuthLink,
+  AuthPanel,
+  AuthSubmit,
+} from "@/components/auth/auth-ui";
 
 export function LoginForm({
   className,
@@ -48,63 +45,66 @@ export function LoginForm({
   };
 
   return (
-    <div className={cn("flex flex-col gap-6", className)} {...props}>
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-2xl">Login</CardTitle>
-          <CardDescription>
-            Enter your email below to login to your account
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          <form onSubmit={handleLogin}>
-            <div className="flex flex-col gap-6">
-              <div className="grid gap-2">
-                <Label htmlFor="email">Email</Label>
-                <Input
-                  id="email"
-                  type="email"
-                  placeholder="m@example.com"
-                  required
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                />
-              </div>
-              <div className="grid gap-2">
-                <div className="flex items-center">
-                  <Label htmlFor="password">Password</Label>
-                  <Link
-                    href="/auth/forgot-password"
-                    className="ml-auto inline-block text-sm underline-offset-4 hover:underline"
-                  >
-                    Forgot your password?
-                  </Link>
-                </div>
-                <Input
-                  id="password"
-                  type="password"
-                  required
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                />
-              </div>
-              {error && <p className="text-sm text-red-500">{error}</p>}
-              <Button type="submit" className="w-full" disabled={isLoading}>
-                {isLoading ? "Logging in..." : "Login"}
-              </Button>
-            </div>
-            <div className="mt-4 text-center text-sm">
-              Don&apos;t have an account?{" "}
+    <div className={cn(className)} {...props}>
+      <AuthPanel
+        eyebrow="Sign In"
+        title="Welcome back."
+        description="Your watchlist, favourite teams and dashboard layout are waiting."
+        footer={
+          <>
+            No account yet? <AuthLink href="/auth/sign-up">Create one</AuthLink>
+          </>
+        }
+      >
+        {/* iOS Safari and Chrome key AutoFill off a real form containing named
+            credential fields. These inputs previously had neither `name` nor
+            `autoComplete`, which is why the keychain suggestion stopped
+            appearing — the heuristics had nothing to match on. */}
+        <form onSubmit={handleLogin} className="flex flex-col gap-4">
+          <AuthField
+            id="email"
+            name="email"
+            label="Email"
+            type="email"
+            autoComplete="username"
+            inputMode="email"
+            autoCapitalize="none"
+            autoCorrect="off"
+            spellCheck={false}
+            placeholder="you@example.com"
+            required
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+          />
+
+          <AuthField
+            id="current-password"
+            name="password"
+            label="Password"
+            type="password"
+            autoComplete="current-password"
+            placeholder="••••••••"
+            required
+            revealable
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            action={
               <Link
-                href="/auth/sign-up"
-                className="underline underline-offset-4"
+                href="/auth/forgot-password"
+                className="text-[10px] font-mono tracking-wider uppercase text-muted-foreground hover:text-foreground transition-colors"
               >
-                Sign up
+                Forgot?
               </Link>
-            </div>
-          </form>
-        </CardContent>
-      </Card>
+            }
+          />
+
+          {error && <AuthError>{error}</AuthError>}
+
+          <AuthSubmit pending={isLoading} pendingLabel="Signing in">
+            Sign in
+          </AuthSubmit>
+        </form>
+      </AuthPanel>
     </div>
   );
 }

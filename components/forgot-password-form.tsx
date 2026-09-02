@@ -2,19 +2,15 @@
 
 import { cn } from "@/lib/utils";
 import { createClient } from "@/lib/supabase/client";
-import { Button } from "@/components/ui/button";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import Link from "next/link";
 import { useState } from "react";
 import { getAuthCallbackUrl } from "@/lib/site-url";
+import {
+  AuthError,
+  AuthField,
+  AuthLink,
+  AuthPanel,
+  AuthSubmit,
+} from "@/components/auth/auth-ui";
 
 export function ForgotPasswordForm({
   className,
@@ -32,7 +28,7 @@ export function ForgotPasswordForm({
     setError(null);
 
     try {
-      // The url which will be included in the email. This URL needs to be configured in your redirect URLs in the Supabase dashboard at https://supabase.com/dashboard/project/_/auth/url-configuration
+      // This URL must also be listed under Supabase → Auth → URL configuration.
       const { error } = await supabase.auth.resetPasswordForEmail(email, {
         redirectTo: `${getAuthCallbackUrl()}?next=${encodeURIComponent("/auth/update-password")}`,
       });
@@ -45,62 +41,76 @@ export function ForgotPasswordForm({
     }
   };
 
+  if (success) {
+    return (
+      <div className={cn(className)} {...props}>
+        <AuthPanel
+          eyebrow="Sent"
+          title="Check your inbox."
+          description={
+            <>
+              If an account exists for{" "}
+              <span className="text-foreground">{email}</span>, a reset link is
+              on its way. It expires in an hour.
+            </>
+          }
+          footer={<AuthLink href="/auth/login">Back to sign in</AuthLink>}
+        >
+          <ol className="flex flex-col gap-2 text-[11px] font-mono text-muted-foreground">
+            {[
+              "Open the email from Info Hub",
+              "Follow the reset link",
+              "Choose a new password",
+            ].map((step, i) => (
+              <li key={step} className="flex gap-2.5">
+                <span className="text-foreground tabular-nums">
+                  {String(i + 1).padStart(2, "0")}
+                </span>
+                <span>{step}</span>
+              </li>
+            ))}
+          </ol>
+        </AuthPanel>
+      </div>
+    );
+  }
+
   return (
-    <div className={cn("flex flex-col gap-6", className)} {...props}>
-      {success ? (
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-2xl">Check Your Email</CardTitle>
-            <CardDescription>Password reset instructions sent</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <p className="text-sm text-muted-foreground">
-              If you registered using your email and password, you will receive
-              a password reset email.
-            </p>
-          </CardContent>
-        </Card>
-      ) : (
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-2xl">Reset Your Password</CardTitle>
-            <CardDescription>
-              Type in your email and we&apos;ll send you a link to reset your
-              password
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            <form onSubmit={handleForgotPassword}>
-              <div className="flex flex-col gap-6">
-                <div className="grid gap-2">
-                  <Label htmlFor="email">Email</Label>
-                  <Input
-                    id="email"
-                    type="email"
-                    placeholder="m@example.com"
-                    required
-                    value={email}
-                    onChange={(e) => setEmail(e.target.value)}
-                  />
-                </div>
-                {error && <p className="text-sm text-red-500">{error}</p>}
-                <Button type="submit" className="w-full" disabled={isLoading}>
-                  {isLoading ? "Sending..." : "Send reset email"}
-                </Button>
-              </div>
-              <div className="mt-4 text-center text-sm">
-                Already have an account?{" "}
-                <Link
-                  href="/auth/login"
-                  className="underline underline-offset-4"
-                >
-                  Login
-                </Link>
-              </div>
-            </form>
-          </CardContent>
-        </Card>
-      )}
+    <div className={cn(className)} {...props}>
+      <AuthPanel
+        eyebrow="Password Reset"
+        title="Forgot it? Fine."
+        description="Give us the address on the account and we'll send a single-use link to set a new password."
+        footer={
+          <>
+            Remembered it? <AuthLink href="/auth/login">Sign in</AuthLink>
+          </>
+        }
+      >
+        <form onSubmit={handleForgotPassword} className="flex flex-col gap-4">
+          <AuthField
+            id="email"
+            name="email"
+            label="Email"
+            type="email"
+            autoComplete="username"
+            inputMode="email"
+            autoCapitalize="none"
+            autoCorrect="off"
+            spellCheck={false}
+            placeholder="you@example.com"
+            required
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+          />
+
+          {error && <AuthError>{error}</AuthError>}
+
+          <AuthSubmit pending={isLoading} pendingLabel="Sending">
+            Send reset link
+          </AuthSubmit>
+        </form>
+      </AuthPanel>
     </div>
   );
 }

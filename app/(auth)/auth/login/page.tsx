@@ -1,9 +1,8 @@
+import type { Metadata } from "next";
 import { LoginForm } from "@/components/login-form";
 
+export const metadata: Metadata = { title: "Sign in" };
+
 export default function Page() {
-  return (
-    <div className="w-full max-w-sm">
-      <LoginForm />
-    </div>
-  );
+  return <LoginForm />;
 }
