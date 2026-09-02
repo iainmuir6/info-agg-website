@@ -1,3 +1,4 @@
+import { ThumbImage } from "@/components/thumb-image";
 import { createClient } from "@/lib/supabase/server";
 import {
   SPOTIFY_HOME_PLAYLISTS,
@@ -119,22 +120,29 @@ export default async function MediaPage() {
                       rel="noopener noreferrer"
                       className="group flex flex-col border border-border hover:border-foreground transition-colors"
                     >
-                      {v.thumbnail_url && (
-                        <div className="relative aspect-video w-full overflow-hidden bg-secondary">
-                          {/* eslint-disable-next-line @next/next/no-img-element */}
-                          <img
-                            src={v.thumbnail_url}
-                            alt=""
-                            className="w-full h-full object-cover"
-                            loading="lazy"
-                          />
-                          {dur && (
-                            <span className="absolute bottom-1 right-1 bg-black/80 text-white text-[9px] font-mono px-1 py-0.5 leading-none rounded-sm">
-                              {dur}
+                      {/* The frame is unconditional so a dead or missing
+                          thumbnail leaves an even card grid rather than a
+                          short card with no image well. */}
+                      <div className="relative aspect-video w-full overflow-hidden bg-secondary">
+                        <ThumbImage
+                          src={v.thumbnail_url}
+                          detectYouTubePlaceholder
+                          className="w-full h-full object-cover"
+                          fallback={
+                            <span
+                              className="absolute inset-0 flex items-center justify-center text-lg"
+                              style={{ color: "hsl(0 72% 50%)" }}
+                            >
+                              ▶
                             </span>
-                          )}
-                        </div>
-                      )}
+                          }
+                        />
+                        {dur && (
+                          <span className="absolute bottom-1 right-1 bg-black/80 text-white text-[9px] font-mono px-1 py-0.5 leading-none rounded-sm">
+                            {dur}
+                          </span>
+                        )}
+                      </div>
                       <div className="p-2.5 flex-1">
                         <p className="text-xs font-semibold leading-snug line-clamp-2 group-hover:underline">
                           {v.title}

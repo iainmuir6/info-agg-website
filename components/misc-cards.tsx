@@ -1,3 +1,4 @@
+import { ThumbImage } from "@/components/thumb-image";
 import { CountryMap } from "@/components/country-map";
 import type {
   CountryPayload,
@@ -221,15 +222,10 @@ export function WikipediaCard({ pages }: { pages: WikipediaPayload[] }) {
             className={`group block ${i > 0 ? "pt-2 border-t border-border" : ""}`}
           >
             <div className="flex gap-2.5">
-              {page.thumbnail && (
-                // eslint-disable-next-line @next/next/no-img-element
-                <img
-                  src={page.thumbnail}
-                  alt=""
-                  loading="lazy"
-                  className="w-12 h-12 object-cover border border-border shrink-0"
-                />
-              )}
+              <ThumbImage
+                src={page.thumbnail}
+                className="w-12 h-12 object-cover border border-border shrink-0"
+              />
               <div className="min-w-0">
                 <p
                   className="text-sm font-bold leading-tight group-hover:underline"
@@ -718,15 +714,10 @@ export function AlmanacMini({
           className={`${row} flex gap-1.5 items-center group hover:bg-secondary/50 transition-colors`}
         >
           <Pill label="Wiki" />
-          {p.thumbnail && (
-            // eslint-disable-next-line @next/next/no-img-element
-            <img
-              src={p.thumbnail}
-              alt=""
-              loading="lazy"
-              className="w-6 h-6 object-cover border border-border shrink-0"
-            />
-          )}
+          <ThumbImage
+            src={p.thumbnail}
+            className="w-6 h-6 object-cover border border-border shrink-0"
+          />
           <div className="min-w-0">
             <p className="text-[10px] font-semibold leading-[13px] line-clamp-1 group-hover:underline">
               {p.title}
