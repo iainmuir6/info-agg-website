@@ -169,10 +169,22 @@ appearing. `UpdatePasswordForm` additionally renders a hidden read-only
 `username` input (its two callers pass the address in) because a lone password
 field gives the manager nothing to attach a *save* to.
 
-Inputs are 16px on mobile (`text-base sm:text-[13px]`); below 16px iOS Safari
-zooms the page on focus. The placeholder is sized down on its own
-(`placeholder:text-[12px]`) — iOS reads the **input's** font-size for that
-decision, not the placeholder's.
+Input text and placeholder share one size (`text-[12px]`) so a field does not
+change scale as you type into it. This is a knowing trade-off: **iOS Safari
+zooms the page on focus for any input under 16px.** The 16px alternative needed
+the placeholder shrunk separately, which read as two type scales in one control.
+If the zoom becomes a problem the lever is `maximum-scale=1` on the viewport
+export — note that it suppresses focus zoom site-wide, so weigh it against
+pinch-zoom expectations before adding it.
+
+**AutoFill does not work in the installed PWA, and cannot be fixed here.**
+Safari and Chrome both fill correctly, which is the proof the markup is right.
+A home-screen web app runs in a WKWebView, where password AutoFill is a
+long-standing platform limitation — filling needs an Associated Domains
+entitlement that only a native app can declare, and the "save password" prompt
+does not fire at all. Do not go re-editing the form attributes chasing this.
+The practical mitigation is not having to sign in, which is what the sliding
+session cookie below is for.
 
 **Sessions in the iOS home-screen PWA**
 

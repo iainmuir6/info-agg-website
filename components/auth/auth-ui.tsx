@@ -110,15 +110,18 @@ export function AuthField({ label, action, revealable, id, type, ...props }: Fie
           type={resolvedType}
           {...props}
           className={cn(
-            // The input itself stays 16px on mobile: anything smaller and iOS
-            // Safari zooms the page on focus, which shoves the panel half
-            // off-screen. iOS reads the *input's* font-size for that, not the
-            // placeholder's, so the placeholder is sized down on its own --
-            // 16px of "you@example.com" dominated the panel on a phone.
+            // Typed text and placeholder share one size, so the field does not
+            // visibly change scale the moment you start typing into it.
+            //
+            // Knowing trade-off: iOS Safari zooms the page on focus for any
+            // input under 16px. The 16px alternative needed the placeholder
+            // shrunk separately, which read as two type scales in one control.
+            // If the zoom becomes a problem, the lever is `maximum-scale=1` on
+            // the viewport -- see the note in CLAUDE.md before reaching for it.
             "w-full bg-transparent border border-border px-2.5 py-2",
-            "text-base sm:text-[13px] font-mono",
+            "text-[12px] font-mono",
             "outline-none transition-colors",
-            "placeholder:text-muted-foreground/60 placeholder:text-[12px]",
+            "placeholder:text-muted-foreground/60",
             "focus:border-foreground",
             revealable && "pr-16",
           )}
