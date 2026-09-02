@@ -1,9 +1,7 @@
 "use client";
 
 import { cn } from "@/lib/utils";
-import { createClient } from "@/lib/supabase/client";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
 import { useState } from "react";
 import {
   AuthError,
@@ -13,36 +11,28 @@ import {
   AuthSubmit,
 } from "@/components/auth/auth-ui";
 
+/**
+ * A real browser form POST to /auth/sign-in — not an XHR, and not a server
+ * action (React would intercept that with fetch and there would be no
+ * navigation). The navigation is the point: it is what makes iOS offer to
+ * save the password, and it is what lets the session cookie arrive as a
+ * server Set-Cookie instead of being written from script and capped at seven
+ * days by WebKit. See app/auth/sign-in/route.ts.
+ *
+ * The inputs are uncontrolled on purpose. A password manager fills a field by
+ * setting its value directly, and controlled React inputs are the classic way
+ * that fill gets reverted on the next render.
+ */
 export function LoginForm({
+  error,
+  next,
   className,
   ...props
-}: React.ComponentPropsWithoutRef<"div">) {
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
-  const [error, setError] = useState<string | null>(null);
-  const [isLoading, setIsLoading] = useState(false);
-  const router = useRouter();
-
-  const handleLogin = async (e: React.FormEvent) => {
-    e.preventDefault();
-    const supabase = createClient();
-    setIsLoading(true);
-    setError(null);
-
-    try {
-      const { error } = await supabase.auth.signInWithPassword({
-        email,
-        password,
-      });
-      if (error) throw error;
-      router.push("/");
-      router.refresh();
-    } catch (error: unknown) {
-      setError(error instanceof Error ? error.message : "An error occurred");
-    } finally {
-      setIsLoading(false);
-    }
-  };
+}: React.ComponentPropsWithoutRef<"div"> & {
+  error?: string;
+  next?: string;
+}) {
+  const [pending, setPending] = useState(false);
 
   return (
     <div className={cn(className)} {...props}>
@@ -56,11 +46,16 @@ export function LoginForm({
           </>
         }
       >
-        {/* iOS Safari and Chrome key AutoFill off a real form containing named
-            credential fields. These inputs previously had neither `name` nor
-            `autoComplete`, which is why the keychain suggestion stopped
-            appearing — the heuristics had nothing to match on. */}
-        <form onSubmit={handleLogin} className="flex flex-col gap-4">
+        <form
+          method="post"
+          action="/auth/sign-in"
+          // No preventDefault anywhere: the browser must perform this
+          // submission itself for any of the above to hold.
+          onSubmit={() => setPending(true)}
+          className="flex flex-col gap-4"
+        >
+          {next && <input type="hidden" name="next" value={next} />}
+
           <AuthField
             id="email"
             name="email"
@@ -73,8 +68,6 @@ export function LoginForm({
             spellCheck={false}
             placeholder="you@example.com"
             required
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
           />
 
           <AuthField
@@ -86,8 +79,6 @@ export function LoginForm({
             placeholder="••••••••"
             required
             revealable
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
             action={
               <Link
                 href="/auth/forgot-password"
@@ -100,7 +91,11 @@ export function LoginForm({
 
           {error && <AuthError>{error}</AuthError>}
 
-          <AuthSubmit pending={isLoading} pendingLabel="Signing in">
+          <AuthSubmit
+            pending={pending}
+            pendingLabel="Signing in"
+            disableWhilePending={false}
+          >
             Sign in
           </AuthSubmit>
         </form>

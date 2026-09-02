@@ -135,6 +135,7 @@ This is a personal information aggregator ("Info Hub") with two layers:
 - `app/(public)/` — Public-facing pages with a shared newspaper-style layout (`layout.tsx`). Routes: `/` (Command Center dashboard), `/news`, `/sports`, `/sports/[league]`, `/[league]/[team]`, `/markets`, `/markets/[ticker]`, `/media`, `/misc` (Almanac), `/summary` (the two AI briefings in full — reachable only from their Command Center cards, deliberately not in `NAV_LINKS`), `/economy`, `/profile` (favorites + podcast search, signed-in users), `/dashboard` (ETL run monitoring + trigger, `super_admin` only)
 - `app/(auth)/auth/` — Auth pages: login, sign-up, sign-up-success, forgot-password, update-password, error. Shared two-pane shell in `layout.tsx` (masthead pane on `lg+`, collapses on a phone)
 - `app/auth/callback/route.ts` — Supabase PKCE exchange (`GET /auth/callback?code=…&next=…`)
+- `app/auth/sign-in/route.ts` — `POST /auth/sign-in`, the target of the login form's native submit. Same-origin checked (`isAllowedSameOriginMutation`), `next` validated (`isSafeAuthNextPath`), 303 on success so the browser follows with GET. Errors come back as `/auth/login?error=…`; the submitted email is deliberately not echoed onto the URL
 - `app/api/etl/` — `POST /api/etl` (`super_admin` only) fires a `workflow_dispatch` against `.github/workflows/daily-etl.yml` (or `intraday-refresh.yml` with `{ mode: "quick" }`) and returns immediately — Vercel serverless has no Python runtime, so the ETL always runs on GitHub Actions, never in-process. Progress shows up in `info_agg.etl_runs` and the Actions tab.
 - `app/api/cron/etl/` — `GET /api/cron/etl?job=daily|a|b` (bearer `CRON_SECRET`) — the unattended scheduler. Called by the 16 cron entries in `vercel.json`; each fires a `workflow_dispatch` and records `triggered_by='cron'`. Shares `lib/github-dispatch.ts` with `POST /api/etl`.
 - `app/api/revalidate/` — `POST /api/revalidate` (bearer `REVALIDATE_SECRET`) — called by the GitHub Actions workflow after a successful run to `revalidateTag("etl-data")` so the site picks up new rows within seconds.
@@ -179,14 +180,29 @@ the input size or drop the viewport cap without reconsidering the other**. On
 iOS 10+ the cap is honoured for automatic focus zoom but the user can still
 pinch past it; Chrome on Android does enforce it, capping pinch-zoom at 1x.
 
-**AutoFill does not work in the installed PWA, and cannot be fixed here.**
-Safari and Chrome both fill correctly, which is the proof the markup is right.
-A home-screen web app runs in a WKWebView, where password AutoFill is a
-long-standing platform limitation — filling needs an Associated Domains
-entitlement that only a native app can declare, and the "save password" prompt
-does not fire at all. Do not go re-editing the form attributes chasing this.
-The practical mitigation is not having to sign in, which is what the sliding
-session cookie below is for.
+**Login is a native form POST, and that is load-bearing.**
+`components/login-form.tsx` submits to `app/auth/sign-in/route.ts` with a plain
+`method="post"` — no `preventDefault`, no XHR, and deliberately **not** a server
+action, because React intercepts a server-action submit with fetch and produces
+no navigation at all. Two things depend on the navigation being real:
+
+- iOS only offers **Save Password** when it sees a username+password form
+  submitted and then a navigation. The original client-side flow did
+  `preventDefault` → XHR → `router.push()`, so iOS never observed a login, never
+  saved a credential, and AutoFill in the installed PWA therefore had nothing to
+  offer even though the markup was correct.
+- The session cookie is set here as a real `Set-Cookie`, so it escapes WebKit's
+  7-day cap on script-written cookies at the moment the session is created,
+  rather than waiting for the proxy to slide it.
+
+The login inputs are **uncontrolled** for the same reason: a password manager
+fills a field by setting its value directly, and a controlled React input is the
+classic way that fill gets reverted on the next render.
+
+(An earlier revision of this file claimed PWA AutoFill was an unfixable WKWebView
+platform limitation. That was wrong — it generalised from reports about *native
+apps embedding* WKWebView, which do need an Associated Domains entitlement. A
+home-screen web app is first-party web content and can autofill.)
 
 **Sessions in the iOS home-screen PWA**
 
@@ -224,9 +240,9 @@ works — validity is still decided at Supabase. Which is worth knowing, because
 timeout configured**, so sessions now really do last. The lever for an actual
 ceiling is Supabase → Auth → Sessions, server-side.
 
-Still open: `signInWithPassword` runs client-side, so the *first* cookie after
-sign-in is script-written and 7-day capped until the first proxy request slides
-it. Moving it into a server action would close that gap.
+The first cookie after sign-in is now server-set too — see the login route
+above — so the proxy's sliding re-issue covers the ongoing case rather than
+having to rescue a 7-day cookie created at sign-in.
 
 **Thumbnails**
 

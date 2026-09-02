@@ -149,16 +149,22 @@ export function AuthSubmit({
   pending,
   pendingLabel,
   disabled,
+  /** Native form POSTs (the login form) pass false. Disabling the submit
+   *  button in the same tick the browser is starting a real submission is a
+   *  known way to lose the submission, and a double sign-in POST is harmless
+   *  anyway — it just authenticates twice. */
+  disableWhilePending = true,
 }: {
   children: React.ReactNode;
   pending?: boolean;
   pendingLabel: string;
   disabled?: boolean;
+  disableWhilePending?: boolean;
 }) {
   return (
     <button
       type="submit"
-      disabled={pending || disabled}
+      disabled={(pending && disableWhilePending) || disabled}
       className={cn(
         "w-full flex items-center justify-center gap-2 px-3 py-2.5",
         "bg-foreground text-background",
