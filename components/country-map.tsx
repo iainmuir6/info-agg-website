@@ -133,6 +133,8 @@ export function CountryMap({
           (topology as any).objects.countries
         ) as unknown as object;
 
+        unwrapAntimeridian(collection);
+
         const features = new GeoJSON().readFeatures(collection, {
           dataProjection: "EPSG:4326",
           featureProjection: "EPSG:3857",
@@ -169,6 +171,65 @@ export function CountryMap({
       aria-label={name ? `Map showing the location of ${name}` : "Country location map"}
     />
   );
+}
+
+/** Reconcile rings and parts that cross the antimeridian.
+ *
+ *  world-atlas' 110m geometry for Russia and Fiji crosses ±180°, and a
+ *  vertex-by-vertex EPSG:4326 → EPSG:3857 transform cannot know that. Two
+ *  things go wrong, and both were visible on the card:
+ *
+ *  1. A ring stepping from +179° to -179° reprojects as a sweep back across
+ *     the entire world, so the polygon closes as a slab spanning every
+ *     longitude. That is the grey band that ran across Iceland's map — the
+ *     smear is Russia's, and it would cross any country framed at a latitude
+ *     it passes through.
+ *  2. A MultiPolygon with parts on both sides of the line has an extent of the
+ *     full -180…180 whatever its real width, so fit() frames the whole planet.
+ *     Russia and Fiji both did; Fiji is 2.9° wide and was drawn at world zoom.
+ *
+ *  So: carry longitudes past ±180 within each ring, then shift whole parts by
+ *  multiples of 360° onto the same side as the largest one. Chukotka ends up
+ *  at 180–190°E, off the right-hand edge of the world, which is where it
+ *  belongs. Countries that do not cross the line are left byte-identical.
+ */
+function unwrapAntimeridian(collection: object): void {
+  const unwrapRing = (ring: number[][]) => {
+    for (let i = 1; i < ring.length; i++) {
+      const step = ring[i][0] - ring[i - 1][0];
+      // Compare against the already-corrected previous vertex, so the shift
+      // accumulates along the ring instead of being reapplied at every step.
+      if (step > 180) ring[i][0] -= 360;
+      else if (step < -180) ring[i][0] += 360;
+    }
+  };
+  const meanLon = (ring: number[][]) =>
+    ring.reduce((sum, pt) => sum + pt[0], 0) / ring.length;
+
+  const { features } = collection as {
+    features?: { geometry?: { type?: string; coordinates?: unknown } }[];
+  };
+
+  for (const f of features ?? []) {
+    const geom = f.geometry;
+    if (geom?.type === "Polygon") {
+      (geom.coordinates as number[][][]).forEach(unwrapRing);
+      continue;
+    }
+    if (geom?.type !== "MultiPolygon") continue;
+
+    const parts = geom.coordinates as number[][][][];
+    for (const part of parts) part.forEach(unwrapRing);
+
+    // The largest part is the mainland, so it decides which side of the line
+    // the country sits on; outlying islands move to join it.
+    const anchor = parts.reduce((a, b) => (b[0].length > a[0].length ? b : a));
+    const ref = meanLon(anchor[0]);
+    for (const part of parts) {
+      const shift = Math.round((ref - meanLon(part[0])) / 360) * 360;
+      if (shift) for (const ring of part) for (const pt of ring) pt[0] += shift;
+    }
+  }
 }
 
 /** Fallback zoom when there is no polygon: derived from land area, because one
