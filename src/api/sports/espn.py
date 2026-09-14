@@ -391,6 +391,27 @@ def _standings_stat(stats: List[Dict[str, Any]], *names: str) -> Optional[Dict[s
     return None
 
 
+def _parse_overall_record(stats: List[Dict[str, Any]]) -> tuple:
+    """College football's standings stats carry no `losses`/`ties`/`winPercent`
+    field at all (unlike every other ESPN league) — the only place the loss
+    count exists is as text, in the "W-L" or "W-L-T" `displayValue` of the
+    stat literally named `overall`. Returns (wins, losses, ties), any of
+    which may be None if the summary stat is missing or unparseable."""
+    overall = _standings_stat(stats, 'overall')
+    display = overall.get('displayValue') if overall else None
+    if not display:
+        return None, None, None
+    parts = display.split('-')
+    try:
+        if len(parts) == 3:
+            return int(parts[0]), int(parts[1]), int(parts[2])
+        if len(parts) == 2:
+            return int(parts[0]), int(parts[1]), None
+    except ValueError:
+        pass
+    return None, None, None
+
+
 def _standings_entries(
     entries: List[Dict[str, Any]], conference: Optional[str], division: Optional[str], season: Optional[int]
 ) -> List[Dict[str, Any]]:
@@ -412,22 +433,50 @@ def _standings_entries(
         rank = _standings_stat(stats, 'rank')
         logos = team.get('logos') or []
 
+        wins_val = int(wins['value']) if wins and wins.get('value') is not None else None
+        losses_val = int(losses['value']) if losses and losses.get('value') is not None else None
+        ties_val = int(ties['value']) if ties and ties.get('value') is not None else None
+        if losses_val is None:
+            # College football: fall back to the "W-L(-T)" text summary.
+            ov_wins, ov_losses, ov_ties = _parse_overall_record(stats)
+            wins_val = wins_val if wins_val is not None else ov_wins
+            losses_val = ov_losses
+            ties_val = ties_val if ties_val is not None else ov_ties
+
+        win_pct_val = win_pct.get('value') if win_pct else None
+        if win_pct_val is None and wins_val is not None and losses_val is not None:
+            played = wins_val + losses_val + (ties_val or 0)
+            win_pct_val = wins_val / played if played > 0 else None
+
+        rank_val = int(rank['value']) if rank and rank.get('value') is not None else None
+        playoff_seed_val = int(playoff_seed['value']) if playoff_seed and playoff_seed.get('value') is not None else None
+        if rank_val is None and win_pct is None and playoff_seed_val is not None:
+            # College football has neither a top-level `rank` nor `winPercent`
+            # stat (this is the same payload shape `losses` was missing
+            # from, above) — its `playoffSeed` is ESPN's own tiebreak-resolved
+            # conference standing position, verified against espn.com's
+            # displayed ACC order. Gated on `win_pct is None` too so this
+            # doesn't fire for leagues (NFL, NBA, ...) that do carry
+            # `winPercent` but no `rank`, where `playoffSeed` is a
+            # league-wide playoff seed, not a within-division rank.
+            rank_val = playoff_seed_val
+
         rows.append({
             'team_name': team.get('displayName'),
             'team_abbrev': team.get('abbreviation'),
             'logo': logos[0].get('href') if logos else None,
             'conference': conference,
             'division': division,
-            'wins': int(wins['value']) if wins and wins.get('value') is not None else None,
-            'losses': int(losses['value']) if losses and losses.get('value') is not None else None,
-            'ties': int(ties['value']) if ties and ties.get('value') is not None else None,
-            'win_percent': win_pct.get('value') if win_pct else None,
+            'wins': wins_val,
+            'losses': losses_val,
+            'ties': ties_val,
+            'win_percent': win_pct_val,
             'games_behind': games_behind.get('displayValue') if games_behind else None,
             'streak': streak.get('displayValue') if streak else None,
-            'playoff_seed': int(playoff_seed['value']) if playoff_seed and playoff_seed.get('value') is not None else None,
+            'playoff_seed': playoff_seed_val,
             'point_differential': differential.get('value') if differential else None,
             'points': points.get('value') if points else None,
-            'rank': int(rank['value']) if rank and rank.get('value') is not None else None,
+            'rank': rank_val,
             'season': season,
         })
     return rows
