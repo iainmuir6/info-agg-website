@@ -11,17 +11,22 @@ import type { StandingsGroup } from "@/lib/standings";
 export function StandingsExpander({
   groups,
   leagueSlug,
-  isFavorite,
+  favoriteTeamNames,
 }: {
   groups: StandingsGroup[];
   leagueSlug: string;
-  /** Marks a favorited team's row with the same gold ring the games grid uses,
-   *  since a favorited team can now sit past the top-N cut it would otherwise
-   *  have been sliced out at (see `topNPerGroupWithFavorites`). */
-  isFavorite?: (teamName: string | null) => boolean;
+  /** Lowercased, trimmed favorited team names for this league — a Client
+   *  Component prop has to be data, not a function, so the server passes the
+   *  set rather than an `isFavorite` callback. Marks a favorited team's row
+   *  with the same gold ring the games grid uses, since a favorited team can
+   *  now sit past the top-N cut it would otherwise have been sliced out at
+   *  (see `topNPerGroupWithFavorites`). */
+  favoriteTeamNames?: Set<string>;
 }) {
   const [open, setOpen] = useState(false);
   if (groups.length === 0) return null;
+  const isFavorite = (teamName: string | null) =>
+    !!teamName && !!favoriteTeamNames?.has(teamName.trim().toLowerCase());
 
   return (
     <div className="border-t border-border">
@@ -56,7 +61,7 @@ export function StandingsExpander({
                     <Link
                       key={t.team_abbrev}
                       href={`/${leagueSlug}/${t.team_abbrev}`}
-                      className={`flex items-center justify-between gap-2 px-1 py-1 text-[10px] font-mono hover:bg-secondary/50 transition-colors${isFavorite?.(t.team_name) ? " favorite-cell" : ""}`}
+                      className={`flex items-center justify-between gap-2 px-1 py-1 text-[10px] font-mono hover:bg-secondary/50 transition-colors${isFavorite(t.team_name) ? " favorite-cell" : ""}`}
                     >
                       <span className="flex items-center gap-1.5 min-w-0">
                         {t.logo && (

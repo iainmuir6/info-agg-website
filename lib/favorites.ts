@@ -72,6 +72,18 @@ export function teamIsFavorite(
   return favorites.teams.has(teamKey(league, teamName));
 }
 
+/** Lowercased, unprefixed team names favorited within one league — for
+ *  handing to a Client Component, which can only receive data, not the
+ *  `teamIsFavorite` closure itself. */
+export function favoriteTeamNamesForLeague(favorites: Favorites, league: string): Set<string> {
+  const prefix = `${league.toLowerCase()}|`;
+  const names = new Set<string>();
+  for (const key of favorites.teams) {
+    if (key.startsWith(prefix)) names.add(key.slice(prefix.length));
+  }
+  return names;
+}
+
 /**
  * Stable favourites-first reordering: favorites keep their relative order and
  * so does everything else, so whatever the caller already sorted by (status,

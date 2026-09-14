@@ -36,6 +36,7 @@ import {
   getFavorites,
   gameIsFavorite,
   teamIsFavorite,
+  favoriteTeamNamesForLeague,
   favoritesFirst,
   byDayThenFavorites,
   NO_FAVORITES,
@@ -1420,7 +1421,7 @@ export default async function CommandCenter() {
               (t) => teamIsFavorite(favorites, snap.league!.league, t.team_name),
             )}
             leagueSlug={snap.league.league}
-            isFavorite={(teamName) => teamIsFavorite(favorites, snap.league!.league, teamName)}
+            favoriteTeamNames={favoriteTeamNamesForLeague(favorites, snap.league.league)}
           />
           {news.length > 0 && (
             /* Divider only when standings actually rendered above — the games
