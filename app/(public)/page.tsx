@@ -22,7 +22,7 @@ import Link from "next/link";
 import { DEFAULT_HOME_ORDER, SECTION_DOMAIN, type HomeSectionKey } from "@/lib/home-sections";
 import { TickerHoverChart } from "@/components/ticker-hover-chart";
 import { compactStatus, formatGameTime, isGameToday, formatGameDateShort, leadingDaySlate } from "@/lib/sports-status";
-import { latestSeasonOnly, topNPerGroup, type StandingRow, type StandingsGroup } from "@/lib/standings";
+import { latestSeasonOnly, groupStandings, topNPerGroupWithFavorites, type StandingRow, type StandingsGroup } from "@/lib/standings";
 import { StandingsExpander } from "@/components/standings-expander";
 import {
   SPOTIFY_HOME_PLAYLISTS,
@@ -35,6 +35,7 @@ import { FavoritePodcastButton } from "@/components/favorite-podcast-button";
 import {
   getFavorites,
   gameIsFavorite,
+  teamIsFavorite,
   favoritesFirst,
   byDayThenFavorites,
   NO_FAVORITES,
@@ -673,7 +674,12 @@ async function getLeagueSnapshot(
     const recentGames = (recentRes.data ?? []) as ScoreRowType[];
     const upcomingGames = (upcomingRes.data ?? []) as ScoreRowType[];
     const news = (newsRes.data ?? []) as SportsNewsItem[];
-    const standings = topNPerGroup(latestSeasonOnly((standingsRes.data ?? []) as StandingRow[]), 5);
+    // Full groups, not yet capped to top N — this snapshot is fetched before
+    // the user's favorites are known (see below), and truncating here would
+    // permanently drop a followed team that sits outside a large league's
+    // (e.g. NCAAF's) top-N-per-conference cut. Capping happens at render time
+    // via `topNPerGroupWithFavorites`, once `favorites` is available.
+    const standings = groupStandings(latestSeasonOnly((standingsRes.data ?? []) as StandingRow[]));
 
     return {
       league: leagueRow as LeagueRow,
@@ -1407,7 +1413,15 @@ export default async function CommandCenter() {
               ))}
             </div>
           )}
-          <StandingsExpander groups={snap.standings} leagueSlug={snap.league.league} />
+          <StandingsExpander
+            groups={topNPerGroupWithFavorites(
+              snap.standings,
+              5,
+              (t) => teamIsFavorite(favorites, snap.league!.league, t.team_name),
+            )}
+            leagueSlug={snap.league.league}
+            isFavorite={(teamName) => teamIsFavorite(favorites, snap.league!.league, teamName)}
+          />
           {news.length > 0 && (
             /* Divider only when standings actually rendered above — the games
                grid already carries its own `border-b`, so an unconditional one

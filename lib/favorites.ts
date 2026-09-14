@@ -61,6 +61,17 @@ export function gameIsFavorite(
   );
 }
 
+/** True when a single team name is a favorite (standings rows, unlike games,
+ *  carry only one team). */
+export function teamIsFavorite(
+  favorites: Favorites,
+  league: string,
+  teamName?: string | null,
+): boolean {
+  if (favorites.teams.size === 0 || !teamName) return false;
+  return favorites.teams.has(teamKey(league, teamName));
+}
+
 /**
  * Stable favourites-first reordering: favorites keep their relative order and
  * so does everything else, so whatever the caller already sorted by (status,

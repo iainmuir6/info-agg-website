@@ -62,7 +62,21 @@ export function groupStandings(rows: StandingRow[]): StandingsGroup[] {
   return groups;
 }
 
-/** Top N teams per conference — or top N overall when the league has none. */
-export function topNPerGroup(rows: StandingRow[], n: number): StandingsGroup[] {
-  return groupStandings(rows).map((g) => ({ ...g, teams: g.teams.slice(0, n) }));
+/** Top N teams per conference, plus any favorited team that would otherwise
+ *  be sliced out. A large league (NCAAF's ~130 FBS teams across ~10
+ *  conferences) routinely has a followed team sitting well outside its
+ *  conference's top N — a plain top-N cut would drop it from the homepage
+ *  card regardless of the favorite, which is silently indistinguishable
+ *  from favoriting not working at all. Favorited teams beyond N are appended
+ *  after the top N (still in rank order among themselves). */
+export function topNPerGroupWithFavorites(
+  groups: StandingsGroup[],
+  n: number,
+  isFavorite: (row: StandingRow) => boolean,
+): StandingsGroup[] {
+  return groups.map((g) => {
+    const top = g.teams.slice(0, n);
+    const extraFavorites = g.teams.slice(n).filter(isFavorite);
+    return extraFavorites.length > 0 ? { ...g, teams: [...top, ...extraFavorites] } : { ...g, teams: top };
+  });
 }
