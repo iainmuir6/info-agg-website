@@ -85,6 +85,22 @@ export function favoriteTeamNamesForLeague(favorites: Favorites, league: string)
 }
 
 /**
+ * Truncate to `max` items, but a favorite beyond the cut survives anyway,
+ * appended at the end. `CollapsibleCard` no longer scrolls internally — its
+ * own docs say callers must cap their item counts — so a large college slate
+ * (an 80-game NCAAF Saturday) needs a real display cap, not just the fetch's
+ * headroom limit. A plain `slice(0, max)` would cut a favorite that landed
+ * past position `max`, which is exactly the game this exists to keep.
+ */
+export function capKeepingFavorites<T>(items: T[], max: number, isFavorite: (item: T) => boolean): T[] {
+  if (items.length <= max) return items;
+  const head = items.slice(0, max);
+  const headSet = new Set(head);
+  const extras = items.slice(max).filter((item) => isFavorite(item) && !headSet.has(item));
+  return extras.length > 0 ? [...head, ...extras] : head;
+}
+
+/**
  * Stable favourites-first reordering: favorites keep their relative order and
  * so does everything else, so whatever the caller already sorted by (status,
  * game time, market cap) still holds *within* each band.

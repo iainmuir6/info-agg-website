@@ -191,7 +191,7 @@ export default async function SportsPage() {
             // plays 16 games a day, so `slice(0, 6)` showed less than half of
             // one day while also mixing in older days.
             const played = byDayThenFavorites(
-              leadingDaySlate(leagueScores.filter(isPlayed), (s) => s.game_date, "desc"),
+              leadingDaySlate(leagueScores.filter(isPlayed), (s) => s.game_date, "desc", isFavGame),
               (s) => s.game_date,
               isFavGame,
               "desc",
@@ -204,7 +204,7 @@ export default async function SportsPage() {
             const notYetPlayed = leagueScores.filter((s) => !isPlayed(s));
             const upcomingOnly = notYetPlayed.filter((s) => easternDay(s.game_date) >= todayKey);
             const scheduled = byDayThenFavorites(
-              leadingDaySlate(upcomingOnly, (s) => s.game_date, "asc"),
+              leadingDaySlate(upcomingOnly, (s) => s.game_date, "asc", isFavGame),
               (s) => s.game_date,
               isFavGame,
               "asc",

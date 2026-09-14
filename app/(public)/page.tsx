@@ -37,6 +37,7 @@ import {
   gameIsFavorite,
   teamIsFavorite,
   favoriteTeamNamesForLeague,
+  capKeepingFavorites,
   favoritesFirst,
   byDayThenFavorites,
   NO_FAVORITES,
@@ -1130,8 +1131,13 @@ export default async function CommandCenter() {
     getLeagueSnapshot(supabase, "baseball", "mlb"),
     getLeagueSnapshot(supabase, "football", "nfl"),
     getLeagueSnapshot(supabase, "hockey", "nhl"),
-    getLeagueSnapshot(supabase, "basketball", "mens-college-basketball"),
-    getLeagueSnapshot(supabase, "football", "college-football"),
+    // College leagues run 60-80+ games on their busiest single day (a full
+    // FBS/FCS Saturday, a loaded November D1 slate) — the default 40-row
+    // headroom didn't even cover that one day, let alone reach back far
+    // enough for a favorited team's game on a lighter day (e.g. Friday CFB)
+    // to survive the fetch at all.
+    getLeagueSnapshot(supabase, "basketball", "mens-college-basketball", 100),
+    getLeagueSnapshot(supabase, "football", "college-football", 100),
     getLeagueSnapshot(supabase, "basketball", "wnba"),
   ]);
 
@@ -1378,20 +1384,39 @@ export default async function CommandCenter() {
 
     // One day's full slate per side rather than a fixed 4 + 2. Day is the
     // primary sort; favorites only break ties within that day, so a followed
-    // team leads its own date without displacing a more recent one.
+    // team leads its own date without displacing a more recent one. A
+    // favorite's game outside the leading day (e.g. a Friday game when
+    // Saturday had the bigger CFB slate) still has to survive
+    // `leadingDaySlate`'s day filter to reach that sort at all — bounded to
+    // the single nearest outside day so it can't surface a team's whole
+    // remaining schedule or (on the results side) a weeks-stale leftover.
+    //
+    // `CollapsibleCard` doesn't scroll internally, so a full college slate
+    // (an 80-game NCAAF Saturday) needs a hard display cap per side too —
+    // `capKeepingFavorites` keeps that cap from cutting a favorite that
+    // landed past it.
+    const MAX_GAMES_PER_SIDE = 20;
     const isFav = (g: ScoreRowType) => gameIsFavorite(favorites, snap.league!.league, g);
     const games = [
-      ...byDayThenFavorites(
-        leadingDaySlate(snap.recentGames, (g) => g.game_date, "desc"),
-        (g) => g.game_date,
+      ...capKeepingFavorites(
+        byDayThenFavorites(
+          leadingDaySlate(snap.recentGames, (g) => g.game_date, "desc", isFav),
+          (g) => g.game_date,
+          isFav,
+          "desc",
+        ),
+        MAX_GAMES_PER_SIDE,
         isFav,
-        "desc",
       ),
-      ...byDayThenFavorites(
-        leadingDaySlate(snap.upcomingGames, (g) => g.game_date, "asc"),
-        (g) => g.game_date,
+      ...capKeepingFavorites(
+        byDayThenFavorites(
+          leadingDaySlate(snap.upcomingGames, (g) => g.game_date, "asc", isFav),
+          (g) => g.game_date,
+          isFav,
+          "asc",
+        ),
+        MAX_GAMES_PER_SIDE,
         isFav,
-        "asc",
       ),
     ];
     const news = snap.news.slice(0, 3);

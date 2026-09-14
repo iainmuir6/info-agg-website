@@ -23,6 +23,14 @@ export function easternDay(dateStr: string | null | undefined): string {
   return easternDayKey(dateStr);
 }
 
+/** Whole-day gap between two Eastern calendar-day keys ("2026-09-11" vs.
+ *  "2026-09-13" → 2). Parsed at local noon so no timezone/DST rounding can
+ *  shift the count by a day. */
+function dayGap(a: string, b: string): number {
+  const noon = (key: string) => new Date(`${key}T12:00:00`).getTime();
+  return Math.round(Math.abs(noon(a) - noon(b)) / 86_400_000);
+}
+
 /**
  * Every game on the *leading* calendar day of a list — the most recent day that
  * has results (`"desc"`), or the next day that has fixtures (`"asc"`).
@@ -35,18 +43,55 @@ export function easternDay(dateStr: string | null | undefined): string {
  * Undated rows are ignored when picking the day, and excluded from the result
  * (they can't belong to a day). If nothing has a date, the input is returned
  * unchanged rather than emptied.
+ *
+ * `isFavorite`, when given, keeps a favorited team's game even when it falls
+ * outside the leading day — college football in particular spreads one
+ * "weekend" across Thu/Fri/Sat/Sun, so a favorite that played Friday was
+ * silently dropped whenever Saturday had the larger slate. Two guards keep
+ * this from over-including:
+ *   - Only the SINGLE nearest outside day is added, never every day a
+ *     favorite happens to appear on — otherwise a favorite with no bye
+ *     showed its whole remaining schedule (`"asc"`) or every leftover row
+ *     the fetch window still held (`"desc"`).
+ *   - On the `"desc"` (results) side, that day must be within
+ *     `maxFavoriteGapDays` of the leading day — otherwise, whenever a
+ *     favorite's actual next game hadn't happened yet, the nearest thing in
+ *     the fetch window could be a weeks-stale leftover (an NFL preseason
+ *     finale from three weeks back), which reads as a current result.
+ *     Unbounded on `"asc"` (upcoming): a team's real next fixture is
+ *     legitimately a week-plus out for a weekly league like the NFL.
+ * The caller's `byDayThenFavorites` pass already sorts multi-day input
+ * correctly (day first, favorite as the tiebreak second), so the extra day's
+ * games just need to survive this filter to land in the right place.
  */
 export function leadingDaySlate<T>(
   items: T[],
   getDate: (item: T) => string | null | undefined,
   direction: "desc" | "asc",
+  isFavorite?: (item: T) => boolean,
+  maxFavoriteGapDays = 5,
 ): T[] {
   const days = items.map((i) => easternDay(getDate(i))).filter((d) => d !== "");
   if (days.length === 0) return items;
   const target = days.reduce((best, d) =>
     direction === "desc" ? (d > best ? d : best) : (d < best ? d : best),
   );
-  return items.filter((i) => easternDay(getDate(i)) === target);
+  const leading = items.filter((i) => easternDay(getDate(i)) === target);
+  if (!isFavorite) return leading;
+
+  let nearestDay: string | null = null;
+  for (const item of items) {
+    const day = easternDay(getDate(item));
+    if (!day || day === target || !isFavorite(item)) continue;
+    const inDirection = direction === "desc" ? day < target : day > target;
+    if (!inDirection) continue;
+    if (direction === "desc" && dayGap(day, target) > maxFavoriteGapDays) continue;
+    const better =
+      nearestDay === null || (direction === "desc" ? day > nearestDay : day < nearestDay);
+    if (better) nearestDay = day;
+  }
+  if (nearestDay === null) return leading;
+  return [...leading, ...items.filter((i) => easternDay(getDate(i)) === nearestDay && isFavorite(i))];
 }
 
 /** Human label for a day key from `easternDay` ("2026-07-29" → "Jul 29"). */
