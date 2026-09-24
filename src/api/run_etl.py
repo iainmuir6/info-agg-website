@@ -282,16 +282,29 @@ def run_markets_etl(
                             'image_url': r.get('image_url'),
                             'source': r.get('source'),
                             'published_at': r.get('published_at'),
+                            'related_tickers': [tid],
                         }
                     )
                 elif r.get('stock_id'):
                     news_for_db.append(r)
-            seen: set = set()
-            deduped = [r for r in news_for_db if not (r['url'] in seen or seen.add(r['url']))]
-            # Chunked + bisecting upsert: a rejected row costs that row, not the batch
+            # One row per URL, carrying every ticker that returned it. Keeping
+            # "whichever thread finished first" instead made stock_id flip
+            # between runs, and the frontend's related_tickers filter only
+            # finds an article under the tickers recorded here.
+            by_url: Dict[str, Dict[str, Any]] = {}
+            for r in news_for_db:
+                kept = by_url.setdefault(r['url'], {**r, 'related_tickers': []})
+                for t in r.get('related_tickers') or []:
+                    if t not in kept['related_tickers']:
+                        kept['related_tickers'].append(t)
+            deduped = list(by_url.values())
+            # Insert-or-skip: the 7-day lookback re-fetches every article ~7
+            # times, and rewriting it each time bloated the indexes 3x.
+            # Chunked + bisecting: a rejected row costs that row, not the batch.
             total_stats['news_inserted'] = chunked_upsert(
                 supabase, 'company_news', deduped,
                 on_conflict='url', errors=total_stats['errors'], chunk_size=100,
+                ignore_duplicates=True,
             )
 
         # Run market-news, sentiment, and econ-indicators in parallel —

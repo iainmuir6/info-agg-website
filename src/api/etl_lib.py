@@ -351,6 +351,7 @@ def chunked_upsert(
     on_conflict: Optional[str] = None,
     errors: Optional[List[str]] = None,
     chunk_size: int = UPSERT_CHUNK,
+    ignore_duplicates: bool = False,
 ) -> int:
     """Upsert records in chunks, salvaging everything that can be written.
 
@@ -359,16 +360,26 @@ def chunked_upsert(
     instead of the whole day's data for the table. Returns the number of rows
     written; failures are appended to ``errors`` (bounded to keep the etl_runs
     payload small) rather than raised.
+
+    ``ignore_duplicates`` makes it insert-or-skip (``ON CONFLICT DO NOTHING``)
+    and the return value counts only the rows actually inserted. Use it for
+    append-only feeds that re-fetch rows they already hold: a no-op rewrite
+    still writes a new tuple and, unless it lands HOT, a new entry in every
+    index — company_news carried 21 MB of indexes over 6 MB of rows that way.
     """
     if not records:
         return 0
 
     def _write(batch: List[Dict[str, Any]], attempts: int) -> int:
         def _exec():
-            q = supabase.table(table).upsert(batch, on_conflict=on_conflict) if on_conflict \
-                else supabase.table(table).upsert(batch)
-            return q.execute()
+            kw: Dict[str, Any] = {'ignore_duplicates': ignore_duplicates}
+            if on_conflict:
+                kw['on_conflict'] = on_conflict
+            return supabase.table(table).upsert(batch, **kw).execute()
         resp = db_call(_exec, f'{table} upsert ({len(batch)} rows)', attempts=attempts)
+        if ignore_duplicates:
+            # Skipped rows are absent from the representation, so it is the count.
+            return len(getattr(resp, 'data', None) or [])
         # PostgREST may return no representation; assume the batch landed.
         return len(resp.data) if getattr(resp, 'data', None) else len(batch)
 
@@ -406,7 +417,9 @@ def chunked_upsert(
         except Exception as e:
             _db_log.warning('%s: chunk of %d failed, bisecting: %s', table, len(chunk), str(e)[:160])
             written += _bisect(chunk)
-    if written < len(records):
+    # Under ignore_duplicates a short count is the skipped duplicates, not a
+    # failure; real row failures were already noted by _bisect.
+    if written < len(records) and not ignore_duplicates:
         _note(f'{table}: wrote {written}/{len(records)} rows')
     return written
 

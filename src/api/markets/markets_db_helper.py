@@ -335,12 +335,15 @@ def insert_company_news(supabase: Client, stock_id: str, articles: List[Dict[str
             'image_url': article.get('image_url'),
             'source': article.get('source'),
             'published_at': article.get('published_at'),
+            'related_tickers': [article['ticker']] if article.get('ticker') else None,
         })
 
     if not records:
         return 0
 
-    return chunked_upsert(supabase, 'company_news', records, on_conflict='url')
+    # Insert-or-skip: see chunked_upsert's ignore_duplicates note.
+    return chunked_upsert(supabase, 'company_news', records,
+                          on_conflict='url', ignore_duplicates=True)
 
 
 def insert_market_news(
@@ -538,6 +541,9 @@ def sync_stock_data(
                             'image_url': a.get('image_url'),
                             'source': a.get('source'),
                             'published_at': a.get('published_at'),
+                            # The frontend filters company news on this
+                            # (overlaps), never on stock_id.
+                            'related_tickers': [ticker],
                         }
                         for a in news
                         if a.get('url')
