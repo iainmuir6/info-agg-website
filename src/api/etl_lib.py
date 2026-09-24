@@ -17,6 +17,7 @@ from zoneinfo import ZoneInfo
 from typing import Any, Dict, List, Optional, Tuple
 
 import requests
+from postgrest.types import ReturnMethod
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
@@ -375,13 +376,19 @@ def chunked_upsert(
             kw: Dict[str, Any] = {'ignore_duplicates': ignore_duplicates}
             if on_conflict:
                 kw['on_conflict'] = on_conflict
+            if not ignore_duplicates:
+                # Don't count the representation: the news tables carry
+                # suppress_redundant_updates_trigger (12_*.sql), and a row it
+                # suppresses is absent from RETURNING, so an unchanged feed
+                # would read as "wrote 0" and trip the run-status checks.
+                kw['returning'] = ReturnMethod.minimal
             return supabase.table(table).upsert(batch, **kw).execute()
         resp = db_call(_exec, f'{table} upsert ({len(batch)} rows)', attempts=attempts)
         if ignore_duplicates:
             # Skipped rows are absent from the representation, so it is the count.
             return len(getattr(resp, 'data', None) or [])
-        # PostgREST may return no representation; assume the batch landed.
-        return len(resp.data) if getattr(resp, 'data', None) else len(batch)
+        # No error means every row landed (inserted, updated, or unchanged).
+        return len(batch)
 
     def _note(msg: str) -> None:
         _db_log.warning(msg)

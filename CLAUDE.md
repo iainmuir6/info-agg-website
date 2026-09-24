@@ -310,6 +310,12 @@ All tables live in the `info_agg` schema. Apply migrations in order:
    briefing rows (keys `day` and `week`). No new table: same small, display-only, read-whole shape
    that `10` was built for. Index, RLS policy and grant are table-wide and already cover it. The
    payload shape is enforced in `lib/ai-summary.ts`.
+12. `12_news_churn.sql` — `suppress_redundant_updates_trigger()` on the five news tables, so a
+   re-fetched story that hasn't changed writes nothing (no-op upserts had bloated their indexes
+   5–10x). A suppressed row is missing from `RETURNING`, which is why `chunked_upsert` uses
+   `return=minimal` and counts the batch — **don't switch it back to counting `resp.data`**, or an
+   unchanged feed reads as "wrote 0" and fails the run-status checks. `company_news` is also
+   written insert-or-skip (`ignore_duplicates=True`).
 
 > This Supabase project is shared with other apps, separated by schema. Keep `info_agg` migrations
 > scoped to `info_agg` — do not modify `public` or another app's schema from this repo.

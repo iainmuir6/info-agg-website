@@ -79,9 +79,6 @@ CREATE INDEX IF NOT EXISTS idx_company_news_stock_id
 CREATE INDEX IF NOT EXISTS idx_company_news_published_at
     ON info_agg.company_news (published_at DESC);
 
-CREATE INDEX IF NOT EXISTS idx_company_news_stock_published
-    ON info_agg.company_news (stock_id, published_at DESC);
-
 
 -- ── MARKETS — market_news ───────────────────────────────────
 
