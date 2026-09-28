@@ -230,6 +230,12 @@ export default async function DashboardPage() {
               </div>
             </div>
             <Link
+              href="/dashboard/activity"
+              className="shrink-0 text-[10px] font-mono tracking-widest uppercase border border-border px-3 py-1.5 hover:border-foreground transition-colors"
+            >
+              Site activity →
+            </Link>
+            <Link
               href="/profile"
               className="shrink-0 text-[10px] font-mono tracking-widest uppercase border border-border px-3 py-1.5 hover:border-foreground transition-colors"
             >
