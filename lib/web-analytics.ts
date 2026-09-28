@@ -87,7 +87,7 @@ export function buildFilter(filters: Filter[]): string {
 }
 
 async function query(
-  path: "visits/count" | "visits/aggregate",
+  path: "visits/aggregate",
   params: Record<string, string | string[]>,
   token: string
 ): Promise<unknown> {
@@ -111,8 +111,8 @@ async function query(
 }
 
 // The response schema names only `timestamp` for time buckets; the metric
-// field names are read defensively because the docs show both `pageviews`
-// (count endpoint) and `count` (aggregate endpoint) for the same measure.
+// field names are read defensively: the count endpoint returns `pageviews`,
+// while the docs' aggregate examples show `count` for the same measure.
 /* eslint-disable @typescript-eslint/no-explicit-any */
 function num(v: any): number {
   const n = Number(v);
@@ -127,13 +127,22 @@ function totalsOf(row: any): Totals {
 }
 /* eslint-enable @typescript-eslint/no-explicit-any */
 
-async function count(since: Date, until: Date, filter: string, token: string): Promise<Totals> {
+/** Totals for a window. Deliberately not the `visits/count` endpoint: that one
+ *  snaps both ends of the window down to midnight UTC (verified — a
+ *  14:37→14:37 window came back as 00:00→00:00), so "last 24 hours" would
+ *  really be "yesterday" and every period comparison would be skewed. The
+ *  aggregate endpoint keeps hour precision; grouping by environment under a
+ *  filter that pins one environment yields a single row, the total. */
+async function totals(since: Date, until: Date, filter: string, token: string): Promise<Totals> {
   const body = (await query(
-    "visits/count",
-    { since: since.toISOString(), until: until.toISOString(), filter },
+    "visits/aggregate",
+    { since: since.toISOString(), until: until.toISOString(), by: "environment", filter, limit: "10" },
     token
-  )) as { data?: unknown };
-  return totalsOf(body.data);
+  )) as { data?: unknown[] };
+  return (body.data ?? []).map(totalsOf).reduce(
+    (a, b) => ({ pageviews: a.pageviews + b.pageviews, visitors: a.visitors + b.visitors }),
+    { pageviews: 0, visitors: 0 }
+  );
 }
 
 async function series(
@@ -221,9 +230,9 @@ export async function getActivityReport(
   const dims = Object.keys(DIMENSIONS) as Dimension[];
 
   try {
-    const [totals, previous, rawSeries, ...lists] = await Promise.all([
-      count(since, until, filter, token),
-      count(prevSince, since, filter, token),
+    const [current, previous, rawSeries, ...lists] = await Promise.all([
+      totals(since, until, filter, token),
+      totals(prevSince, since, filter, token),
       series(since, until, bucket, filter, token),
       ...dims.map((d) => breakdown(d, since, until, filter, token)),
     ]);
@@ -234,7 +243,7 @@ export async function getActivityReport(
         since: since.toISOString(),
         until: until.toISOString(),
         bucket,
-        totals,
+        totals: current,
         previous,
         series: fillSeries(rawSeries, since, until, bucket),
         breakdowns: Object.fromEntries(dims.map((d, i) => [d, lists[i]])) as Record<Dimension, BreakdownRow[]>,
