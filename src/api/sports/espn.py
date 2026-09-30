@@ -52,14 +52,35 @@ def _espn_min_interval() -> None:
     _espn_pacer.wait()
 
 
-# College football's scoreboard is Top 25 only unless asked for a division —
-# groups=80 is all of FBS (FBS-vs-FCS games included). Without it the
-# dateless intraday call held 16 of week 5's 59 games (Sep 2026). Not applied
-# to men's college basketball: groups=50 there empties the month-form query
-# the season walk depends on.
+# The college scoreboards are Top 25 only unless asked for a division.
+# groups=80 is all of FBS (FBS-vs-FCS games included) — without it the
+# dateless intraday call held 16 of week 5's 59 games (Sep 2026). groups=50 is
+# all of Division I basketball: 4 games → 82 on a November Saturday.
 _LEAGUE_SCOREBOARD_PARAMS: Dict[tuple, Dict[str, str]] = {
     ('football', 'college-football'): {'groups': '80'},
+    ('basketball', 'mens-college-basketball'): {'groups': '50'},
 }
+
+# Which multi-day forms ESPN's scoreboard still honours (probed Sep 2026):
+#   - dates=YYYYMMDD-YYYYMMDD: a 200 with zero events, every league. Dead.
+#   - dates=YYYYMM: a whole month in one call, but `limit` past ~500 is
+#     ignored and hands back 25 events, hence MONTH_LIMIT.
+#   - men's college basketball with groups=50: the month form returns zero
+#     events (and without groups it is Top 25 only), so the full D1 slate can
+#     only be read a day at a time. A single day is uncapped — opening night
+#     returned all 169.
+MONTH_LIMIT = 500
+DAILY_ONLY_LEAGUES = {'mens-college-basketball'}
+
+
+def months_spanning(start, end) -> List[str]:
+    """Each calendar month touching [start, end] (dates or datetimes), as 'YYYYMM'."""
+    months: List[str] = []
+    y, m = start.year, start.month
+    while (y, m) <= (end.year, end.month):
+        months.append(f"{y:04d}{m:02d}")
+        y, m = (y + 1, 1) if m == 12 else (y, m + 1)
+    return months
 
 
 SPORT_CONFIGS = [

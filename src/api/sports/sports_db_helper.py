@@ -22,9 +22,15 @@ if _HERE not in sys.path:
     sys.path.insert(0, _HERE)
 
 try:
-    from .espn import SPORT_CONFIGS, fetch_espn_news, fetch_espn_scores, fetch_espn_standings
+    from .espn import (
+        SPORT_CONFIGS, DAILY_ONLY_LEAGUES, MONTH_LIMIT, months_spanning,
+        fetch_espn_news, fetch_espn_scores, fetch_espn_standings,
+    )
 except ImportError:
-    from espn import SPORT_CONFIGS, fetch_espn_news, fetch_espn_scores, fetch_espn_standings
+    from espn import (
+        SPORT_CONFIGS, DAILY_ONLY_LEAGUES, MONTH_LIMIT, months_spanning,
+        fetch_espn_news, fetch_espn_scores, fetch_espn_standings,
+    )
 
 _PARENT = os.path.dirname(_HERE)
 if _PARENT not in sys.path:
@@ -272,21 +278,11 @@ def sync_all_sports_data(
     return stats
 
 
-# ESPN's month query (dates=YYYYMM) honours `limit` up to a point and then
-# quietly ignores it: limit=1000 handed back 25 college-football events for a
-# month that holds 291, while 300 and 500 returned all of them. 500 covers the
-# busiest month here (MLB, ~400).
-_MONTH_LIMIT = 500
-
-
-def _months_spanning(start: datetime, end: datetime) -> List[str]:
-    """Each calendar month touching [start, end], as ESPN's 'YYYYMM'."""
-    months: List[str] = []
-    y, m = start.year, start.month
-    while (y, m) <= (end.year, end.month):
-        months.append(f"{y:04d}{m:02d}")
-        y, m = (y + 1, 1) if m == 12 else (y, m + 1)
-    return months
+# A day-only league (see DAILY_ONLY_LEAGUES) costs one ESPN call per day, so
+# its walk is narrowed to what can still change: yesterday's late finals and
+# the next ten days of schedule. Today's scores ride the intraday call.
+_DAILY_WALK_BACK = 1
+_DAILY_WALK_FORWARD = 10
 
 
 def sync_season_schedules(
@@ -306,7 +302,9 @@ def sync_season_schedules(
     wrote nothing and college football's upcoming week held only what the
     Top-25 intraday call saw — 16 of 59 games, and CMF could not link the
     rest of the slate's odds. A month is the one multi-day form that still
-    works; it over-fetches the edges of the window, which is harmless.
+    works; it over-fetches the edges of the window, which is harmless. Men's
+    college basketball is the exception: its full D1 slate only comes a day
+    at a time, over a narrower window (see _DAILY_WALK_*).
 
     days_back only needs to cover recent corrections and a short run outage:
     sports_scores is now fully retained, so history accumulates rather than
@@ -317,7 +315,8 @@ def sync_season_schedules(
     window.
 
     Runs once per day (run_etl.py --season-schedules), not on the intraday
-    tiers — it costs two or three ESPN calls per league.
+    tiers — it costs two or three ESPN calls per league, twelve for college
+    basketball.
     """
     stats: Dict[str, Any] = {
         'leagues_processed': 0,
@@ -366,23 +365,30 @@ def sync_season_schedules(
         stats['leagues_processed'] += 1
         league_records: List[Dict[str, Any]] = []
 
-        for month in _months_spanning(window_start, window_end):
+        if league in DAILY_ONLY_LEAGUES:
+            first = (now - timedelta(days=_DAILY_WALK_BACK)).date()
+            spans = [(first + timedelta(days=i)).strftime('%Y%m%d')
+                     for i in range(_DAILY_WALK_BACK + _DAILY_WALK_FORWARD + 1)]
+        else:
+            spans = months_spanning(window_start, window_end)
+
+        for span in spans:
             if run_deadline.expired():
                 stats['errors'].append(
                     f"deadline: budget spent mid-season-walk for {league}; "
-                    f"stopped at {month} (data written so far is kept)")
+                    f"stopped at {span} (data written so far is kept)")
                 break
             try:
                 games = fetch_espn_scores(
-                    sport, league, dates=month, limit=_MONTH_LIMIT,
+                    sport, league, dates=span, limit=MONTH_LIMIT,
                     errors=stats['errors'])
-                if len(games) >= _MONTH_LIMIT:
+                if len(games) >= MONTH_LIMIT:
                     stats['errors'].append(
-                        f"{league} {month}: {len(games)} events hit the "
-                        f"{_MONTH_LIMIT} limit — the month may be truncated")
+                        f"{league} {span}: {len(games)} events hit the "
+                        f"{MONTH_LIMIT} limit — it may be truncated")
                 league_records.extend(_sports_score_records(league_id, games))
             except Exception as e:
-                stats['errors'].append(f"{league} {month}: {e}")
+                stats['errors'].append(f"{league} {span}: {e}")
 
         if league_records:
             stats['scores_inserted'] += _upsert_sports_score_records(

@@ -44,15 +44,12 @@ from supabase import create_client, Client, ClientOptions
 from dotenv import load_dotenv
 
 from etl_lib import et_today
-from sports.espn import SPORT_CONFIGS, fetch_espn_scores
+from sports.espn import (
+    SPORT_CONFIGS, DAILY_ONLY_LEAGUES, MONTH_LIMIT, fetch_espn_scores, months_spanning,
+)
 from sports.sports_db_helper import _sports_score_records, _upsert_sports_score_records
 
 load_dotenv()
-
-# ESPN caps events per scoreboard response. We request this many and treat a
-# full response as "probably truncated", then split the range and retry — so
-# the backfill stays complete even if the real cap differs per league.
-PAGE_LIMIT = 900
 
 # Months each league actually plays (1-12). Chunks entirely outside these are
 # skipped, which removes most of the wasted calls in a season-long backfill.
@@ -92,55 +89,62 @@ def season_window(league: str, season: int) -> Tuple[date, date]:
     return date(season, 1, 1), date(season, 12, 31)
 
 
-def chunk_has_games(league: str, start: date, end: date) -> bool:
-    """True when any month in the chunk is part of the league's season."""
+def month_in_season(league: str, month: str) -> bool:
+    """True when a 'YYYYMM' month is part of the league's season."""
     months = SEASON_MONTHS.get(league)
-    if not months:
-        return True
-    cursor = date(start.year, start.month, 1)
-    while cursor <= end:
-        if cursor.month in months:
-            return True
-        cursor = date(cursor.year + (cursor.month // 12), (cursor.month % 12) + 1, 1)
-    return False
+    return not months or int(month[4:]) in months
 
 
-def fetch_range(
-    sport: str,
-    league: str,
-    start: date,
-    end: date,
-    stats: Dict[str, Any],
-    depth: int = 0,
-) -> List[Dict[str, Any]]:
-    """Fetch one date range, splitting it if ESPN truncated the response.
-
-    A response at the page limit means ESPN capped it and games are missing,
-    so the range is halved and retried. Recursion bottoms out at a single day,
-    which cannot be split further.
-    """
-    span = f"{start.strftime('%Y%m%d')}-{end.strftime('%Y%m%d')}"
+def _fetch(sport: str, league: str, span: str, stats: Dict[str, Any]) -> List[Dict[str, Any]]:
     try:
-        games = fetch_espn_scores(sport, league, dates=span, limit=PAGE_LIMIT)
+        games = fetch_espn_scores(sport, league, dates=span, limit=MONTH_LIMIT)
         stats['requests'] += 1
+        return games
     except Exception as e:
         stats['errors'].append(f"{league} {span}: {e}")
         return []
 
-    truncated = len(games) >= PAGE_LIMIT
-    if truncated and start < end:
-        mid = start + (end - start) // 2
+
+def _days(start: date, end: date) -> List[str]:
+    return [(start + timedelta(days=i)).strftime('%Y%m%d')
+            for i in range((end - start).days + 1)]
+
+
+def fetch_month(
+    sport: str,
+    league: str,
+    month: str,
+    start: date,
+    end: date,
+    stats: Dict[str, Any],
+) -> List[Dict[str, Any]]:
+    """Fetch one calendar month of a league's scoreboard.
+
+    ESPN no longer answers date ranges (a 200 with zero events), so a month
+    (dates=YYYYMM) is the widest request available. A month at the limit may
+    be truncated and is re-read a day at a time; so is every month of a
+    day-only league (see DAILY_ONLY_LEAGUES in sports/espn.py). Day reads are
+    clipped to [start, end] — a month read is not, and its edges are harmless
+    upserts.
+    """
+    y, m = int(month[:4]), int(month[4:])
+    first = max(date(y, m, 1), start)
+    last = min(date(y + m // 12, m % 12 + 1, 1) - timedelta(days=1), end)
+
+    if league not in DAILY_ONLY_LEAGUES:
+        games = _fetch(sport, league, month, stats)
+        if len(games) < MONTH_LIMIT:
+            return games
         stats['splits'] += 1
-        return (
-            fetch_range(sport, league, start, mid, stats, depth + 1)
-            + fetch_range(sport, league, mid + timedelta(days=1), end, stats, depth + 1)
-        )
-    if truncated:
-        # Single day still at the cap — take what we got and say so.
-        stats['errors'].append(
-            f"{league} {span}: hit the {PAGE_LIMIT}-event cap on a single day; "
-            f"some games may be missing"
-        )
+
+    games = []
+    for day in _days(first, last):
+        day_games = _fetch(sport, league, day, stats)
+        if len(day_games) >= MONTH_LIMIT:
+            stats['errors'].append(
+                f"{league} {day}: hit the {MONTH_LIMIT}-event limit on a single "
+                f"day; some games may be missing")
+        games.extend(day_games)
     return games
 
 
@@ -151,33 +155,28 @@ def backfill_league(
     league_id: Optional[str],
     start: date,
     end: date,
-    chunk_days: int,
     dry_run: bool,
 ) -> Dict[str, Any]:
     stats: Dict[str, Any] = {
         'league': league,
         'requests': 0,
         'splits': 0,
-        'skipped_chunks': 0,
+        'skipped_months': 0,
         'games_fetched': 0,
         'rows_written': 0,
         'errors': [],
     }
 
     records: List[Dict[str, Any]] = []
-    cursor = start
-    while cursor <= end:
-        chunk_end = min(cursor + timedelta(days=chunk_days - 1), end)
-        if not chunk_has_games(league, cursor, chunk_end):
-            stats['skipped_chunks'] += 1
-            cursor = chunk_end + timedelta(days=1)
+    for month in months_spanning(start, end):
+        if not month_in_season(league, month):
+            stats['skipped_months'] += 1
             continue
 
-        games = fetch_range(sport, league, cursor, chunk_end, stats)
+        games = fetch_month(sport, league, month, start, end, stats)
         stats['games_fetched'] += len(games)
         if games and league_id:
             records.extend(_sports_score_records(league_id, games))
-        cursor = chunk_end + timedelta(days=1)
 
     if records and not dry_run and supabase is not None:
         # Write in batches — a full season is well past a comfortable
@@ -215,8 +214,6 @@ def main() -> int:
                         help="Season year(s), comma-separated, or 'current'")
     parser.add_argument('--start', type=str, default=None, help='Start date YYYY-MM-DD')
     parser.add_argument('--end', type=str, default=None, help='End date YYYY-MM-DD')
-    parser.add_argument('--chunk-days', type=int, default=7,
-                        help='Days per ESPN request before adaptive splitting (default 7)')
     parser.add_argument('--dry-run', action='store_true',
                         help='Fetch and report without writing to Supabase')
     parser.add_argument('--output', type=str, default=None, help='Write a JSON report here')
@@ -267,12 +264,12 @@ def main() -> int:
             print(f"→ {league}: {start} .. {end}", flush=True)
             stats = backfill_league(
                 supabase, sport, league, league_id,
-                start, end, args.chunk_days, args.dry_run,
+                start, end, args.dry_run,
             )
             all_stats.append(stats)
             print(
                 f"  {stats['requests']} requests"
-                f" ({stats['splits']} splits, {stats['skipped_chunks']} offseason chunks skipped)"
+                f" ({stats['splits']} months re-read by day, {stats['skipped_months']} offseason months skipped)"
                 f" · {stats['games_fetched']} games"
                 f" · {stats['rows_written']} rows written"
                 + (f" · {len(stats['errors'])} errors" if stats['errors'] else ""),
