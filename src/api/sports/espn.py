@@ -50,6 +50,18 @@ _espn_standings_pacer = MinInterval(_ESPN_STANDINGS_MIN_INTERVAL_S)
 
 def _espn_min_interval() -> None:
     _espn_pacer.wait()
+
+
+# College football's scoreboard is Top 25 only unless asked for a division —
+# groups=80 is all of FBS (FBS-vs-FCS games included). Without it the
+# dateless intraday call held 16 of week 5's 59 games (Sep 2026). Not applied
+# to men's college basketball: groups=50 there empties the month-form query
+# the season walk depends on.
+_LEAGUE_SCOREBOARD_PARAMS: Dict[tuple, Dict[str, str]] = {
+    ('football', 'college-football'): {'groups': '80'},
+}
+
+
 SPORT_CONFIGS = [
     # Football
     ('football', 'nfl'),
@@ -290,7 +302,9 @@ def fetch_espn_scores(
     Args:
         sport: Sport name (e.g., 'football', 'basketball')
         league: League name (e.g., 'nfl', 'nba')
-        dates: Single date 'YYYYMMDD' or an inclusive range 'YYYYMMDD-YYYYMMDD'
+        dates: Single date 'YYYYMMDD' or a whole month 'YYYYMM'. The range
+            form 'YYYYMMDD-YYYYMMDD' now returns zero events on every league
+            (seen Sep 2026) — a 200 with an empty list, not an error.
         limit: Optional cap on events ESPN returns. The backfill sets this so a
             truncated range can be detected (returned == limit) and split.
         errors: Optional list the failure reason is appended to (see
@@ -306,7 +320,7 @@ def fetch_espn_scores(
 
     url = f"{ESPN_BASE_URL}/{sport}/{league}/scoreboard"
 
-    params = {}
+    params = dict(_LEAGUE_SCOREBOARD_PARAMS.get((sport, league), {}))
     if dates:
         params['dates'] = dates
     if limit:

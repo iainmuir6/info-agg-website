@@ -272,18 +272,41 @@ def sync_all_sports_data(
     return stats
 
 
+# ESPN's month query (dates=YYYYMM) honours `limit` up to a point and then
+# quietly ignores it: limit=1000 handed back 25 college-football events for a
+# month that holds 291, while 300 and 500 returned all of them. 500 covers the
+# busiest month here (MLB, ~400).
+_MONTH_LIMIT = 500
+
+
+def _months_spanning(start: datetime, end: datetime) -> List[str]:
+    """Each calendar month touching [start, end], as ESPN's 'YYYYMM'."""
+    months: List[str] = []
+    y, m = start.year, start.month
+    while (y, m) <= (end.year, end.month):
+        months.append(f"{y:04d}{m:02d}")
+        y, m = (y + 1, 1) if m == 12 else (y, m + 1)
+    return months
+
+
 def sync_season_schedules(
     supabase: Client,
     days_back: int = 21,
     days_forward: int = 14,
-    chunk_days: int = 14,
 ) -> Dict[str, Any]:
     """Refresh the recent + upcoming schedule for every in-season league.
 
     The daily scoreboard call only returns today's slate, so team pages
-    computed win/loss records from a handful of games. This walks a window
-    in date-range chunks (ESPN accepts dates=YYYYMMDD-YYYYMMDD) for leagues
-    that actually have games near today.
+    computed win/loss records from a handful of games. This walks the window
+    a calendar month at a time (dates=YYYYMM) for leagues that actually have
+    games near today.
+
+    It used to walk 14-day ranges (dates=YYYYMMDD-YYYYMMDD). In Sep 2026 ESPN
+    began answering every range with a 200 and zero events, so this walk
+    wrote nothing and college football's upcoming week held only what the
+    Top-25 intraday call saw — 16 of 59 games, and CMF could not link the
+    rest of the slate's odds. A month is the one multi-day form that still
+    works; it over-fetches the edges of the window, which is harmless.
 
     days_back only needs to cover recent corrections and a short run outage:
     sports_scores is now fully retained, so history accumulates rather than
@@ -294,7 +317,7 @@ def sync_season_schedules(
     window.
 
     Runs once per day (run_etl.py --season-schedules), not on the intraday
-    tiers — it costs roughly (days_back / chunk_days) ESPN calls per league.
+    tiers — it costs two or three ESPN calls per league.
     """
     stats: Dict[str, Any] = {
         'leagues_processed': 0,
@@ -343,22 +366,23 @@ def sync_season_schedules(
         stats['leagues_processed'] += 1
         league_records: List[Dict[str, Any]] = []
 
-        cursor = window_start
-        while cursor < window_end:
+        for month in _months_spanning(window_start, window_end):
             if run_deadline.expired():
                 stats['errors'].append(
                     f"deadline: budget spent mid-season-walk for {league}; "
-                    f"stopped at {cursor.date()} (data written so far is kept)")
+                    f"stopped at {month} (data written so far is kept)")
                 break
-            chunk_end = min(cursor + timedelta(days=chunk_days - 1), window_end)
-            date_range = f"{cursor.strftime('%Y%m%d')}-{chunk_end.strftime('%Y%m%d')}"
             try:
                 games = fetch_espn_scores(
-                    sport, league, dates=date_range, errors=stats['errors'])
+                    sport, league, dates=month, limit=_MONTH_LIMIT,
+                    errors=stats['errors'])
+                if len(games) >= _MONTH_LIMIT:
+                    stats['errors'].append(
+                        f"{league} {month}: {len(games)} events hit the "
+                        f"{_MONTH_LIMIT} limit — the month may be truncated")
                 league_records.extend(_sports_score_records(league_id, games))
             except Exception as e:
-                stats['errors'].append(f"{league} {date_range}: {e}")
-            cursor = chunk_end + timedelta(days=1)
+                stats['errors'].append(f"{league} {month}: {e}")
 
         if league_records:
             stats['scores_inserted'] += _upsert_sports_score_records(
