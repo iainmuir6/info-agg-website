@@ -1,3 +1,4 @@
+import { Suspense } from "react";
 import Image from "next/image";
 import Link from "next/link";
 import { LOGO_SRC } from "@/lib/brand";
@@ -148,7 +149,6 @@ export default async function PublicLayout({ children }: { children: React.React
   const supabase = await createClient();
   const { data: claimsData } = await supabase.auth.getClaims();
   const isAuthenticated = !!claimsData?.claims;
-  const etlHealth = await getEtlHealth();
 
   // Profile bubble: FL initials when a display name is set, first two email
   // characters otherwise.
@@ -198,17 +198,12 @@ export default async function PublicLayout({ children }: { children: React.React
           </Link>
 
           <div className="flex items-center gap-2.5 sm:gap-4 shrink-0">
-            <div className="flex items-center gap-1.5" title={etlHealth.label}>
-              <div className="w-1.5 h-1.5 rounded-full animate-pulse-dot" style={{ backgroundColor: etlHealth.color }} />
-              <span className="hidden sm:inline text-[10px] font-mono tracking-wider text-muted-foreground uppercase">
-                {etlHealth.label}
-              </span>
-              {etlHealth.age && (
-                <span className="sm:hidden text-[9px] font-mono tracking-wider text-muted-foreground uppercase tabular-nums">
-                  {etlHealth.age}
-                </span>
-              )}
-            </div>
+            {/* The ETL dot and the footer tickers read cached data, but a cold
+                start still pays for each read; neither is worth holding the
+                page's skeleton for, so they stream in behind it. */}
+            <Suspense fallback={<div className="w-1.5 h-1.5" />}>
+              <EtlStatus />
+            </Suspense>
             {!isAuthenticated ? (
               <Link
                 href="/auth/login"
@@ -237,10 +232,36 @@ export default async function PublicLayout({ children }: { children: React.React
 
       <main className="flex-1">{children}</main>
 
-      <FooterGate>
-        <FooterTickers quotes={await getTickerItems()} games={await getSportsTickerItems()} />
-      </FooterGate>
+      <Suspense fallback={null}>
+        <Footer />
+      </Suspense>
     </div>
     </SectionFilterProvider>
+  );
+}
+
+async function EtlStatus() {
+  const etlHealth = await getEtlHealth();
+  return (
+    <div className="flex items-center gap-1.5" title={etlHealth.label}>
+      <div className="w-1.5 h-1.5 rounded-full animate-pulse-dot" style={{ backgroundColor: etlHealth.color }} />
+      <span className="hidden sm:inline text-[10px] font-mono tracking-wider text-muted-foreground uppercase">
+        {etlHealth.label}
+      </span>
+      {etlHealth.age && (
+        <span className="sm:hidden text-[9px] font-mono tracking-wider text-muted-foreground uppercase tabular-nums">
+          {etlHealth.age}
+        </span>
+      )}
+    </div>
+  );
+}
+
+async function Footer() {
+  const [quotes, games] = await Promise.all([getTickerItems(), getSportsTickerItems()]);
+  return (
+    <FooterGate>
+      <FooterTickers quotes={quotes} games={games} />
+    </FooterGate>
   );
 }
