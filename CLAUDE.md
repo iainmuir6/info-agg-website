@@ -256,6 +256,22 @@ identifiable only by coming back 120px wide whatever size was requested.
 last entry in `src/api/media/youtube.py`'s preference list, so without the
 exclusion every video that only had a `default` thumbnail would be hidden.
 
+**Push notifications** (`/profile` → Notifications). The two AI briefings
+notify opted-in users each morning. Delivery is NOT in this repo: Web Push for
+every app on this Supabase project runs through a shared platform layer — the
+`notify` schema and the `notify-dispatch` Edge Function — kept in the
+**cmf-tracker** repo (`docs/notifications.md` there is the reference).
+`supabase/13_notifications.sql` plugs info_agg in: a trigger on
+`misc_content` (kind `summary`, payload changed) enqueues `summary.day` /
+`summary.week` for the next waking moment in New York — the ~6am ET daily run
+arrives at 7:00, a briefing written after 9pm waits for the morning, and a
+Monday's two share one notification. Browser half: `public/sw.js` (push and
+click only — **no fetch handler**, so it can never serve a stale page;
+excluded from the proxy matcher), `lib/push.ts` (its `VAPID_PUBLIC_KEY` must
+match cmf-tracker's), `components/notification-settings.tsx`. A subscription
+is per device; topic preferences are per person. iOS only delivers to a
+Home Screen web app (16.4+), and the settings say so.
+
 ### Python ETL (`src/api/`)
 
 Orchestrator: `src/api/run_etl.py` — runs the four fetch-domain ETL pipelines **in parallel** (`ThreadPoolExecutor`), which is what the <60s requirement above depends on. `run_quick_refresh.py` is the tiered intraday counterpart (Tier A every 15 min, Tier B hourly — no backfill, no daily API budget spent on Tier A); `run_test.py` dry-run-tests every external API endpoint with no DB writes; `backfill_scores.py` is the standalone recovery tool for historical ESPN scores. The fifth
@@ -317,6 +333,8 @@ All tables live in the `info_agg` schema. Apply migrations in order:
    `return=minimal` and counts the batch — **don't switch it back to counting `resp.data`**, or an
    unchanged feed reads as "wrote 0" and fails the run-status checks. `company_news` is also
    written insert-or-skip (`ignore_duplicates=True`).
+13. `13_notifications.sql` — morning push notifications for the briefings. Requires the shared
+   `notify` platform from cmf-tracker to be applied first; see **Push notifications** above.
 
 > This Supabase project is shared with other apps, separated by schema. Keep `info_agg` migrations
 > scoped to `info_agg` — do not modify `public` or another app's schema from this repo.

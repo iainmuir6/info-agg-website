@@ -4,6 +4,7 @@ import { createClient } from "@/lib/supabase/server";
 import { isSuperAdmin } from "@/lib/rbac";
 import { UpdatePasswordForm } from "@/components/update-password-form";
 import { UpdateDisplayNameForm } from "@/components/update-display-name-form";
+import { NotificationSettings } from "@/components/notification-settings";
 import { SignOutButton } from "@/components/sign-out-button";
 import { EtlRunBreakdown } from "@/components/etl-run-breakdown";
 import {
@@ -213,6 +214,12 @@ export default async function ProfilePage() {
               </div>
             </SectionCard>
           </div>
+
+          {/* Per device (the button) and per person (the briefings) — see
+                 components/notification-settings.tsx */}
+          <SectionCard title="Notifications" accent="hsl(220 90% 52%)">
+            <NotificationSettings />
+          </SectionCard>
 
           {admin && (
             <SectionCard title="Admin" accent="hsl(45 90% 52%)">
