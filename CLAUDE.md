@@ -15,17 +15,16 @@ pnpm build        # Production build
 pnpm lint         # ESLint
 
 # ETL (Python — run from repo root)
-source _agg_venv/bin/activate && python src/api/run_etl.py  # Daily run (all domains, all 10 sentiment topics)
+source _agg_venv/bin/activate && python src/api/run_etl.py  # Daily run (all domains)
 python src/api/run_etl.py --sports-only
-python src/api/run_etl.py --markets-only                    # Quotes + news + sentiment + economic indicators
+python src/api/run_etl.py --markets-only                    # Quotes + news + economic indicators
 python src/api/run_etl.py --news-only
 python src/api/run_etl.py --media-only
 python src/api/run_etl.py --misc-only                       # Weather, holidays, country, word, wiki, fact
 python src/api/run_etl.py --summary-only                    # Regenerate the AI briefings alone (day + week)
-python src/api/run_etl.py --skip-sentiment                  # Skip AV sentiment (quotes + news only)
 python src/api/run_etl.py --skip-summary                    # Skip the AI briefings (no Gemini call)
 python src/api/run_etl.py --cleanup --season-schedules      # What the daily cron runs (+ retention cleanup)
-python src/api/run_etl.py --test                            # Dry-run: one sample call per Finnhub/AV/FMP/ESPN/NYT endpoint (src/api/run_test.py), no DB writes
+python src/api/run_etl.py --test                            # Dry-run: one sample call per Finnhub/FMP/Frankfurter/FRED/ESPN/NYT endpoint (src/api/run_test.py, 15 cases), no DB writes
 
 # Tiered intraday refresh (the frequent counterpart to the daily run — no backfill, budget-aware)
 python src/api/run_quick_refresh.py --tier a                 # 9 slots/day: quotes + scoreboards + market news
@@ -67,15 +66,14 @@ against the worst case: the `0 9 * * *` daily entry fires by 09:59 UTC and finis
 later, so it is always done before 11:00 UTC — before 7am ET under both EDT and EST — with
 Tier B entries at 10/11/12 UTC covering the 7–9am ET window. After that, Tier A and Tier B
 alternate roughly hourly to 23 UTC, plus Tier A at 01 UTC (9 Tier A and 6 Tier B entries in all). FMP budget: 6 Tier B x 3 commodity
-quotes + the daily's 11 (3 commodities + treasury + 7 macro indicators) = 29 of the 250/day cap.
+quotes + the daily's 10 (3 commodities + treasury + 6 macro indicators; real GDP comes from FRED) = 28 of the 250/day cap.
 
 ## ETL Import Constraint
 
-The scheduled runs install **`requirements.txt` only** — `requirements-dev.txt` (pandas, plotly,
-selenium, bs4) is explicitly not installed on GitHub Actions. So **any module reachable from
-`run_etl.py` or `run_quick_refresh.py` must import only `requirements.txt` packages at module
-scope.** Dev-only imports belong inside the functions that need them, or behind a
-`try/except ModuleNotFoundError` with a guard.
+The scheduled runs install **`requirements.txt`**, the only requirements file. So **any module
+reachable from `run_etl.py` or `run_quick_refresh.py` must import only `requirements.txt` packages
+at module scope.** Anything else (numpy, pandas, plotly) belongs inside the
+functions that need it, or behind a `try/except ModuleNotFoundError` with a guard.
 
 This is not theoretical. `misc/weather.py` carries Plotly chart builders alongside the two
 fetchers the ETL actually uses, and imported numpy/pandas/plotly at the top. Because
@@ -109,7 +107,7 @@ is ours (always fails).
 - `SUPABASE_SERVICE_ROLE_KEY` — Service role key (ETL writes, `POST /api/auth/invite`)
 
 **Supabase Auth → URL configuration:** Add redirect URLs for the auth callback route, e.g. `http://localhost:3000/auth/callback` and `${NEXT_PUBLIC_SITE_URL}/auth/callback`.
-- API keys for fetchers: `NYT_API_KEY_1/_2/_3`, `FINNHUB_API_KEY_1/_2/_3`, `FMP_API_KEY`, `ALPHA_VANTAGE_API_KEY` (+ `_1/_2/_3`). Each fetcher rotates over the distinct non-empty values, so unset or repeated slots are harmless.
+- API keys for fetchers: `NYT_API_KEY_1/_2/_3`, `FINNHUB_API_KEY_1/_2/_3`, `FMP_API_KEY`. Each fetcher rotates over the distinct non-empty values, so unset or repeated slots are harmless.
 - `ETL_LOG_LEVEL` — optional Python log level for the ETL (default `INFO`).
 - `WEATHER_API_KEY` — Visual Crossing timeline API. Powers the weather cards. Billed per *day of data*, so cost is `WEATHER_LOCATIONS` × `FORECAST_DAYS` (currently **6 cities × 5 days = 30 records/run**) against 1,000/day.
 - `CALENDAR_API_KEY` — Calendarific. Powers the upcoming-holidays card. 500/month free; the daily run uses ~30.
@@ -277,7 +275,7 @@ Home Screen web app (16.4+), and the settings say so.
 
 ### Python ETL (`src/api/`)
 
-Orchestrator: `src/api/run_etl.py` — runs the five fetch-domain ETL pipelines (sports, markets, news, media, misc) **in parallel** (`ThreadPoolExecutor`), which is what the <60s requirement above depends on. `run_quick_refresh.py` is the tiered intraday counterpart (Tier A and Tier B, dispatched from `vercel.json` slots — no backfill, no daily API budget spent on Tier A); `run_test.py` dry-run-tests one sample call per Finnhub/AV/FMP/ESPN/NYT endpoint with no DB writes; `backfill_scores.py` is the standalone recovery tool for historical ESPN scores. The sixth
+Orchestrator: `src/api/run_etl.py` — runs the five fetch-domain ETL pipelines (sports, markets, news, media, misc) **in parallel** (`ThreadPoolExecutor`), which is what the <60s requirement above depends on. `run_quick_refresh.py` is the tiered intraday counterpart (Tier A and Tier B, dispatched from `vercel.json` slots — no backfill, no daily API budget spent on Tier A); `run_test.py` dry-run-tests one sample call per Finnhub/FMP/Frankfurter/FRED/ESPN/NYT endpoint with no DB writes; `backfill_scores.py` is the standalone recovery tool for historical ESPN scores. The sixth
 domain, `summary/`, runs sequentially after the parallel block because it reads what the others wrote.
 
 Each domain follows the same pattern:
@@ -287,7 +285,7 @@ Each domain follows the same pattern:
 
 **Domain → data sources:**
 - `sports/` → ESPN API (scores + news for NFL, NBA, NHL, MLB, EPL, etc.)
-- `markets/` → Finnhub API (daily quotes, company news, market news) + FMP API (company profiles, commodity quotes, treasury/econ, ETF holdings) + Alpha Vantage (news sentiment) + **Frankfurter** (forex — keyless ECB reference rates, all 10 pairs in one request; replaced 10 FMP calls per intraday Tier B run, cutting Tier B's FMP use from 78 to 18 calls/day. Trade-off: ECB publishes once per business day, so forex no longer moves intraday)
+- `markets/` → Finnhub API (daily quotes, company news, market news) + FMP API (commodity quotes, treasury/econ) + **FRED** (real GDP, series `GDPC1` — keyless CSV export; FMP stopped serving `realGDP`) + **Frankfurter** (forex — keyless ECB reference rates, all 10 pairs in one request; replaced 10 FMP calls per intraday Tier B run, cutting Tier B's FMP use from 78 to 18 calls/day. Trade-off: ECB publishes once per business day, so forex no longer moves intraday)
 - `news/` → NYT Top Stories + Most Popular API (NewsAPI is not used anywhere in this codebase, despite what an earlier version of this doc claimed)
 - `media/` → YouTube Data API (trending videos). Spotify (playlists, Top Podcasts) is live-embedded on the frontend with no fetcher. Reddit was removed.
 - `misc/` → six feeds behind one domain (all single-call except weather, which is one call per city): Visual Crossing (weather, 6 cities — one call each), Calendarific (US holidays), REST Countries v5 (country of the day, rotating), Wikipedia REST (random summary + On This Day), Merriam-Webster RSS (word of the day), uselessfacts. All land in `misc_content` as JSONB; each source degrades independently, and the domain never fails the run
@@ -312,7 +310,7 @@ All tables live in the `info_agg` schema. Apply migrations in order:
 3. `03_rls.sql` — Row Level Security policies
 4. `04_indexes.sql` — performance indexes
 5. `05_prune.sql` — drops the legacy `user_role` enum + unused indexes (idempotent)
-6. `06_user_prefs.sql` — watchlist tables (`watchlist_stocks`, `watchlist_leagues`, `watchlist_teams`) + `user_home_prefs`
+6. `06_user_prefs.sql` — watchlist tables (`watchlist_stocks`, `watchlist_teams`, and `watchlist_leagues`, dropped in `14`) + `user_home_prefs`
 7. `07_grants.sql` — explicit `INSERT/UPDATE/DELETE` grants for the tables `06` creates (RLS alone isn't enough — see comment in the file; Postgres checks table-level privileges before RLS runs)
 8. `08_watchlist_podcasts.sql` — `watchlist_podcasts` (favorited Spotify shows) + its own grants
 9. `09_security_hardening.sql` — anon least-privilege pass: scrubs API keys leaked into `etl_runs`,
@@ -338,28 +336,31 @@ All tables live in the `info_agg` schema. Apply migrations in order:
    written insert-or-skip (`ignore_duplicates=True`).
 13. `13_notifications.sql` — morning push notifications for the briefings. Requires the shared
    `notify` platform from cmf-tracker to be applied first; see **Push notifications** above.
+14. `14_prune_unused.sql` — drops four tables nothing reads or writes any more: `news_sentiment`
+   (Alpha Vantage `NEWS_SENTIMENT` went premium), `etf_holdings` and `etf_sectors` (the ETFdb
+   scraper was retired) and `watchlist_leagues` (its UI was already gone). Recreates
+   `cleanup_daily()` without `p_sentiment_days`, keeping its `service_role`-only grant.
 
 > This Supabase project is shared with other apps, separated by schema. Keep `info_agg` migrations
 > scoped to `info_agg` — do not modify `public` or another app's schema from this repo.
 
 **Key tables:**
 - Sports: `leagues`, `sports_news`, `sports_scores`, `sports_standings`
-- Markets: `stocks`, `stock_quotes`, `etf_holdings`, `company_news`, `market_news`, `news_sentiment`
+- Markets: `stocks`, `stock_quotes`, `company_news`, `market_news`, `economic_indicators`
 - News: `news_articles`
 - Media: `youtube_videos` (Spotify playlists/podcasts are embedded, not stored)
 - Misc: `misc_content` — one JSONB row per (kind, key) for all six almanac cards, plus the two
   AI briefings at `('summary','day')` and `('summary','week')`
-- User prefs: `watchlist_stocks`, `watchlist_leagues`, `watchlist_teams`, `watchlist_podcasts`, `user_home_prefs`
+- User prefs: `watchlist_stocks`, `watchlist_teams`, `watchlist_podcasts`, `user_home_prefs`
 - Ops: `etl_runs` — one row per ETL run (status, tier, timing, per-domain stats/errors), read by `/dashboard`
 
 The ETL uses `SUPABASE_SERVICE_ROLE_KEY` with `ClientOptions(schema='info_agg')` for writes. The frontend uses the publishable key targeting the same schema.
 
 ### Sharing `info_agg` data with another app in this project
 
-This Supabase project is shared by several apps, separated by schema. The 14
+This Supabase project is shared by several apps, separated by schema. The 11
 `info_agg` data tables (`stocks`, `stock_quotes`, `sports_*`, `*_news`,
-`news_articles`, `news_sentiment`, `economic_indicators`, `etf_*`,
-`youtube_videos`, `leagues`) are already `SELECT`-able by `anon` and
+`news_articles`, `economic_indicators`, `youtube_videos`, `leagues`) are already `SELECT`-able by `anon` and
 `authenticated` — this is a public site, so reading them from another schema
 adds **no new exposure**. Access is granted per table, so the restricted ones
 stay restricted: `watchlist_*` and `user_home_prefs` are owner-scoped by RLS,

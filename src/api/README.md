@@ -15,7 +15,7 @@ source _agg_venv/bin/activate
 src/api/
 ├── run_etl.py              # Daily orchestrator: 5 fetch domains in parallel, then summary
 ├── run_quick_refresh.py    # Intraday Tier A / Tier B refresh — no backfill
-├── run_test.py             # Dry-run: one sample call per Finnhub/AV/FMP/ESPN/NYT endpoint, no DB writes
+├── run_test.py             # Dry-run: one sample call per Finnhub/FMP/Frankfurter/FRED/ESPN/NYT endpoint (15 cases), no DB writes
 ├── backfill_scores.py      # Standalone recovery tool for historical ESPN scores
 ├── etl_lib.py              # Shared plumbing: logging + secret redaction, HTTP session, MinInterval,
 │                           # EndpointBreaker, chunked_upsert, env preflight, etl_runs bookkeeping
@@ -26,8 +26,7 @@ src/api/
 │   ├── finnhub.py          # Quotes (stocks/ETFs/crypto), company + market news
 │   ├── fmp.py              # Commodity quotes, treasury + macro indicators, company profiles
 │   ├── frankfurter.py      # Forex: keyless ECB reference rates, every pair in one request
-│   ├── alpha_vantage.py    # News sentiment
-│   ├── etfdb.py            # ETF info + top holdings scraper (manual, --scrape-etf-info)
+│   ├── fred.py             # Real GDP (GDPC1) from FRED's keyless CSV export
 │   └── markets_db_helper.py
 ├── sports/
 │   ├── espn.py             # Scoreboards (scores + schedules), news, standings
@@ -71,7 +70,6 @@ fetcher or table. Python dependencies: `requirements.txt` at the repo root.
    # Markets
    FINNHUB_API_KEY_1=<key>          # _2, _3 optional, rotated
    FMP_API_KEY=<key>
-   ALPHA_VANTAGE_API_KEY=<key>      # _1, _2, _3 optional, rotated
 
    # News
    NYT_API_KEY_1=<key>              # _2, _3 optional, rotated
@@ -165,8 +163,6 @@ Scheduling" in the root `CLAUDE.md` for why the schedule left GitHub's `schedule
 | `--summary-only` | Regenerate the AI briefings alone, from current DB rows |
 | `--skip-sports` / `--skip-markets` / `--skip-news` / `--skip-media` / `--skip-misc` | Skip one fetch domain |
 | `--skip-summary` | Skip the AI briefings (no Gemini call) |
-| `--skip-sentiment` | Skip AV news sentiment (otherwise always all 10 topics) |
-| `--scrape-etf-info` | Scrape ETF info + top holdings from etfdb.com, then exit (manual) |
 | `--watchlist TICKER ...` | Override the basket watchlist |
 | `--test` | Run `run_test.py` (dry-run, no DB writes) |
 | `--output FILE` | Write results JSON to FILE |
@@ -182,7 +178,7 @@ Scheduling" in the root `CLAUDE.md` for why the schedule left GitHub's `schedule
 | `--tier {a,b}` | `a` | Tier A: Finnhub quotes (no forex/commodities), ESPN scoreboards, Finnhub market news — no daily API budget. Tier B: Tier A + NYT top stories, ESPN news, forex (Frankfurter) and commodity (FMP, 3 calls) quotes |
 | `--triggered-by {manual,cron,dispatch}` | `manual` | Recorded in `etl_runs` |
 
-AV sentiment, FMP economic indicators, misc, the AI briefings and retention cleanup are
+Economic indicators (FMP + FRED), misc, the AI briefings and retention cleanup are
 daily-only.
 
 ---
@@ -197,9 +193,8 @@ baskets.json
 
 Finnhub /company-news ─────────────────────────────────────────► company_news
 Finnhub /news (general/forex/crypto) ──────────────────────────► market_news
-AV NEWS_SENTIMENT (10 topics) ─────────────────────────────────► news_sentiment
-FMP treasury-rates + economic-indicators (7 names) ────────────► economic_indicators
-FMP profiles / etfdb.com (manual only) ────────────────────────► stocks, etf_holdings
+FMP treasury-rates + economic-indicators (6 names) ────────────► economic_indicators
+FRED GDPC1 (realGDP, keyless CSV) ─────────────────────────────► economic_indicators
 
 ESPN news, scoreboard, standings ──────────────────────────────► sports_news, sports_scores, sports_standings
 NYT topstories, mostpopular ───────────────────────────────────► news_articles

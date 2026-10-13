@@ -1,7 +1,7 @@
 # Daily ETL Execution Order & Timing
 
 `python src/api/run_etl.py` — wall time well under 60s (cooperative budget defaults to 50s;
-see the ETL Performance Requirement in the repo root `CLAUDE.md`), gated by markets.
+see the ETL Performance Requirement in the repo root `CLAUDE.md`), gated by sports.
 
 ---
 
@@ -121,13 +121,12 @@ Total: ~1–2s
 
 ---
 
-## MARKETS (~5–15s — gates the run when AV sentiment is enabled)
+## MARKETS (~13s)
 
 > **Which domain gates the run has changed.** Markets used to set wall time on its own; moving
 > forex to Frankfurter (one keyless request for all 10 pairs instead of 10 FMP calls) took the
-> full run from ~29s to ~18s. Measured 2026-09-01: sports 17.9s, markets 13.6s — with AV
-> sentiment skipped, since the daily quota was exhausted. Markets and sports are now close
-> enough that either can gate, and `--skip-sentiment` is what decides it.
+> full run from ~29s to ~18s, and dropping Alpha Vantage sentiment (premium-only since
+> ~2026-10-06) took markets from 19.1s to 13.0s (2026-10-13; full run 18.8s). Sports now gates.
 
 
 Two sequential phases, each internally parallel:
@@ -139,13 +138,11 @@ Phase A — Ticker quotes + company news, 2 concurrent workers
   batch-upserted once after the pool drains, not per-ticker.
   (ETFs/crypto/forex/commodity: quote only; stocks: quote + Finnhub news)
 
-Phase B — market news + AV sentiment + economic indicators, run in a SECOND
-  ThreadPoolExecutor (max_workers = number of enabled steps), concurrently —
-  each hits a different API (Finnhub / AV / FMP), so there's no contention:
+Phase B — market news + economic indicators, run in a SECOND
+  ThreadPoolExecutor, concurrently — each hits a different API
+  (Finnhub / FMP + FRED), so there's no contention:
     ├─ Market news (Finnhub), 4 categories
-    ├─ AV sentiment — all 10 topics (no partial-topic mode; `--skip-sentiment`
-    │    drops this step entirely, not just some topics)
-    └─ Economic indicators (FMP treasury rates + 7 macro indicators)
+    └─ Economic indicators (FMP treasury rates + 6 macro indicators, then real GDP from FRED)
 
 Wall time = Phase A + max(Phase B steps), not the sum of every step.
 ```
@@ -154,6 +151,4 @@ Wall time = Phase A + max(Phase B steps), not the sum of every step.
 
 ## Notes
 
-- `--skip-sentiment` removes the AV sentiment step from markets' Phase B entirely. That shortens markets, and shortens the run whenever markets is the gating domain — see the note above; sports now runs it close
-- AV sentiment exhausts the free-tier daily limit (25 req/key) quickly if keys have been used earlier in the day — the daily run should be the **first** AV consumer each day
-- Markets' ticker-fetch phase is capped at 2 concurrent threads (one per Finnhub key, `max_workers=2`); markets' Phase B pool sizes itself to however many of market-news/sentiment/econ are enabled
+- Markets' ticker-fetch phase is capped at 2 concurrent threads (one per Finnhub key, `max_workers=2`); markets' Phase B runs market news and econ side by side

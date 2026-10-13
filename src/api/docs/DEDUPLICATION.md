@@ -64,44 +64,6 @@ See [Note 1](#note-1--finnhub-numeric-id-field) regarding the Finnhub `id` field
 
 ---
 
-#### `news_sentiment`
-
-| Field | Value |
-|---|---|
-| Dedup key | `url` |
-| UNIQUE constraint | `url TEXT NOT NULL UNIQUE` (`02_tables.sql`) |
-| `on_conflict` | `'url'` |
-| Behavior on conflict | Update sentiment score, label, ticker relevance scores |
-| DB helper | `insert_news_sentiment()` — `markets/markets_db_helper.py`; called by `sync_news_sentiment()` |
-
-Source: Alpha Vantage News Sentiment API.
-
----
-
-#### `etf_holdings`
-
-| Field | Value |
-|---|---|
-| Dedup key | `(etf_stock_id, asset_stock_id, as_of_date)` |
-| UNIQUE constraint | `UNIQUE (etf_stock_id, asset_stock_id, as_of_date)` (`02_tables.sql`) |
-| `on_conflict` | `'etf_stock_id,asset_stock_id,as_of_date'` |
-| Behavior on conflict | Update weight, shares, market value |
-| DB helper | `upsert_etf_holdings()` — `markets/markets_db_helper.py` |
-
----
-
-#### `etf_sectors`
-
-| Field | Value |
-|---|---|
-| Dedup key | `(etf_stock_id, sector, as_of_date)` |
-| UNIQUE constraint | `UNIQUE (etf_stock_id, sector, as_of_date)` (`02_tables.sql`) |
-| `on_conflict` | `'etf_stock_id,sector,as_of_date'` |
-| Behavior on conflict | Update weight percentage |
-| DB helper | `upsert_etf_sectors()` — `markets/markets_db_helper.py` |
-
----
-
 #### `economic_indicators`
 
 | Field | Value |
@@ -112,7 +74,7 @@ Source: Alpha Vantage News Sentiment API.
 | Behavior on conflict | Update `value` |
 | DB helper | `upsert_economic_indicators()` — `markets/markets_db_helper.py`; called by `sync_economic_indicators()` |
 
-Sources: FMP treasury rates (1 call, 9 term columns flattened to rows) + 7 macro indicators.
+Sources: FMP treasury rates (1 call, 9 term columns flattened to rows) + 6 FMP macro indicators + real GDP from FRED (`GDPC1`, stored as `realGDP`).
 Runs as part of every `run_etl.py` daily run (not gated behind a flag) — `--economic-indicators-only`
 was a `run_db_seed.py`-only flag and doesn't exist on `run_etl.py`.
 
@@ -192,9 +154,6 @@ table — nothing to deduplicate. Reddit (`reddit_posts`) was removed.
 | `stock_quotes` | `(stock_id, quote_timestamp)` | `stock_id,quote_timestamp` | ✓ |
 | `company_news` | `url` | `url` | ✓ |
 | `market_news` | `url` | `url` | ✓ |
-| `news_sentiment` | `url` | `url` | ✓ |
-| `etf_holdings` | `(etf_stock_id, asset_stock_id, as_of_date)` | `etf_stock_id,asset_stock_id,as_of_date` | ✓ |
-| `etf_sectors` | `(etf_stock_id, sector, as_of_date)` | `etf_stock_id,sector,as_of_date` | ✓ |
 | `economic_indicators` | `(indicator_name, date)` | `indicator_name,date` | ✓ |
 | `sports_scores` | `(league_id, event_id)` | `league_id,event_id` | ✓ |
 | `sports_news` | `url` | `url` | ✓ |
@@ -202,7 +161,7 @@ table — nothing to deduplicate. Reddit (`reddit_posts`) was removed.
 | `youtube_videos` | `(video_id, region_code)` | `video_id,region_code` | ✓ |
 | `sports_standings` | `(league_id, team_abbrev, season)` | `league_id,team_abbrev,season` | ✓ |
 
-All 13 tables: UNIQUE constraint matches `on_conflict` key. No raw INSERTs anywhere in the pipeline.
+All 10 tables: UNIQUE constraint matches `on_conflict` key. No raw INSERTs anywhere in the pipeline.
 
 ---
 

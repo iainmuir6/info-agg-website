@@ -184,7 +184,7 @@ running unbounded. See `src/api/docs/EXECUTION_ORDER.md` for the per-domain brea
 
 ### What each domain does on a daily run
 
-#### Markets (Finnhub + FMP + AV + Frankfurter)
+#### Markets (Finnhub + FMP + Frankfurter + FRED)
 
 Per ticker:
 
@@ -201,12 +201,10 @@ Then once, run in parallel with each other since each hits a different API:
 | Action | Source | Table |
 |--------|--------|-------|
 | Fetch market news (3 categories: general, forex, crypto) | Finnhub `/news` | `market_news` |
-| Fetch AV sentiment (all 10 topics — no partial-topic mode) | AV `NEWS_SENTIMENT` | `news_sentiment` |
-| Treasury rates + 7 macro indicators | FMP `/stable/treasury-rates`, `/stable/economic-indicators` | `economic_indicators` |
+| Treasury rates + 6 macro indicators | FMP `/stable/treasury-rates`, `/stable/economic-indicators` | `economic_indicators` |
+| Real GDP (`GDPC1`, stored as `realGDP`) | FRED keyless CSV export | `economic_indicators` |
 
-Stub **missing-profile backfill** (FMP profile for `name IS NULL` stocks) was **removed from the daily ETL**; `backfill_missing_profiles()` in `markets_db_helper.py` is deprecated for one-off use only.
-
-Profile/info updates are **not** run daily — trigger manually with FMP (`sync_fmp_data` in `markets_db_helper.py`) or `--scrape-etf-info` (ETFdb).
+Company profile/info updates are **not** run, daily or manually: the missing-profile backfill and the ETFdb scraper (with its FMP-profile fallback) were both retired.
 
 #### Sports / News / Media
 
@@ -240,12 +238,6 @@ footer, not just the run status, when a briefing looks stale.
 # Skip slow domains when iterating on markets
 python src/api/run_etl.py --markets-only
 
-# Scrape ETF info + holdings from etfdb.com (manual trigger)
-python src/api/run_etl.py --scrape-etf-info
-
-# Skip AV sentiment entirely (quotes + news only, saves 10 AV calls)
-python src/api/run_etl.py --skip-sentiment
-
 # Regenerate the AI briefings alone, against whatever is already in the DB
 python src/api/run_etl.py --summary-only
 
@@ -274,7 +266,7 @@ domain fell over.
 | Domain  | Fails the run when                                  | Reported but non-fatal                                    |
 |---------|-----------------------------------------------------|-----------------------------------------------------------|
 | sports  | every league failed, or rows fetched but none written | individual league errors; a quiet night with no games; on the intraday tiers, an isolated ESPN outage (see below) |
-| markets | 0 quote rows                                        | market news / sentiment / econ writing 0 rows; on the intraday tiers, an isolated Finnhub outage |
+| markets | 0 quote rows                                        | market news / econ writing 0 rows; on the intraday tiers, an isolated Finnhub outage |
 | news    | 0 articles                                          | per-section errors; sections skipped after a breaker trip; on the intraday tiers, an isolated NYT outage |
 | media   | never                                               | 0 videos → domain state `WARN`, run status `partial`       |
 | misc    | never                                               | each of the six feeds degrades on its own; a missing key is a note, not an error |
@@ -320,14 +312,14 @@ every refresh until the API returns.
 
 Two rules behind that table:
 
-1. **Only the domain's primary write can fail it.** A dead secondary source (AV sentiment, FMP
-   econ, Finnhub market news) is recorded as an error and lands the run on `partial`. Failing the
+1. **Only the domain's primary write can fail it.** A dead secondary source (FMP/FRED econ,
+   Finnhub market news) is recorded as an error and lands the run on `partial`. Failing the
    whole daily run over one of them meant a red build, a filed issue, and no cache revalidation
    for the ~50k rows that *did* write.
 2. **Every source is asked about its own zero.** A source that writes 0 rows gets an error line
    whether or not it explained itself — `… wrote 0 rows` when it reported its own error, and
    `… wrote 0 rows and reported no error` when it did not. The old check only ran when the
-   domain's *pooled* error list was empty, so a total loss of AV sentiment (10 topics, 0 rows)
+   domain's *pooled* error list was empty, so a total loss of AV sentiment (10 topics, 0 rows; since removed)
    was recorded as a healthy markets domain, while a silent FMP econ outage failed the entire run.
 
 Media is deliberately outside this: one API, one call, no fallback, and the least load-bearing
@@ -357,10 +349,6 @@ Already seeded — routine operation?
 Missed some ESPN score history (outage, late backfill)?
   └─ python src/api/backfill_scores.py --season current  (safe to re-run, upserts by event)
 
-Daily Run — AV budget constraints?
-  └─ AV budget tight → add --skip-sentiment (0 AV calls; sentiment is otherwise always
-     all 10 topics, there's no partial-topic flag)
-
 Need faster-than-daily updates between full runs?
   └─ python src/api/run_quick_refresh.py --tier a   (9 vercel.json slots/day, no daily budget spent)
   └─ python src/api/run_quick_refresh.py --tier b   (6 slots/day, adds NYT + ESPN news + FMP commodities)
@@ -387,11 +375,11 @@ Site stopped updating but /dashboard shows no failures at all?
 | Entry point | `archive/run_db_seed.py` — does not run | `run_etl.py` |
 | Domain execution | Interleaved with AV backfill batches, one domain at a time | 5 fetch domains in parallel (`ThreadPoolExecutor`), then `summary` sequentially |
 | Quote history depth | N days (default 30) via `--backfill-quotes`, when it worked | Today's quote only — no backfill |
-| AV key selection | Round-robin per ticker | Round-robin per call |
-| AV rate limiting | Interleaved with domain ETL (no explicit sleep) | `MinInterval` slot reservation (>=1.25s gap), reserves under lock then sleeps outside it |
+| AV key selection | Round-robin per ticker | — (Alpha Vantage removed) |
+| AV rate limiting | Interleaved with domain ETL (no explicit sleep) | — (Alpha Vantage removed) |
 | Company news | Skipped during backfill; fetched in Phase 9 | Always fetched (7-day window) |
-| ETF holdings | AV `ETF_PROFILE` — full upsert (Phase 2) | Not run (manual only) |
-| Economic indicators | FMP full history — Phase 10 (~8 calls) | ~8 calls/day (incremental) |
-| AV sentiment | All 10 topics (Phase 8) | All 10 topics (no partial-topic mode) |
+| ETF holdings | AV `ETF_PROFILE` — full upsert (Phase 2) | — (table dropped in `14_prune_unused.sql`) |
+| Economic indicators | FMP full history — Phase 10 (~8 calls) | 7 FMP calls + 1 FRED call/day (incremental) |
+| AV sentiment | All 10 topics (Phase 8) | — (premium-only since ~2026-10-06; removed) |
 | Typical duration | ~12–18 min with 3 AV keys, when it worked | Well under 60s (target; cooperative 50s budget default) |
 | Scheduling | Manual only, when it worked | Vercel Cron (`vercel.json`, ~09:00 UTC) → `workflow_dispatch` on `.github/workflows/daily-etl.yml`, + the `/dashboard` button |
