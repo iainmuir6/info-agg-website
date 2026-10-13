@@ -1,4 +1,5 @@
 import "server-only";
+import { timingSafeEqual } from "node:crypto";
 import { getSiteUrl } from "@/lib/site-url";
 
 /**
@@ -33,3 +34,14 @@ export function isAllowedSameOriginMutation(request: Request): boolean {
   }
 }
 
+
+/**
+ * Constant-time check of `Authorization: Bearer <secret>` for routes called by
+ * machines (Vercel Cron, the ETL workflow). False when the secret is unset.
+ */
+export function hasBearerSecret(request: Request, secret: string | undefined): boolean {
+  if (!secret) return false;
+  const actual = Buffer.from(request.headers.get("authorization") ?? "");
+  const expected = Buffer.from(`Bearer ${secret}`);
+  return actual.length === expected.length && timingSafeEqual(actual, expected);
+}

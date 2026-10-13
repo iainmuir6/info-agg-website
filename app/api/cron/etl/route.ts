@@ -4,6 +4,7 @@ import {
   dispatchEtl,
   isEtlJob,
 } from "@/lib/github-dispatch";
+import { hasBearerSecret } from "@/lib/security";
 
 // Vercel Cron entry point (see vercel.json). Each cron entry hits this route
 // with ?job=daily|a|b and it fires the matching workflow_dispatch, which
@@ -24,7 +25,7 @@ export async function GET(request: NextRequest) {
     console.error("CRON_SECRET not configured — refusing cron dispatch");
     return NextResponse.json({ error: "Not configured" }, { status: 503 });
   }
-  if (request.headers.get("authorization") !== `Bearer ${secret}`) {
+  if (!hasBearerSecret(request, secret)) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 

@@ -76,11 +76,13 @@ jobs:
 
       # --cleanup runs info_agg.cleanup_daily() retention after the domains
       # complete: intraday quotes collapse to EOD, 7-day news pruning, etc.
-      # The 10:43 UTC schedule is before US market open, so every prior
-      # NY-calendar day is a completed trading day.
+      # The 09:00 UTC Vercel Cron slot is before US market open, so every
+      # prior NY-calendar day is a completed trading day.
+      # Inputs go through env, never interpolated into the shell line.
       - name: Run ETL pipeline with retention cleanup
-        run: python src/api/run_etl.py --triggered-by "${{ inputs.triggered_by || 'manual' }}" --cleanup --season-schedules --output etl-report.json
+        run: python src/api/run_etl.py --triggered-by "$TRIGGERED_BY" --cleanup --season-schedules --output etl-report.json
         env:
+          TRIGGERED_BY: ${{ inputs.triggered_by || 'manual' }}
           PYTHONPATH: src/api
 
       - name: Upload run report

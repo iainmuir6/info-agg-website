@@ -1,13 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
 import { revalidateTag } from "next/cache";
+import { hasBearerSecret } from "@/lib/security";
 
 // Called by the ETL workflows after a successful run so cached data
 // (tag: 'etl-data') refreshes within seconds of new rows landing.
 // Auth: Authorization: Bearer <REVALIDATE_SECRET>.
 export async function POST(request: NextRequest) {
-  const secret = process.env.REVALIDATE_SECRET;
-  const auth = request.headers.get("authorization");
-  if (!secret || auth !== `Bearer ${secret}`) {
+  if (!hasBearerSecret(request, process.env.REVALIDATE_SECRET)) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 

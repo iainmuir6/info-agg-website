@@ -70,8 +70,10 @@ jobs:
         # about this workflow. A lost upstream (ESPN 403ing the runner, a
         # Finnhub/NYT 429) lands on `partial` and exits 0 until it persists
         # across several runs — see src/api/docs/RUNBOOK.md, "Run Status".
-        run: python src/api/run_quick_refresh.py --tier "${{ inputs.tier }}" --triggered-by "${{ inputs.triggered_by || 'manual' }}"
+        run: python src/api/run_quick_refresh.py --tier "$TIER" --triggered-by "$TRIGGERED_BY"
         env:
+          TIER: ${{ inputs.tier }}
+          TRIGGERED_BY: ${{ inputs.triggered_by || 'manual' }}
           PYTHONPATH: src/api
 
       - name: Revalidate site cache

@@ -33,6 +33,7 @@ from etl_lib import (
     start_etl_run,
     finish_etl_run,
     collect_domain_errors,
+    redact_secrets,
 )
 from sports.sports_db_helper import sync_all_sports_data, sync_season_schedules, sync_standings
 from markets.markets_db_helper import (
@@ -990,7 +991,9 @@ def main():
 
     if args.output:
         with open(args.output, 'w') as f:
-            json.dump(results, f, indent=2, default=str)
+            # Uploaded as a workflow artifact, so it gets the same redaction as
+            # stdout and etl_runs: error strings can carry ?token= URLs.
+            f.write(redact_secrets(json.dumps(results, indent=2, default=str)))
         print(f"\nResults written to {args.output}")
 
     # Exit 1 on any hard domain failure; 'partial' (errors but data written)
