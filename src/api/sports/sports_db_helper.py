@@ -10,7 +10,6 @@ from supabase import create_client, Client
 from supabase import ClientOptions
 
 from datetime import datetime, timedelta, timezone
-import time
 import sys
 import os
 
@@ -35,7 +34,7 @@ except ImportError:
 _PARENT = os.path.dirname(_HERE)
 if _PARENT not in sys.path:
     sys.path.insert(0, _PARENT)
-from etl_lib import chunked_upsert, db_call, et_now, et_today, run_deadline
+from etl_lib import chunked_upsert, db_call, et_now, run_deadline
 
 
 def get_supabase_client() -> Client:
@@ -54,26 +53,6 @@ def get_supabase_client() -> Client:
     if ClientOptions is not None:
         return create_client(supabase_url, supabase_key, options=ClientOptions(schema='info_agg'))
     return create_client(supabase_url, supabase_key)
-
-
-def get_league_id(supabase: Client, sport: str, league: str) -> Optional[str]:
-    """
-    Get the league ID for a given sport/league combination
-    
-    Args:
-        supabase: Supabase client instance
-        sport: Sport name (e.g., 'football', 'basketball')
-        league: League name (e.g., 'nfl', 'nba')
-    
-    Returns:
-        League ID if found, None otherwise
-    """
-    try:
-        response = supabase.table('leagues').select('id').eq('sport', sport).eq('league', league).maybe_single().execute()
-        return response.data.get('id') if (response and response.data) else None
-    except Exception as e:
-        print(f"Error getting league ID for {sport}/{league}: {e}")
-        return None
 
 
 def _sports_news_records(league_id: str, articles: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -102,21 +81,6 @@ def _upsert_sports_news_records(
     return chunked_upsert(
         supabase, 'sports_news', records, on_conflict='url', errors=errors
     )
-
-
-def insert_news_articles(supabase: Client, league_id: str, articles: List[Dict[str, Any]]) -> int:
-    """
-    Batch-upsert news articles into the database (single DB round-trip).
-
-    Args:
-        supabase: Supabase client instance
-        league_id: League ID from leagues table
-        articles: List of article dictionaries from fetch_espn_news()
-
-    Returns:
-        Number of articles successfully inserted
-    """
-    return _upsert_sports_news_records(supabase, _sports_news_records(league_id, articles))
 
 
 def _sports_score_records(league_id: str, games: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -168,21 +132,6 @@ def _upsert_sports_score_records(
         supabase, 'sports_scores', deduped,
         on_conflict='league_id,event_id', errors=errors,
     )
-
-
-def insert_scores(supabase: Client, league_id: str, games: List[Dict[str, Any]]) -> int:
-    """
-    Batch-upsert game scores/schedule into the database (single DB round-trip).
-
-    Args:
-        supabase: Supabase client instance
-        league_id: League ID from leagues table
-        games: List of game dictionaries from fetch_espn_scores()
-
-    Returns:
-        Number of games successfully inserted
-    """
-    return _upsert_sports_score_records(supabase, _sports_score_records(league_id, games))
 
 
 def sync_all_sports_data(
@@ -480,56 +429,6 @@ def sync_standings(supabase: Client) -> Dict[str, Any]:
             stats['leagues_processed'] += 1
         except Exception as e:
             stats['errors'].append(f"Error fetching standings for {sport}/{league}: {e}")
-
-    return stats
-
-
-def backfill_sports_scores(
-    supabase: Client,
-    days_back: int = 30,
-) -> Dict[str, Any]:
-    """
-    Backfill sports_scores by fetching ESPN scoreboard for each day in the window.
-
-    Iterates each calendar date from `days_back` days ago through yesterday,
-    fetching all configured sport/league scoreboards for that date.
-
-    Args:
-        supabase: Supabase client instance
-        days_back: Number of days back to backfill (default 30)
-
-    Returns:
-        Stats dict: dates_processed, scores_inserted, errors
-    """
-    stats: Dict[str, Any] = {
-        'dates_processed': 0,
-        'scores_inserted': 0,
-        'errors': [],
-    }
-
-    today = et_today()
-    dates = [today - timedelta(days=d) for d in range(days_back, 0, -1)]  # oldest → newest
-
-    for date in dates:
-        date_str = date.strftime('%Y%m%d')
-        day_count = 0
-        for sport, league in SPORT_CONFIGS:
-            try:
-                games = fetch_espn_scores(
-                    sport, league, dates=date_str, errors=stats['errors'])
-                if games:
-                    league_id = get_league_id(supabase, sport, league)
-                    if league_id:
-                        count = insert_scores(supabase, league_id, games)
-                        day_count += count
-            except Exception as e:
-                msg = f"Error fetching {sport}/{league} scores for {date_str}: {e}"
-                stats['errors'].append(msg)
-        if day_count:
-            print(f"  {date_str}: inserted {day_count} scores")
-        stats['scores_inserted'] += day_count
-        stats['dates_processed'] += 1
-        time.sleep(0.3)  # light throttle — ESPN has no published rate limit
 
     return stats
 

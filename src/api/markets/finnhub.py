@@ -240,50 +240,6 @@ def fetch_company_profile(ticker: str, api_key: Optional[str] = None) -> Optiona
         return None
 
 
-def fetch_etf_profile(ticker: str, api_key: Optional[str] = None) -> Optional[Dict[str, Any]]:
-    """
-    Fetch ETF profile from Finnhub /etf/profile.
-    Returns data in the same shape as fetch_company_profile() for drop-in compatibility.
-    NOTE: Requires Finnhub premium — returns 403 on the free tier.
-    """
-    if api_key is None:
-        api_key = get_finnhub_api_key()
-
-    url = f"{FINNHUB_BASE_URL}/etf/profile"
-    params = {'symbol': ticker, 'token': api_key}
-
-    try:
-        _fh_rate_limit(api_key)
-        response = get_http_session().get(url, params=params, timeout=HTTP_TIMEOUT)
-        response.raise_for_status()
-        data = response.json()
-
-        if not data or not data.get('name'):
-            return None
-
-        return {
-            'ticker': ticker,
-            'name': data.get('name'),
-            'country': data.get('domicile'),
-            'currency': data.get('nav_currency'),
-            'exchange': None,
-            'ipo_date': data.get('inception_date'),
-            'market_cap': None,
-            'share_outstanding': None,
-            'logo': data.get('logo'),
-            'website': data.get('website'),
-            'industry': data.get('asset_class'),  # e.g. "Equity"
-            'fetched_at': utc_now().isoformat()
-        }
-
-    except requests.exceptions.RequestException as e:
-        print(f"Error fetching ETF profile for {ticker}: {e}")
-        return None
-    except Exception as e:
-        print(f"Error parsing ETF profile for {ticker}: {e}")
-        return None
-
-
 def fetch_company_news(
     ticker: str,
     days_back: int = 7,
@@ -385,102 +341,7 @@ def fetch_market_news(category: str = 'general', min_id: int = 0, api_key: Optio
         raise RuntimeError(f"finnhub market-news parse failed for {category}: {e}") from e
 
 
-def fetch_recommendation_trends(ticker: str, api_key: Optional[str] = None) -> List[Dict[str, Any]]:
-    """Fetch analyst recommendation trends for a stock."""
-    if api_key is None:
-        api_key = get_finnhub_api_key()
-
-    url = f"{FINNHUB_BASE_URL}/stock/recommendation"
-    params = {'symbol': ticker, 'token': api_key}
-
-    try:
-        _fh_rate_limit(api_key)
-        response = get_http_session().get(url, params=params, timeout=HTTP_TIMEOUT)
-        response.raise_for_status()
-        data = response.json()
-
-        return [
-            {
-                'ticker': ticker,
-                'period': trend.get('period'),
-                'strong_buy': trend.get('strongBuy', 0),
-                'buy': trend.get('buy', 0),
-                'hold': trend.get('hold', 0),
-                'sell': trend.get('sell', 0),
-                'strong_sell': trend.get('strongSell', 0),
-                'fetched_at': utc_now().isoformat()
-            }
-            for trend in data
-        ]
-
-    except requests.exceptions.RequestException as e:
-        print(f"Error fetching recommendation trends for {ticker}: {e}")
-        return []
-    except Exception as e:
-        print(f"Error parsing recommendation trends for {ticker}: {e}")
-        return []
-
-
-def fetch_country_metadata(api_key: Optional[str] = None) -> List[Dict[str, Any]]:
-    """Fetch country metadata from Finnhub."""
-    if api_key is None:
-        api_key = get_finnhub_api_key()
-
-    url = f"{FINNHUB_BASE_URL}/country"
-    params = {'token': api_key}
-
-    try:
-        _fh_rate_limit(api_key)
-        response = get_http_session().get(url, params=params, timeout=HTTP_TIMEOUT)
-        response.raise_for_status()
-        data = response.json()
-
-        return [
-            {
-                'code': c.get('code'),
-                'country': c.get('country'),
-                'currency': c.get('currency'),
-                'market': c.get('market'),
-                'fetched_at': utc_now().isoformat()
-            }
-            for c in data
-        ]
-
-    except requests.exceptions.RequestException as e:
-        print(f"Error fetching country metadata: {e}")
-        return []
-    except Exception as e:
-        print(f"Error parsing country metadata: {e}")
-        return []
-
-
-def fetch_usa_spending(api_key: Optional[str] = None) -> Optional[Dict[str, Any]]:
-    """
-    Fetch USA spending/government contracts data from Finnhub.
-    NOTE: May require premium access.
-    """
-    if api_key is None:
-        api_key = get_finnhub_api_key()
-
-    url = f"{FINNHUB_BASE_URL}/usa-spending"
-    params = {'token': api_key}
-
-    try:
-        _fh_rate_limit(api_key)
-        response = get_http_session().get(url, params=params, timeout=HTTP_TIMEOUT)
-        response.raise_for_status()
-        return {'data': response.json(), 'fetched_at': utc_now().isoformat()}
-
-    except requests.exceptions.RequestException as e:
-        print(f"Error fetching USA spending: {e}")
-        return None
-    except Exception as e:
-        print(f"Error parsing USA spending: {e}")
-        return None
-
-
 if __name__ == "__main__":
-    import pandas as pd
     print("=" * 60)
     print("Testing Finnhub API")
     print("=" * 60)
@@ -502,8 +363,3 @@ if __name__ == "__main__":
     print(f"Found {len(news)} articles")
     for a in news[:3]:
         print(f"  - {a['headline']}")
-
-    news_df = pd.DataFrame(news)
-    news_df.head()
-    news_df['source'].value_counts()
-    pd.to_datetime(news_df['published_at']).dt.date.value_counts()

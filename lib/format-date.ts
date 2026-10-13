@@ -102,11 +102,6 @@ export function formatWeekdayDateTime(value: string | Date | null | undefined): 
   });
 }
 
-/** "Jul 26" style label for chart axes. */
-export function formatChartDay(value: string | Date | null | undefined): string {
-  return formatDate(value);
-}
-
 /** Eastern calendar-day key ("2026-07-30"), sortable as a string. */
 export function easternDayKey(value: string | Date | null | undefined): string {
   const d = safeDate(value);

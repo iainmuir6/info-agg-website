@@ -9,8 +9,6 @@ from typing import Dict, List, Optional, Any
 from supabase import create_client, Client
 from supabase import ClientOptions
 
-from datetime import datetime, timedelta, timezone
-import time
 import sys
 import os
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -31,16 +29,12 @@ try:
     from .nyt import (
         fetch_nyt_top_stories,
         fetch_nyt_most_popular,
-        fetch_nyt_archive,
-        NYT_SECTIONS,
         is_nyt_key_disabled,
     )
 except ImportError:
     from nyt import (
         fetch_nyt_top_stories,
         fetch_nyt_most_popular,
-        fetch_nyt_archive,
-        NYT_SECTIONS,
         is_nyt_key_disabled,
     )
 
@@ -295,78 +289,6 @@ def sync_nyt_data(supabase: Client, sections: List[str]) -> Dict[str, Any]:
         stats['articles_inserted'] += insert_nyt_articles(
             supabase, popular_articles, source_type='most_popular', errors=stats['errors']
         )
-
-    return stats
-
-
-def backfill_nyt_archive(
-    supabase: Client,
-    days_back: int = 30,
-) -> Dict[str, Any]:
-    """
-    Backfill news_articles using the NYT Archive API.
-
-    Fetches all calendar months that overlap the last `days_back` days,
-    filters to articles since the cutoff date and to NYT_SECTIONS, then upserts.
-
-    Args:
-        supabase: Supabase client instance
-        days_back: Number of days back from today to include (default 30)
-
-    Returns:
-        Stats dict: months_fetched, articles_inserted, errors
-    """
-    stats: Dict[str, Any] = {
-        'months_fetched': 0,
-        'articles_inserted': 0,
-        'errors': [],
-    }
-
-    cutoff = datetime.now(timezone.utc) - timedelta(days=days_back)
-    since_date = cutoff.strftime('%Y-%m-%d')
-
-    # Collect unique (year, month) pairs that overlap the window
-    months: list = []
-    cursor = cutoff.replace(day=1)
-    today = datetime.now(timezone.utc)
-    while cursor <= today:
-        months.append((cursor.year, cursor.month))
-        # Advance to first of next month
-        if cursor.month == 12:
-            cursor = cursor.replace(year=cursor.year + 1, month=1)
-        else:
-            cursor = cursor.replace(month=cursor.month + 1)
-
-    for year, month in months:
-        try:
-            print(f"  Fetching NYT archive {year}/{month:02d} (since {since_date})...")
-            articles = fetch_nyt_archive(
-                year=year,
-                month=month,
-                sections=NYT_SECTIONS,
-                since_date=since_date,
-                max_per_section_per_day=5,
-            )
-            if articles:
-                # Archive articles are already shaped for insert_nyt_articles; use source_type sentinel
-                inserted = 0
-                for article in articles:
-                    try:
-                        row = {k: v for k, v in article.items() if k != 'news_desk'}
-                        response = supabase.table('news_articles').upsert(
-                            row, on_conflict='url'
-                        ).execute()
-                        if response.data:
-                            inserted += 1
-                    except Exception as e:
-                        print(f"    Error upserting '{article.get('title', '')[:50]}': {e}")
-                stats['articles_inserted'] += inserted
-                print(f"    Inserted {inserted}/{len(articles)} articles")
-            stats['months_fetched'] += 1
-        except Exception as e:
-            msg = f"Error processing NYT archive {year}/{month}: {e}"
-            stats['errors'].append(msg)
-            print(msg)
 
     return stats
 

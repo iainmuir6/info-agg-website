@@ -12,8 +12,6 @@ from supabase import ClientOptions
 from datetime import datetime, timezone
 import os
 import sys
-import time
-import warnings
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -71,14 +69,12 @@ except ImportError:
 try:
     from .alpha_vantage import (
         AVQuotaExhausted,
-        fetch_etf_holdings_av,
         fetch_news_sentiment,
         get_alphavantage_api_keys,
     )
 except ImportError:
     from alpha_vantage import (
         AVQuotaExhausted,
-        fetch_etf_holdings_av,
         fetch_news_sentiment,
         get_alphavantage_api_keys,
     )
@@ -230,31 +226,6 @@ def insert_stock_quote(supabase: Client, stock_id: str, quote_data: Dict[str, An
         return False
 
 
-def build_stock_quote_row(stock_id: str, quote_data: Dict[str, Any]) -> Dict[str, Any]:
-    """Map Finnhub- or FMP-shaped quote dict to a stock_quotes upsert row."""
-    ts = quote_data.get('timestamp')
-    if ts is None:
-        ts = quote_data.get('quote_timestamp')
-    if ts and isinstance(ts, (int, float)):
-        quote_timestamp = datetime.fromtimestamp(ts, tz=timezone.utc).isoformat()
-    elif ts:
-        quote_timestamp = str(ts)
-    else:
-        quote_timestamp = datetime.now(timezone.utc).isoformat()
-    return {
-        'stock_id': stock_id,
-        'current_price': quote_data.get('current_price'),
-        'change_amount': quote_data.get('change'),
-        'percent_change': quote_data.get('percent_change'),
-        'high_price': quote_data.get('high_price'),
-        'low_price': quote_data.get('low_price'),
-        'open_price': quote_data.get('open_price'),
-        'previous_close': quote_data.get('previous_close'),
-        'volume': quote_data.get('volume'),
-        'quote_timestamp': quote_timestamp,
-    }
-
-
 def upsert_daily_stock_quotes_batch(
     supabase: Client, rows: List[Dict[str, Any]], errors: Optional[List[str]] = None
 ) -> int:
@@ -265,45 +236,6 @@ def upsert_daily_stock_quotes_batch(
     return chunked_upsert(
         supabase, 'stock_quotes', rows,
         on_conflict='stock_id,quote_timestamp', errors=errors, chunk_size=100,
-    )
-
-
-def insert_stock_quotes_batch(supabase: Client, stock_id: str, quotes: List[Dict[str, Any]]) -> int:
-    """
-    Bulk-upsert a list of quote records (e.g. from fetch_historical_quotes()).
-
-    Returns the number of rows upserted.
-    """
-    if not quotes:
-        return 0
-
-    batch_data = []
-    for q in quotes:
-        ts = q.get('timestamp')
-        # Alpha Vantage returns date strings (e.g. '2025-03-01') — valid TIMESTAMPTZ for Postgres.
-        # Finnhub returns Unix epoch integers — convert to ISO string.
-        if ts and isinstance(ts, (int, float)):
-            quote_timestamp = datetime.fromtimestamp(ts, tz=timezone.utc).isoformat()
-        elif ts:
-            quote_timestamp = ts  # already a date/datetime string
-        else:
-            quote_timestamp = datetime.now(timezone.utc).isoformat()
-        batch_data.append({
-            'stock_id': stock_id,
-            'current_price': q.get('current_price'),
-            'change_amount': q.get('change'),
-            'percent_change': q.get('percent_change'),
-            'high_price': q.get('high_price'),
-            'low_price': q.get('low_price'),
-            'open_price': q.get('open_price'),
-            'previous_close': q.get('previous_close'),
-            'volume': q.get('volume'),
-            'quote_timestamp': quote_timestamp
-        })
-
-    return chunked_upsert(
-        supabase, 'stock_quotes', batch_data,
-        on_conflict='stock_id,quote_timestamp', chunk_size=100,
     )
 
 
@@ -599,43 +531,6 @@ def sync_market_news(supabase: Client, categories: List[str] = ['general'], api_
     return stats
 
 
-def insert_stub_stocks(supabase: Client, tickers: List[str], asset_type: str = 'stock') -> Dict[str, str]:
-    """
-    Batch-insert stub rows for tickers that don't yet exist in stocks, then
-    return a {ticker: id} map for all requested tickers.
-
-    Uses ON CONFLICT DO NOTHING so existing rows are untouched.
-    """
-    if not tickers:
-        return {}
-
-    unique = list(dict.fromkeys(tickers))  # deduplicate, preserve order
-
-    # Insert stubs — ignore conflicts on existing tickers
-    stubs = [{'ticker': t, 'asset_type': asset_type} for t in unique]
-    try:
-        batch_size = 100
-        for i in range(0, len(stubs), batch_size):
-            supabase.table('stocks').upsert(
-                stubs[i:i + batch_size],
-                on_conflict='ticker',
-                ignore_duplicates=True,
-            ).execute()
-    except Exception as e:
-        print(f"Error inserting stub stocks: {e}")
-
-    # Fetch IDs for all requested tickers
-    try:
-        resp = db_call(
-            lambda: supabase.table('stocks').select('id,ticker').in_('ticker', unique).execute(),
-            'stocks id prefetch',
-        )
-        return {row['ticker']: row['id'] for row in (resp.data or [])}
-    except Exception as e:
-        print(f"Error fetching stock IDs after stub insert: {e}")
-        return {}
-
-
 def upsert_etf_holdings(supabase: Client, etf_stock_id: str, holdings: List[Dict[str, Any]]) -> int:
     """
     Batch upsert ETF holdings into etf_holdings table.
@@ -672,180 +567,10 @@ def upsert_etf_holdings(supabase: Client, etf_stock_id: str, holdings: List[Dict
     )
 
 
-def upsert_etf_sectors(supabase: Client, etf_stock_id: str, sectors: List[Dict[str, Any]]) -> int:
-    """
-    Batch upsert ETF sector breakdown into etf_sectors.
-
-    Each sector dict must contain: sector (str), weight_pct (float), as_of_date (str).
-
-    Returns number of rows upserted.
-    """
-    if not sectors:
-        return 0
-
-    batch_data = [
-        {
-            'etf_stock_id': etf_stock_id,
-            'sector': s['sector'],
-            'weight_pct': s.get('weight_pct'),
-            'as_of_date': s.get('as_of_date'),
-        }
-        for s in sectors if s.get('sector')
-    ]
-
-    if not batch_data:
-        return 0
-
-    return chunked_upsert(
-        supabase, 'etf_sectors', batch_data,
-        on_conflict='etf_stock_id,sector,as_of_date', chunk_size=100,
-    )
-
-
-def sync_fmp_data(
-    supabase: Client,
-    watchlist: List[str],
-    etf_tickers: Optional[List[str]] = None,
-    skip_holdings: bool = False
-) -> Dict[str, Any]:
-    """
-    Master FMP sync function — enriches stocks and upserts ETF holdings.
-
-    Args:
-        supabase: Supabase client instance
-        watchlist: All tickers to enrich with FMP company profiles
-        etf_tickers: Subset of watchlist that are ETFs (gets info + optional holdings)
-        skip_holdings: If True, skip ETF holdings fetch (use on non-weekly days)
-
-    Returns:
-        Stats dict
-    """
-    stats: Dict[str, Any] = {
-        'profiles_updated': 0,
-        'etf_info_updated': 0,
-        'etf_holdings_upserted': 0,
-        'errors': []
-    }
-
-    try:
-        api_key = get_fmp_api_key()
-    except ValueError as e:
-        stats['errors'].append(str(e))
-        print(f"FMP sync skipped: {e}")
-        return stats
-
-    if etf_tickers is None:
-        etf_tickers = []
-
-    etf_set = set(etf_tickers)
-
-    for ticker in watchlist:
-        try:
-            # ETFs are now handled exclusively by sync_etfdb_data(); skip them here
-            if ticker in etf_set:
-                continue
-
-            print(f"  [{ticker}] Fetching FMP company profile...")
-            profile = fmp_profile(ticker, api_key)
-            if profile:
-                # Enrich existing stocks row with FMP extras
-                stock_id = get_or_create_stock(supabase, ticker, profile)
-                if stock_id:
-                    # Write FMP-only fields that get_or_create_stock doesn't cover
-                    extra_fields = {k: profile[k] for k in
-                                    ('sector', 'description', 'ceo', 'city', 'state', 'beta')
-                                    if profile.get(k) is not None}
-                    if extra_fields:
-                        try:
-                            supabase.table('stocks').update(extra_fields).eq('id', stock_id).execute()
-                        except Exception:
-                            pass  # columns may not exist yet — non-fatal
-                    stats['profiles_updated'] += 1
-
-        except RuntimeError as e:
-            # Daily limit hit — abort remaining FMP calls
-            print(f"FMP rate limit: {e}")
-            stats['errors'].append(str(e))
-            break
-        except Exception as e:
-            msg = f"FMP error for {ticker}: {e}"
-            print(msg)
-            stats['errors'].append(msg)
-
-    return stats
-
-
-def sync_av_etf_holdings(supabase: Client, etf_tickers: List[str]) -> Dict[str, Any]:
-    """
-    Fetch ETF holdings from Alpha Vantage ETF_PROFILE and upsert into etf_holdings.
-
-    One AV call per ETF ticker. Uses round-robin key rotation via
-    fetch_etf_holdings_av(). AV provides symbol, description, and weight%;
-    shares and market_value are not available and are stored as NULL.
-
-    Returns:
-        Stats dict: etfs_processed, holdings_upserted, errors
-    """
-    stats: Dict[str, Any] = {
-        'etfs_processed': 0,
-        'holdings_upserted': 0,
-        'errors': [],
-    }
-
-    for ticker in etf_tickers:
-        try:
-            print(f"  [{ticker}] Fetching ETF holdings via AV ETF_PROFILE...")
-            raw_holdings = fetch_etf_holdings_av(ticker)
-            if not raw_holdings:
-                print(f"  [{ticker}] No holdings returned")
-                stats['etfs_processed'] += 1
-                continue
-
-            etf_stock_id = get_or_create_stock(supabase, ticker, asset_type='etf')
-            if not etf_stock_id:
-                stats['errors'].append(f"{ticker}: failed to get/create stock row")
-                continue
-
-            # Insert stub rows for all holding symbols, get {ticker: id} map
-            holding_tickers = [h['asset_symbol'] for h in raw_holdings if h.get('asset_symbol')]
-            ticker_id_map = insert_stub_stocks(supabase, holding_tickers, asset_type='stock')
-
-            # Re-shape holdings to use asset_stock_id FK
-            holdings = []
-            for h in raw_holdings:
-                sym = h.get('asset_symbol')
-                stock_id = ticker_id_map.get(sym) if sym else None
-                if not stock_id:
-                    continue
-                holdings.append({
-                    'asset_stock_id': stock_id,
-                    'asset_name': h.get('asset_name'),
-                    'weight_pct': h.get('weight_percentage'),
-                    'shares': h.get('shares'),
-                    'market_value': h.get('market_value'),
-                    'as_of_date': h.get('as_of_date'),
-                })
-
-            count = upsert_etf_holdings(supabase, etf_stock_id, holdings)
-            stats['holdings_upserted'] += count
-            stats['etfs_processed'] += 1
-            print(f"  [{ticker}] Upserted {count} holdings")
-
-        except Exception as e:
-            msg = f"{ticker}: {e}"
-            print(f"  [av_etf_holdings] Error for {ticker}: {e}")
-            stats['errors'].append(msg)
-
-    return stats
-
-
 def sync_etfdb_data(supabase: Client, etf_tickers: List[str]) -> Dict[str, Any]:
     """
-    DEPRECATED — ETF holdings are now fetched via AV ETF_PROFILE in sync_av_etf_holdings().
-
-    This Selenium-based scraper remains available for manual enrichment (expense ratio,
-    AUM, ETF category) that AV does not provide, but it is no longer called by the
-    seed or daily ETL pipelines. Trigger manually with --scrape-etf-info if needed.
+    Manual only (--scrape-etf-info); no scheduled run calls it. Requires the
+    Selenium extras in requirements-dev.txt.
 
     Scrape all ETF pages in one Selenium session, then batch-upsert to Supabase.
 
@@ -1097,65 +822,6 @@ def sync_news_sentiment(
         seen: set = set()
         deduped = [a for a in all_articles if a.get('url') and not (a['url'] in seen or seen.add(a['url']))]
         stats['articles_upserted'] = insert_news_sentiment(supabase, deduped, errors=stats['errors'])
-
-    return stats
-
-
-def backfill_missing_profiles(supabase: Client, batch_size: int = 50) -> Dict[str, Any]:
-    """
-    Deprecated — no longer run from the daily ETL.
-
-    Fetch FMP company profiles for stocks that have no name yet.
-
-    Prefer manual FMP enrichment (`sync_fmp_data` / `run_fmp_etl` in `run_etl.py`)
-    when you need profile updates.
-
-    Returns:
-        {'checked': int, 'updated': int, 'errors': list}
-    """
-    warnings.warn(
-        "backfill_missing_profiles is deprecated and excluded from run_etl; "
-        "use sync_fmp_data / run_fmp_etl for profile updates.",
-        DeprecationWarning,
-        stacklevel=2,
-    )
-    stats: Dict[str, Any] = {'checked': 0, 'updated': 0, 'errors': []}
-
-    try:
-        api_key = get_fmp_api_key()
-    except ValueError as e:
-        stats['errors'].append(str(e))
-        return stats
-
-    batch_size = min(50, batch_size)
-    try:
-        resp = (
-            supabase.table('stocks')
-            .select('id,ticker')
-            .is_('name', 'null')
-            .eq('asset_type', 'stock')
-            .limit(batch_size)
-            .execute()
-        )
-        rows = resp.data or []
-    except Exception as e:
-        stats['errors'].append(f"Query failed: {e}")
-        return stats
-
-    for row in rows:
-        ticker = row['ticker']
-        stats['checked'] += 1
-        try:
-            profile = fmp_profile(ticker, api_key)
-            if profile:
-                get_or_create_stock(supabase, ticker, profile, asset_type='stock')
-                stats['updated'] += 1
-        except RuntimeError as e:
-            stats['errors'].append(str(e))
-            break
-        except Exception as e:
-            stats['errors'].append(f"{ticker}: {e}")
-        time.sleep(1.0)
 
     return stats
 

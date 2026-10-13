@@ -41,7 +41,6 @@ from markets.markets_db_helper import (
     sync_market_news,
     sync_news_sentiment,
     sync_economic_indicators,
-    sync_fmp_data,
     sync_etfdb_data,
     upsert_daily_stock_quotes_batch,
 )
@@ -181,9 +180,8 @@ def run_markets_etl(
 ) -> Dict[str, Any]:
     """
     Daily markets ETL: quotes + company news + market news + AV sentiment (all 10 topics).
-    Quote backfill (OHLCV history) is intentionally excluded — use run_db_seed.py.
-    Profile/info updates are intentionally excluded — run --scrape-etf-info
-    (ETFdb) or --refresh-profiles (FMP) manually when needed.
+    No quote backfill (OHLCV history) and no profile/info refresh; ETF info is
+    the manual --scrape-etf-info (ETFdb).
     """
     baskets = load_baskets()
     asset_type_map = classify_tickers(baskets)
@@ -512,10 +510,8 @@ def run_summary_etl(supabase: Client) -> Dict[str, Any]:
 def run_etfdb_etl(supabase: Client) -> None:
     """Scrape ETF info and top-15 holdings from etfdb.com. Manual trigger only.
 
-    DEPRECATED — ETF holdings are now fetched via Alpha Vantage ETF_PROFILE
-    (sync_av_etf_holdings in markets_db_helper.py). This scraper is kept for
-    manual enrichment of ETFdb-only fields (expense ratio, AUM, category) but
-    is no longer part of the seed or daily pipeline.
+    The only writer of etf_holdings, and not part of any scheduled run. Kept
+    for manual enrichment of ETFdb fields (expense ratio, AUM, category).
     """
     baskets = load_baskets()
     asset_type_map = classify_tickers(baskets)
@@ -532,47 +528,6 @@ def run_etfdb_etl(supabase: Client) -> None:
     print(f"  FMP fallbacks:     {stats['fmp_fallbacks']}")
     if stats['errors']:
         print(f"  Errors ({len(stats['errors'])}): {stats['errors'][:3]}")
-
-
-def run_fmp_etl(
-    supabase: Client,
-    watchlist: Optional[List[str]] = None,
-    etf_only: bool = False,
-    skip_holdings: bool = False
-) -> Dict[str, Any]:
-    """Run FMP ETL: enrich company profiles and upsert ETF holdings."""
-    baskets = load_baskets()
-    asset_type_map = classify_tickers(baskets)
-    all_tickers = [t for tickers in baskets.values() for t in tickers]
-
-    if watchlist is None:
-        watchlist = all_tickers
-
-    etf_tickers = [t for t in watchlist if asset_type_map.get(t) == 'etf']
-    # Exclude crypto from FMP (no crypto profile/holdings endpoint)
-    non_crypto = [t for t in watchlist if asset_type_map.get(t, 'stock') != 'crypto']
-    tickers_to_process = etf_tickers if etf_only else non_crypto
-
-    try:
-        stats = sync_fmp_data(
-            supabase,
-            watchlist=tickers_to_process,
-            etf_tickers=etf_tickers,
-            skip_holdings=skip_holdings
-        )
-
-        # print(f"\nFMP ETL Complete:")
-        # print(f"  Company profiles updated: {stats['profiles_updated']}")
-        # print(f"  ETF info updated:         {stats['etf_info_updated']}")
-        # print(f"  ETF holdings upserted:    {stats['etf_holdings_upserted']}")
-        if stats.get('errors'):
-            print(f"  Errors: {len(stats['errors'])}")
-
-        return {'success': True, 'stats': stats}
-
-    except Exception as e:
-        print(f"FMP ETL failed: {e}")
-        return {'success': False, 'error': str(e)}
 
 
 def run_full_etl(
@@ -592,8 +547,7 @@ def run_full_etl(
     """
     Run the full ETL pipeline for all data sources.
     Markets = today's quotes + company news + market news + AV sentiment (all 10 topics).
-    Quote backfill (OHLCV history) is not part of the daily run — use run_db_seed.py.
-    Profile updates: --refresh-profiles (FMP) or --scrape-etf-info (ETFdb).
+    No quote backfill (OHLCV history); ETF info is the manual --scrape-etf-info.
     """
     start_time = et_now()
 
