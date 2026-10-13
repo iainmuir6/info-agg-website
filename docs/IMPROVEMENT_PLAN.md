@@ -1,5 +1,10 @@
 # Improvement Plan — ETL Reliability, Scheduling, Freshness, and Design
 
+> **Historical document.** Its scheduling design is superseded: §0.1's "kill the Vercel cron" was
+> reversed on 2026-08-27, when GitHub's `schedule:` delivery collapsed. Vercel Cron (`vercel.json`)
+> is now the clock and dispatches `workflow_dispatch`-only workflows — see "ETL Scheduling" in the
+> root `CLAUDE.md`. Tier cadences and FMP budgets below are as originally planned, not current.
+
 Proposal based on a full audit of the ETL pipeline (`src/api/`) and the Next.js frontend
 (`app/`, `components/`, `lib/`). Organized in phases: P0 items make the ETL bulletproof and
 reliably scheduled; P1 makes the site feel alive (auto-refresh, freshness); P2 is design,

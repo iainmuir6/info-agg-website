@@ -1,7 +1,7 @@
 # ETL Runbook
 
 Two distinct operating modes existed at one point: **Initial Seed** (run once per environment)
-and **Daily Run** (now automated via GitHub Actions, not Vercel Cron — see below). The Initial
+and **Daily Run** (scheduled by Vercel Cron, run on GitHub Actions — see below). The Initial
 Seed path is currently broken; see the notice under that heading before reading further.
 
 ---
@@ -184,7 +184,7 @@ running unbounded. See `src/api/docs/EXECUTION_ORDER.md` for the per-domain brea
 
 ### What each domain does on a daily run
 
-#### Markets (Finnhub + FMP + AV)
+#### Markets (Finnhub + FMP + AV + Frankfurter)
 
 Per ticker:
 
@@ -192,7 +192,7 @@ Per ticker:
 |------------|--------|--------|-------|
 | stock/ETF | Fetch latest quote | Finnhub `/quote` | `stock_quotes` |
 | crypto | Fetch latest quote | Finnhub `/quote` (via `BINANCE:*USDT`) | `stock_quotes` |
-| forex | Fetch latest quote | FMP `/stable/quote` | `stock_quotes` |
+| forex | Fetch latest quote (ECB reference rate, all pairs in one keyless request) | Frankfurter | `stock_quotes` |
 | commodity | Fetch latest quote | FMP `/stable/quote` | `stock_quotes` |
 | stock | Fetch company news (7-day window) | Finnhub `/company-news` | `company_news` |
 
@@ -200,13 +200,13 @@ Then once, run in parallel with each other since each hits a different API:
 
 | Action | Source | Table |
 |--------|--------|-------|
-| Fetch market news (4 categories) | Finnhub `/news` | `market_news` |
+| Fetch market news (3 categories: general, forex, crypto) | Finnhub `/news` | `market_news` |
 | Fetch AV sentiment (all 10 topics — no partial-topic mode) | AV `NEWS_SENTIMENT` | `news_sentiment` |
 | Treasury rates + 7 macro indicators | FMP `/stable/treasury-rates`, `/stable/economic-indicators` | `economic_indicators` |
 
 Stub **missing-profile backfill** (FMP profile for `name IS NULL` stocks) was **removed from the daily ETL**; `backfill_missing_profiles()` in `markets_db_helper.py` is deprecated for one-off use only.
 
-Profile/info updates are **not** run daily — trigger manually with FMP (`run_fmp_etl` / `sync_fmp_data`) or `--scrape-etf-info` (ETFdb).
+Profile/info updates are **not** run daily — trigger manually with FMP (`sync_fmp_data` in `markets_db_helper.py`) or `--scrape-etf-info` (ETFdb).
 
 #### Sports / News / Media
 
@@ -217,7 +217,7 @@ posts — just without the seed's historical backfill.
 
 The AI briefings are the one domain that reads the database instead of an upstream API, so
 `run_full_etl` runs them **sequentially after** the parallel block. In parallel they would race the
-other four and summarise yesterday's rows.
+other five and summarise yesterday's rows.
 
 | Card | Key | Regenerates | Grounded on |
 |------|-----|-------------|-------------|
@@ -243,7 +243,7 @@ python src/api/run_etl.py --markets-only
 # Scrape ETF info + holdings from etfdb.com (manual trigger)
 python src/api/run_etl.py --scrape-etf-info
 
-# Skip AV sentiment entirely (quotes + news only, saves 5 AV calls)
+# Skip AV sentiment entirely (quotes + news only, saves 10 AV calls)
 python src/api/run_etl.py --skip-sentiment
 
 # Regenerate the AI briefings alone, against whatever is already in the DB
@@ -291,8 +291,8 @@ Before this, tier A's rule was `rows > 0 or not include_news`, which is uncondit
 These fetchers sit behind APIs that intermittently refuse a datacenter IP and clear by themselves
 minutes later. ESPN's `site.api` 403s GitHub Actions runners — every league fails at once while the
 same run from a residential IP succeeds; Finnhub and NYT 429. On the intraday cadence that is
-noise, not an incident: the next tier-A refresh is at most 15 minutes away and the daily run
-backfills regardless. Failing there costs a red build and a GitHub failure email for something that
+noise, not an incident: the next intraday refresh is about an hour away (`vercel.json` has one
+per hour slot from 10 to 23 UTC, plus 01 UTC) and the daily run backfills regardless. Failing there costs a red build and a GitHub failure email for something that
 fixed itself before anyone read it.
 
 So `run_quick_refresh.py` treats a lost upstream as **degraded**: domain state `WARN`, run status
@@ -313,9 +313,8 @@ cannot tell "NYT gave us nothing" from "the upsert died", and only the second is
 
 A real outage still pages. Every degraded run records `degraded` in its per-domain stats, and
 `_degraded_streak()` counts back over the previous intraday runs — skipping runs that never touched
-the domain, so tier-A runs between two tier-B ones don't reset news's streak. At `DEGRADE_STREAK`
-the run fails normally and exits 1: 4 runs for sports and markets (≈ an hour at the 15-minute tier-A
-cadence), 2 for news (tier B only, so ≈ 2 hours). The failing run also writes `degraded: false`,
+the domain, so tier-A runs between two tier-B ones don't reset news's streak. At the per-domain
+`DEGRADE_STREAK` threshold (see `run_quick_refresh.py`) the run fails normally and exits 1. The failing run also writes `degraded: false`,
 breaking its own streak, so a sustained outage fails about once per streak window instead of on
 every refresh until the API returns.
 
@@ -363,8 +362,8 @@ Daily Run — AV budget constraints?
      all 10 topics, there's no partial-topic flag)
 
 Need faster-than-daily updates between full runs?
-  └─ python src/api/run_quick_refresh.py --tier a   (every 15 min, no daily budget spent)
-  └─ python src/api/run_quick_refresh.py --tier b   (hourly, adds NYT + ESPN news + FMP)
+  └─ python src/api/run_quick_refresh.py --tier a   (9 vercel.json slots/day, no daily budget spent)
+  └─ python src/api/run_quick_refresh.py --tier b   (6 slots/day, adds NYT + ESPN news + FMP commodities)
      (neither tier touches the AI briefings — those are daily-run only)
 
 Briefing card looks stale or wrong?

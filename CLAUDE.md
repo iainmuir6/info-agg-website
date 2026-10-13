@@ -25,11 +25,11 @@ python src/api/run_etl.py --summary-only                    # Regenerate the AI 
 python src/api/run_etl.py --skip-sentiment                  # Skip AV sentiment (quotes + news only)
 python src/api/run_etl.py --skip-summary                    # Skip the AI briefings (no Gemini call)
 python src/api/run_etl.py --cleanup --season-schedules      # What the daily cron runs (+ retention cleanup)
-python src/api/run_etl.py --test                            # Dry-run: hit every external API once, no DB writes
+python src/api/run_etl.py --test                            # Dry-run: one sample call per Finnhub/AV/FMP/ESPN/NYT endpoint (src/api/run_test.py), no DB writes
 
 # Tiered intraday refresh (the frequent counterpart to the daily run — no backfill, budget-aware)
-python src/api/run_quick_refresh.py --tier a                 # Every 15 min: quotes + scoreboards + market news
-python src/api/run_quick_refresh.py --tier b                 # Hourly: tier A + NYT top stories + ESPN news + FMP
+python src/api/run_quick_refresh.py --tier a                 # 9 slots/day: quotes + scoreboards + market news
+python src/api/run_quick_refresh.py --tier b                 # 6 slots/day: tier A + NYT top stories + ESPN news + FX/commodities
 
 # Historical score backfill (one-off / recovery — safe to re-run, upserts by event)
 python src/api/backfill_scores.py --season current           # Current season, all leagues
@@ -65,8 +65,9 @@ Vercel Hobby allows 100 cron entries but each runs at most **once per day** with
 precision, hence one entry per hour slot rather than a `*/15` expression. The morning is sized
 against the worst case: the `0 9 * * *` daily entry fires by 09:59 UTC and finishes ~2 min
 later, so it is always done before 11:00 UTC — before 7am ET under both EDT and EST — with
-Tier B entries at 10/11/12 UTC covering the 7–9am ET window. Budget: 6 Tier B x 13 FMP calls
-+ the daily's 21 = 99 of the 250/day cap.
+Tier B entries at 10/11/12 UTC covering the 7–9am ET window. After that, Tier A and Tier B
+alternate roughly hourly to 23 UTC, plus Tier A at 01 UTC (9 Tier A and 6 Tier B entries in all). FMP budget: 6 Tier B x 3 commodity
+quotes + the daily's 11 (3 commodities + treasury + 7 macro indicators) = 29 of the 250/day cap.
 
 ## ETL Import Constraint
 
@@ -108,7 +109,8 @@ is ours (always fails).
 - `SUPABASE_SERVICE_ROLE_KEY` — Service role key (ETL writes, `POST /api/auth/invite`)
 
 **Supabase Auth → URL configuration:** Add redirect URLs for the auth callback route, e.g. `http://localhost:3000/auth/callback` and `${NEXT_PUBLIC_SITE_URL}/auth/callback`.
-- API keys for fetchers: `NYT_API_KEY_1`, `NYT_API_KEY_2`, `FINNHUB_API_KEY_1`, `FINNHUB_API_KEY_2`, `FMP_API_KEY`, `ALPHA_VANTAGE_API_KEY` (+ `_1/_2`)
+- API keys for fetchers: `NYT_API_KEY_1/_2/_3`, `FINNHUB_API_KEY_1/_2/_3`, `FMP_API_KEY`, `ALPHA_VANTAGE_API_KEY` (+ `_1/_2/_3`). Each fetcher rotates over the distinct non-empty values, so unset or repeated slots are harmless.
+- `ETL_LOG_LEVEL` — optional Python log level for the ETL (default `INFO`).
 - `WEATHER_API_KEY` — Visual Crossing timeline API. Powers the weather cards. Billed per *day of data*, so cost is `WEATHER_LOCATIONS` × `FORECAST_DAYS` (currently **6 cities × 5 days = 30 records/run**) against 1,000/day.
 - `CALENDAR_API_KEY` — Calendarific. Powers the upcoming-holidays card. 500/month free; the daily run uses ~30.
 - `COUNTRIES_API_KEY` — REST Countries **v5** (`api.restcountries.com`, bearer auth). **Its free tier is 1,000 requests per MONTH, not per day** — `misc_db_helper._country_is_current()` therefore skips the fetch when today's rotation pick is already stored, capping it at one call per calendar day however often the daily run is dispatched. v3.1 is deprecated and silently returns a stub that parses as JSON with none of the expected keys, which is how the old fetcher produced a row of `None`s without raising.
@@ -133,9 +135,10 @@ This is a personal information aggregator ("Info Hub") with two layers:
 ### Next.js Frontend (`app/`, `components/`, `lib/`)
 
 **Route groups:**
-- `app/(public)/` — Public-facing pages with a shared newspaper-style layout (`layout.tsx`). Routes: `/` (Command Center dashboard), `/news`, `/sports`, `/sports/[league]`, `/[league]/[team]`, `/markets`, `/markets/[ticker]`, `/media`, `/misc` (Almanac), `/summary` (the two AI briefings in full — reachable only from their Command Center cards, deliberately not in `NAV_LINKS`), `/economy`, `/profile` (favorites + podcast search, signed-in users), `/dashboard` (ETL run monitoring + trigger, `super_admin` only), `/dashboard/activity` (site traffic from Vercel Web Analytics — range picker, period-over-period KPIs, and click-to-filter breakdowns by page/route/referrer/country/device/browser/OS/UTM; `super_admin` only)
+- `app/(public)/` — Public-facing pages with a shared newspaper-style layout (`layout.tsx`). Routes: `/` (Command Center dashboard), `/news`, `/sports`, `/[league]` (league page), `/[league]/[team]` (`/sports/[league]/[team]` is a legacy redirect to it), `/markets`, `/markets/[ticker]`, `/media`, `/misc` (Almanac), `/summary` (the two AI briefings in full — reachable only from their Command Center cards, deliberately not in `NAV_LINKS`), `/economy`, `/profile` (favorites + podcast search, signed-in users), `/dashboard` (ETL run monitoring + trigger, `super_admin` only), `/dashboard/activity` (site traffic from Vercel Web Analytics — range picker, period-over-period KPIs, and click-to-filter breakdowns by page/route/referrer/country/device/browser/OS/UTM; `super_admin` only)
 - `app/(auth)/auth/` — Auth pages: login, sign-up, sign-up-success, forgot-password, update-password, error. Shared two-pane shell in `layout.tsx` (masthead pane on `lg+`, collapses on a phone)
 - `app/auth/callback/route.ts` — Supabase PKCE exchange (`GET /auth/callback?code=…&next=…`)
+- `app/(auth)/auth/confirm/route.ts` — email OTP verification (`GET /auth/confirm?token_hash=…&type=…&next=…`, `verifyOtp`)
 - `app/auth/sign-in/route.ts` — `POST /auth/sign-in`, the target of the login form's native submit. Same-origin checked (`isAllowedSameOriginMutation`), `next` validated (`isSafeAuthNextPath`), 303 on success so the browser follows with GET. Errors come back as `/auth/login?error=…`; the submitted email is deliberately not echoed onto the URL
 - `app/api/etl/` — `POST /api/etl` (`super_admin` only) fires a `workflow_dispatch` against `.github/workflows/daily-etl.yml` (or `intraday-refresh.yml` with `{ mode: "quick" }`) and returns immediately — Vercel serverless has no Python runtime, so the ETL always runs on GitHub Actions, never in-process. Progress shows up in `info_agg.etl_runs` and the Actions tab.
 - `app/api/cron/etl/` — `GET /api/cron/etl?job=daily|a|b` (bearer `CRON_SECRET`) — the unattended scheduler. Called by the 16 cron entries in `vercel.json`; each fires a `workflow_dispatch` and records `triggered_by='cron'`. Shares `lib/github-dispatch.ts` with `POST /api/etl`.
@@ -153,7 +156,7 @@ This is a personal information aggregator ("Info Hub") with two layers:
 - `proxy.ts` runs on matched requests to refresh sessions
 
 **UI:**
-- shadcn/ui components in `components/ui/` (badge, button, card, checkbox, dropdown-menu, input, label)
+- shadcn/ui components in `components/ui/` (button, dropdown-menu)
 - Custom components in `components/` (news ticker, theme switcher, auth forms, etc.)
 - `components/auth/auth-ui.tsx` — the panel/field/submit primitives every auth screen is built from, in the site's own hairline-and-mono language rather than stock shadcn Cards
 - `components/thumb-image.tsx` — every third-party thumbnail goes through this (see **Thumbnails** below)
@@ -274,22 +277,22 @@ Home Screen web app (16.4+), and the settings say so.
 
 ### Python ETL (`src/api/`)
 
-Orchestrator: `src/api/run_etl.py` — runs the four fetch-domain ETL pipelines **in parallel** (`ThreadPoolExecutor`), which is what the <60s requirement above depends on. `run_quick_refresh.py` is the tiered intraday counterpart (Tier A every 15 min, Tier B hourly — no backfill, no daily API budget spent on Tier A); `run_test.py` dry-run-tests every external API endpoint with no DB writes; `backfill_scores.py` is the standalone recovery tool for historical ESPN scores. The fifth
+Orchestrator: `src/api/run_etl.py` — runs the five fetch-domain ETL pipelines (sports, markets, news, media, misc) **in parallel** (`ThreadPoolExecutor`), which is what the <60s requirement above depends on. `run_quick_refresh.py` is the tiered intraday counterpart (Tier A and Tier B, dispatched from `vercel.json` slots — no backfill, no daily API budget spent on Tier A); `run_test.py` dry-run-tests one sample call per Finnhub/AV/FMP/ESPN/NYT endpoint with no DB writes; `backfill_scores.py` is the standalone recovery tool for historical ESPN scores. The sixth
 domain, `summary/`, runs sequentially after the parallel block because it reads what the others wrote.
 
 Each domain follows the same pattern:
-- `{domain}/{domain}_fetcher.py` — calls external APIs
+- `{domain}/<source>.py` — one fetcher module per upstream, named for it (`sports/espn.py`, `news/nyt.py`, `markets/finnhub.py`, `summary/gemini.py`, …)
 - `{domain}/{domain}_db_helper.py` — upserts into Supabase using service role key
-- `{domain}/migrations/` — historical per-domain SQL migrations (superseded by unified `supabase/` files)
+- Shared plumbing (logging, rate limiters, circuit breaker, `chunked_upsert`) lives in `src/api/etl_lib.py`; schema lives in the unified `supabase/` files
 
 **Domain → data sources:**
 - `sports/` → ESPN API (scores + news for NFL, NBA, NHL, MLB, EPL, etc.)
-- `markets/` → Finnhub API (daily quotes, company news, market news) + FMP API (company profiles, commodity quotes, treasury/econ, ETF holdings) + Alpha Vantage (news sentiment) + **Frankfurter** (forex — keyless ECB reference rates, all 10 pairs in one request; replaced 10 FMP calls per intraday Tier B run, cutting FMP from 78 to 18 calls/day. Trade-off: ECB publishes once per business day, so forex no longer moves intraday)
+- `markets/` → Finnhub API (daily quotes, company news, market news) + FMP API (company profiles, commodity quotes, treasury/econ, ETF holdings) + Alpha Vantage (news sentiment) + **Frankfurter** (forex — keyless ECB reference rates, all 10 pairs in one request; replaced 10 FMP calls per intraday Tier B run, cutting Tier B's FMP use from 78 to 18 calls/day. Trade-off: ECB publishes once per business day, so forex no longer moves intraday)
 - `news/` → NYT Top Stories + Most Popular API (NewsAPI is not used anywhere in this codebase, despite what an earlier version of this doc claimed)
 - `media/` → YouTube Data API (trending videos). Spotify (playlists, Top Podcasts) is live-embedded on the frontend with no fetcher. Reddit was removed.
 - `misc/` → six feeds behind one domain (all single-call except weather, which is one call per city): Visual Crossing (weather, 6 cities — one call each), Calendarific (US holidays), REST Countries v5 (country of the day, rotating), Wikipedia REST (random summary + On This Day), Merriam-Webster RSS (word of the day), uselessfacts. All land in `misc_content` as JSONB; each source degrades independently, and the domain never fails the run
 - `summary/` → Google Gemini (AI briefings: "Summary of the Day" and "Summary of the Week"). The only
-  domain with **no upstream of its own** — it summarises the rows the other four just wrote, which is
+  domain with **no upstream of its own** — it summarises the rows the other five just wrote, which is
   why `run_full_etl` calls it **sequentially after** the parallel block instead of inside it. Running
   it in parallel would summarise yesterday's data. Everything the model may assert is supplied in a
   context bundle built from the database, and the forward-looking half of the daily card is grounded
@@ -297,7 +300,7 @@ Each domain follows the same pattern:
   unresolved threads in stories already in the bundle. Both briefings are freshness-gated — the daily
   on the Eastern calendar day, the weekly on the ISO week — so a re-dispatched run costs no
   generation, and any failure leaves the previous briefing in place rather than emptying the card
-- `archive/` — retired scripts kept for reference, not run by anything (`run_db_seed.py`, `seed.py`, `av_seed.py`, plus old schema docs)
+- `archive/` — retired scripts kept for reference, not run by anything (`run_db_seed.py`, `seed.py`, `av_seed.py`, `generate_snippets.py`, plus old schema docs)
 
 Python venv: `_agg_venv/` (at repo root). Dependencies: `requirements.txt` (repo root).
 
@@ -408,7 +411,7 @@ Checklist for the consuming schema:
 
 ### Adding a New Data Source
 
-1. Create `src/api/{domain}/{domain}_fetcher.py` and `{domain}_db_helper.py`
+1. Create `src/api/{domain}/<source>.py` (the fetcher) and `{domain}_db_helper.py`
 2. Add a new table to `supabase/02_tables.sql` and corresponding RLS/indexes
 3. Add a `run_{domain}_etl()` function in `src/api/run_etl.py`
 4. Add a new route under `app/(public)/{domain}/page.tsx` and update the `NAV_LINKS` in `app/(public)/layout.tsx`

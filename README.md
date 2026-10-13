@@ -4,7 +4,7 @@
 
 > Personal information aggregator — [info-agg-website.vercel.app](https://info-agg-website.vercel.app/)
 
-A dashboard that pulls together news, sports scores, market data, and media into one clean interface — a Command Center front page plus a section page for each domain. Data is refreshed by a scheduled ETL pipeline — a full nightly run plus a lighter intraday refresh every 15 minutes — and on-demand via an admin trigger.
+A dashboard that pulls together news, sports scores, market data, and media into one clean interface — a Command Center front page plus a section page for each domain. Data is refreshed by a scheduled ETL pipeline — a full morning run (09:00 UTC) plus lighter intraday refreshes roughly hourly through the day — and on-demand via an admin trigger.
 
 ## Features
 
@@ -27,7 +27,7 @@ A dashboard that pulls together news, sports scores, market data, and media into
 | Database | Supabase (PostgreSQL, `info_agg` schema) |
 | Data sources | ESPN · NYT · Finnhub · FMP · Alpha Vantage · Frankfurter · YouTube · Spotify (embedded) · Visual Crossing · Calendarific · REST Countries · Wikipedia |
 | AI | Google Gemini (Flash Lite) for the daily/weekly briefings |
-| ETL | Python, scheduled via GitHub Actions |
+| ETL | Python on GitHub Actions, scheduled by Vercel Cron |
 | Deployment | Vercel |
 
 ## Local Setup

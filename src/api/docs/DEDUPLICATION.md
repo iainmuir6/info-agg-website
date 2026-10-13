@@ -17,10 +17,10 @@ statements. This means re-running any ETL job (daily or backfill) is always safe
 | Field | Value |
 |---|---|
 | Dedup key | `ticker` |
-| UNIQUE constraint | `ticker TEXT NOT NULL UNIQUE` (`02_tables.sql:125`) |
+| UNIQUE constraint | `ticker TEXT NOT NULL UNIQUE` (`02_tables.sql`) |
 | `on_conflict` | `'ticker'` |
 | Behavior on conflict | Update all mutable fields (name, sector, asset_type, etc.) |
-| DB helper | `get_or_create_stock()` — `markets/markets_db_helper.py:105` |
+| DB helper | `get_or_create_stock()` — `markets/markets_db_helper.py` |
 
 ---
 
@@ -29,10 +29,10 @@ statements. This means re-running any ETL job (daily or backfill) is always safe
 | Field | Value |
 |---|---|
 | Dedup key | `(stock_id, quote_timestamp)` |
-| UNIQUE constraint | `UNIQUE (stock_id, quote_timestamp)` (`02_tables.sql:164`) |
+| UNIQUE constraint | `UNIQUE (stock_id, quote_timestamp)` (`02_tables.sql`) |
 | `on_conflict` | `'stock_id,quote_timestamp'` |
 | Behavior on conflict | Update OHLCV fields (open, high, low, close, volume) |
-| DB helper | `upsert_daily_stock_quotes_batch()` — `markets/markets_db_helper.py:253`; `insert_stock_quotes_batch()` (bulk) at line 266 |
+| DB helper | `upsert_daily_stock_quotes_batch()` — `markets/markets_db_helper.py`; `insert_stock_quotes_batch()` (bulk) |
 
 ---
 
@@ -41,10 +41,10 @@ statements. This means re-running any ETL job (daily or backfill) is always safe
 | Field | Value |
 |---|---|
 | Dedup key | `url` |
-| UNIQUE constraint | `UNIQUE (url)` (`02_tables.sql:182`) |
+| UNIQUE constraint | `UNIQUE (url)` (`02_tables.sql`) |
 | `on_conflict` | `'url'` |
-| Behavior on conflict | Update title, summary, image, sentiment, datetime |
-| DB helper | `sync_stock_data()` (news branch) — `markets/markets_db_helper.py:398` |
+| Behavior on conflict | Skip (`ignore_duplicates=True`, insert-or-skip) — an existing article is never rewritten |
+| DB helper | `insert_company_news()`, called by `sync_stock_data()` (news branch) — `markets/markets_db_helper.py` |
 
 See [Note 1](#note-1--finnhub-numeric-id-field) regarding the Finnhub `id` field.
 
@@ -55,10 +55,10 @@ See [Note 1](#note-1--finnhub-numeric-id-field) regarding the Finnhub `id` field
 | Field | Value |
 |---|---|
 | Dedup key | `url` |
-| UNIQUE constraint | `UNIQUE (url)` (`02_tables.sql:199`) |
+| UNIQUE constraint | `UNIQUE (url)` (`02_tables.sql`) |
 | `on_conflict` | `'url'` |
 | Behavior on conflict | Update headline, summary, source, image, datetime |
-| DB helper | `sync_market_news()` — `markets/markets_db_helper.py:538` |
+| DB helper | `sync_market_news()` — `markets/markets_db_helper.py` |
 
 See [Note 1](#note-1--finnhub-numeric-id-field) regarding the Finnhub `id` field.
 
@@ -69,10 +69,10 @@ See [Note 1](#note-1--finnhub-numeric-id-field) regarding the Finnhub `id` field
 | Field | Value |
 |---|---|
 | Dedup key | `url` |
-| UNIQUE constraint | `url TEXT NOT NULL UNIQUE` (`02_tables.sql:240`) |
+| UNIQUE constraint | `url TEXT NOT NULL UNIQUE` (`02_tables.sql`) |
 | `on_conflict` | `'url'` |
 | Behavior on conflict | Update sentiment score, label, ticker relevance scores |
-| DB helper | `insert_news_sentiment()` — `markets/markets_db_helper.py:907`; called by `sync_news_sentiment()` at line 999 |
+| DB helper | `insert_news_sentiment()` — `markets/markets_db_helper.py`; called by `sync_news_sentiment()` |
 
 Source: Alpha Vantage News Sentiment API.
 
@@ -83,10 +83,10 @@ Source: Alpha Vantage News Sentiment API.
 | Field | Value |
 |---|---|
 | Dedup key | `(etf_stock_id, asset_stock_id, as_of_date)` |
-| UNIQUE constraint | `UNIQUE (etf_stock_id, asset_stock_id, as_of_date)` (`02_tables.sql:216`) |
+| UNIQUE constraint | `UNIQUE (etf_stock_id, asset_stock_id, as_of_date)` (`02_tables.sql`) |
 | `on_conflict` | `'etf_stock_id,asset_stock_id,as_of_date'` |
 | Behavior on conflict | Update weight, shares, market value |
-| DB helper | `upsert_etf_holdings()` — `markets/markets_db_helper.py:619` |
+| DB helper | `upsert_etf_holdings()` — `markets/markets_db_helper.py` |
 
 ---
 
@@ -95,10 +95,10 @@ Source: Alpha Vantage News Sentiment API.
 | Field | Value |
 |---|---|
 | Dedup key | `(etf_stock_id, sector, as_of_date)` |
-| UNIQUE constraint | `UNIQUE (etf_stock_id, sector, as_of_date)` (`02_tables.sql:230`) |
+| UNIQUE constraint | `UNIQUE (etf_stock_id, sector, as_of_date)` (`02_tables.sql`) |
 | `on_conflict` | `'etf_stock_id,sector,as_of_date'` |
 | Behavior on conflict | Update weight percentage |
-| DB helper | `upsert_etf_sectors()` — `markets/markets_db_helper.py:655` |
+| DB helper | `upsert_etf_sectors()` — `markets/markets_db_helper.py` |
 
 ---
 
@@ -107,10 +107,10 @@ Source: Alpha Vantage News Sentiment API.
 | Field | Value |
 |---|---|
 | Dedup key | `(indicator_name, date)` |
-| UNIQUE constraint | `UNIQUE (indicator_name, date)` (`02_tables.sql:303`) |
+| UNIQUE constraint | `UNIQUE (indicator_name, date)` (`02_tables.sql`) |
 | `on_conflict` | `'indicator_name,date'` |
 | Behavior on conflict | Update `value` |
-| DB helper | `upsert_economic_indicators()` — `markets/markets_db_helper.py:1143`; called by `sync_economic_indicators()` at line 1166 |
+| DB helper | `upsert_economic_indicators()` — `markets/markets_db_helper.py`; called by `sync_economic_indicators()` |
 
 Sources: FMP treasury rates (1 call, 9 term columns flattened to rows) + 7 macro indicators.
 Runs as part of every `run_etl.py` daily run (not gated behind a flag) — `--economic-indicators-only`
@@ -125,10 +125,10 @@ was a `run_db_seed.py`-only flag and doesn't exist on `run_etl.py`.
 | Field | Value |
 |---|---|
 | Dedup key | `(league_id, event_id)` |
-| UNIQUE constraint | `UNIQUE (league_id, event_id)` (`02_tables.sql:74`) |
+| UNIQUE constraint | `UNIQUE (league_id, event_id)` (`02_tables.sql`) |
 | `on_conflict` | `'league_id,event_id'` |
 | Behavior on conflict | Update ALL mutable fields: home_score, away_score, status, status_detail, home_record, away_record, broadcast, venue |
-| DB helper | `sync_all_sports_data()` — `sports/sports_db_helper.py:182`; row-level upsert in `insert_scores()` at line 167 |
+| DB helper | `sync_all_sports_data()` — `sports/sports_db_helper.py`; rows upserted by `_upsert_sports_score_records()` |
 
 See [Note 2](#note-2--sports-scores-state-transitions).
 
@@ -139,10 +139,10 @@ See [Note 2](#note-2--sports-scores-state-transitions).
 | Field | Value |
 |---|---|
 | Dedup key | `url` |
-| UNIQUE constraint | `UNIQUE (url)` (`02_tables.sql:48`) |
+| UNIQUE constraint | `UNIQUE (url)` (`02_tables.sql`) |
 | `on_conflict` | `'url'` |
 | Behavior on conflict | Update headline, description, published_at |
-| DB helper | `insert_news_articles()` — `sports/sports_db_helper.py:101` |
+| DB helper | `_upsert_sports_news_records()` (called by `sync_all_sports_data()`) — `sports/sports_db_helper.py` |
 
 ---
 
@@ -153,10 +153,10 @@ See [Note 2](#note-2--sports-scores-state-transitions).
 | Field | Value |
 |---|---|
 | Dedup key | `url` |
-| UNIQUE constraint | `UNIQUE (url)` (`02_tables.sql:268`) |
+| UNIQUE constraint | `UNIQUE (url)` (`02_tables.sql`) |
 | `on_conflict` | `'url'` |
 | Behavior on conflict | Update title, abstract, section, published_date |
-| DB helper | `sync_nyt_data()` — `news/news_db_helper.py:166`; archive backfill variant `backfill_nyt_archive()` at line 290 |
+| DB helper | `sync_nyt_data()` → `insert_nyt_articles()` — `news/news_db_helper.py` |
 
 Both the NYT Top Stories API and the NYT Archive API write to this table using the same
 `on_conflict='url'` upsert — no risk of cross-source duplication.

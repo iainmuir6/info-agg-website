@@ -14,11 +14,10 @@ This directory contains logos and images for different information sources.
 
 ## Usage
 
-**Not currently wired into the UI.** No file in this directory is referenced by `app/`,
-`components/`, or `lib/` (verified by grepping for `/assets/` and each filename above) — these
-were staged ahead of building expandable-section headers and a weather widget, neither of
-which currently render a logo or icon from here. Treat this as available assets, not evidence
-of what's live.
+Only `website_logos/info_agg.png` is live: it is `LOGO_SRC` in `lib/brand.ts`, the mark on the
+public masthead and the auth screens. Nothing else here is referenced by `app/`, `components/`
+or `lib/` — the source logos and weather icons were staged for expandable-section headers and a
+weather widget that do not use them. Treat them as available assets, not evidence of what's live.
 
 ## File Formats
 
