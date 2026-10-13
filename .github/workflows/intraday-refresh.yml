@@ -6,10 +6,10 @@ name: Intraday Refresh
 # start immediately, so the times in vercel.json are the real cadence.
 #
 #   Tier A — Finnhub quotes (stocks/ETFs/crypto), ESPN scoreboards, Finnhub
-#     market news. Consumes no daily API budget. 11 slots/day.
-#   Tier B — adds NYT top stories, ESPN news, and FMP forex/commodity quotes.
-#     6 slots/day x 13 FMP calls = 78, + the daily run's 21 = 99 of the 250/day
-#     cap. Three of the six sit at 10/11/12 UTC so the 7-9am ET window always
+#     market news. Consumes no daily API budget. 9 slots/day.
+#   Tier B — adds NYT top stories, ESPN news, Frankfurter forex and FMP
+#     commodity quotes. 6 slots/day x 3 FMP calls = 18, + the daily run's 11 =
+#     29 of the 250/day cap. Three of the six sit at 10/11/12 UTC so the 7-9am ET window always
 #     has a fresh Tier B behind it under both EDT and EST.
 on:
   workflow_dispatch:

@@ -5,15 +5,16 @@
 # Company: Scouts Consulting Group
 # Date: 2026-03-23
 # Description: Tiered intraday refresh — the frequent counterpart to the
-#              daily run_etl.py. Budgets per docs/IMPROVEMENT_PLAN.md §1.1:
+#              daily run_etl.py. Slots come from vercel.json (one Vercel Cron
+#              entry per hour, each once a day, ±59 min):
 #
-#   Tier A (every 15 min): Finnhub quotes for stocks/ETFs/crypto, ESPN
+#   Tier A (9 slots): Finnhub quotes for stocks/ETFs/crypto, ESPN
 #       scoreboards, Finnhub market news. Consumes no daily API budget.
-#   Tier B (hourly): tier A + NYT top stories, ESPN news, and FMP
-#       forex/commodity quotes (13 calls/run against the 250/day cap).
+#   Tier B (6 slots): tier A + NYT top stories, ESPN news, Frankfurter forex
+#       and FMP commodity quotes (3 FMP calls/run against the 250/day cap).
 #
-#   AV sentiment, FMP economic indicators, Spotify, and retention cleanup
-#   are daily-only — see run_etl.py.
+#   AV sentiment, FMP economic indicators and retention cleanup are
+#   daily-only — see run_etl.py.
 
 import os
 import sys
@@ -61,11 +62,15 @@ log = get_logger('quick_refresh')
 FMP_ASSET_TYPES = {'forex', 'commodity'}
 
 # How many consecutive intraday runs may lose a whole upstream before the
-# outage stops being treated as noise. Per domain, because the tiers run at
-# different cadences: sports and markets refresh every 15 min (tier A), so four
-# runs is about an hour; news is tier B only (hourly), so two runs is already
-# two hours without NYT.
-DEGRADE_STREAK = {'sports': 4, 'markets': 4, 'news': 2}
+# outage stops being treated as noise. Sports and markets run in every slot
+# (roughly hourly 10-01 UTC), so two runs is about an hour down. News is tier B
+# only (10/11/12/16/19/22 UTC), so two runs is one to four hours without NYT.
+DEGRADE_STREAK = {'sports': 2, 'markets': 2, 'news': 2}
+
+# Runs of history to read for those streaks. Must reach back past the tier-A
+# runs that sit between tier-B ones (up to three in a row), or news never sees
+# its own previous run and can never escalate. A day's worth covers it.
+STREAK_HISTORY_RUNS = 16
 
 
 def _is_upstream_outage(domain: str, stats: Dict[str, Any]) -> bool:
@@ -107,7 +112,7 @@ def _recent_intraday_stats(supabase) -> List[Dict[str, Any]]:
                 .in_('tier', ['a', 'b'])
                 .neq('status', 'running')
                 .order('started_at', desc=True)
-                .limit(max(DEGRADE_STREAK.values()))
+                .limit(STREAK_HISTORY_RUNS)
                 .execute())
     except Exception as e:
         log.warning('could not read degraded-run history: %s', e)
@@ -136,8 +141,8 @@ def _degraded_streak(history: List[Dict[str, Any]], domain: str) -> int:
 def run_quick_markets_etl(supabase, include_fmp_quotes: bool) -> Dict[str, Any]:
     """Quotes + market news. Skips company news, sentiment, econ, profiles.
 
-    include_fmp_quotes=False drops forex/commodity tickers so the 15-min
-    cadence never touches the FMP daily budget.
+    include_fmp_quotes=False drops forex/commodity tickers so tier A never
+    touches the FMP daily budget.
     """
     baskets = load_baskets()
     asset_type_map = classify_tickers(baskets)
@@ -224,8 +229,8 @@ def run_quick_sports_etl(supabase, include_news: bool) -> Dict[str, Any]:
         )
         # Same rule as the daily run. The old one was `rows > 0 or not
         # include_news`, which is unconditionally true on tier A — a scores-only
-        # refresh could never report a failure, so a total ESPN outage on the
-        # 15-minute cadence was indistinguishable from a night with no games.
+        # refresh could never report a failure, so a total ESPN outage on
+        # tier A was indistinguishable from a night with no games.
         ok, reason = _sports_outcome(stats)
         result: Dict[str, Any] = {'success': ok, 'stats': stats}
         if not ok:
@@ -237,10 +242,10 @@ def run_quick_sports_etl(supabase, include_news: bool) -> Dict[str, Any]:
 
 
 def run_quick_refresh(tier: str, triggered_by: str = 'manual') -> Dict[str, Any]:
-    """Run a tiered refresh: tier 'a' (15-min) or 'b' (hourly)."""
+    """Run a tiered refresh: tier 'a' or 'b' (slots in vercel.json)."""
     start_time = et_now()
-    # Tighter than the daily run: this fires every 15 minutes and must never
-    # pile up behind itself.
+    # Tighter than the daily run: refreshes fire about hourly and must never
+    # pile up behind each other.
     run_deadline.start(120.0)
     supabase = get_supabase_client()
     run_id = start_etl_run(supabase, triggered_by, tier)
@@ -318,8 +323,8 @@ def run_quick_refresh(tier: str, triggered_by: str = 'manual') -> Dict[str, Any]
     # does not fail the run. These fetchers sit behind APIs that intermittently
     # 403 or 429 a datacenter IP (ESPN's site.api does it to GitHub Actions
     # runners; Finnhub and NYT rate-limit) and clear by themselves minutes
-    # later — on this cadence that is noise, not an incident: the next refresh
-    # is 15 minutes out and the daily run backfills regardless. Failing here
+    # later — that is noise, not an incident: the next refresh is about an
+    # hour out and the daily run backfills regardless. Failing here
     # costs a red build and a GitHub failure email for something that fixed
     # itself before anyone read it.
     #
@@ -422,9 +427,9 @@ def run_quick_refresh(tier: str, triggered_by: str = 'manual') -> Dict[str, Any]
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Tiered intraday refresh')
     parser.add_argument('--tier', choices=['a', 'b'], default='a',
-                        help="'a' = 15-min (quotes/scores/market news, no daily "
-                             "API budget); 'b' = hourly (adds NYT, ESPN news, "
-                             "FMP forex/commodity quotes)")
+                        help="'a' = quotes/scores/market news, no daily API "
+                             "budget; 'b' = adds NYT, ESPN news, forex and "
+                             "FMP commodity quotes")
     parser.add_argument('--triggered-by', default='manual',
                         choices=['manual', 'cron', 'dispatch'])
     args = parser.parse_args()
