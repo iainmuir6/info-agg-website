@@ -129,7 +129,7 @@ def get_http_session() -> requests.Session:
 
     429 is deliberately NOT retried here. Every rate-limited API in this
     pipeline handles quota itself and far better than a blind retry can:
-    Finnhub and Alpha Vantage rotate to the next key, NYT disables the
+    Finnhub rotates to the next key, NYT disables the
     offending key for the run, FMP trips a circuit breaker for the whole
     run. Retrying inside the session ran 0s/2s/4s of backoff — or whatever
     Retry-After asked for, unbounded — *before* any of that logic saw the
@@ -169,7 +169,7 @@ def get_http_session() -> requests.Session:
 # is legitimately slow, and an unbounded read is what lets one sick endpoint
 # eat the whole run budget.
 HTTP_TIMEOUT = (3.05, 8.0)
-HTTP_TIMEOUT_SLOW = (3.05, 20.0)   # bulk endpoints: AV time-series, NYT archive
+HTTP_TIMEOUT_SLOW = (3.05, 20.0)   # bulk endpoints: YouTube videos.list
 
 
 # ── Run deadline ─────────────────────────────────────────────────────────────
@@ -460,14 +460,6 @@ def preflight_env() -> Tuple[List[str], List[str]]:
         warnings_.append('No FINNHUB_API_KEY_* — markets quotes/news will fail')
     elif len(fh) < 2:
         warnings_.append('Only 1 distinct Finnhub key — half the expected rate budget')
-
-    av = distinct_env_values('ALPHA_VANTAGE_API_KEY', 'ALPHA_VANTAGE_API_KEY_1',
-                             'ALPHA_VANTAGE_API_KEY_2', 'ALPHA_VANTAGE_API_KEY_3')
-    if len(av) < 2:
-        warnings_.append(
-            f'Only {len(av)} distinct Alpha Vantage key(s) — 10 sentiment topics on <2 keys '
-            'exhausts the 25/key/day free-tier quota; later topics will return no data'
-        )
 
     nyt = distinct_env_values('NYT_API_KEY_1', 'NYT_API_KEY_2', 'NYT_API_KEY_3')
     if not nyt:

@@ -70,18 +70,18 @@ def build_test_cases() -> list:
         fetch_stock_quote, fetch_crypto_quote, fetch_company_profile,
         fetch_company_news, fetch_market_news, get_finnhub_api_key,
     )
-    from markets.alpha_vantage import fetch_news_sentiment, get_alphavantage_api_keys
     from markets.fmp import (
         fetch_company_profile as fmp_fetch_profile,
         fetch_fmp_quote, fetch_treasury_rates, fetch_economic_indicator,
         get_fmp_api_key,
     )
+    from markets.frankfurter import fetch_forex_quote
+    from markets.fred import fetch_fred_series
     from sports.espn import fetch_espn_news, fetch_espn_scores, fetch_espn_standings
     from news.nyt import fetch_nyt_top_stories
 
     fh_key  = get_finnhub_api_key()
     fmp_key = get_fmp_api_key()
-    av_key  = get_alphavantage_api_keys()[0]
 
     cases = [
         # ── Finnhub ─────────────────────────────────────────────────────────
@@ -130,16 +130,6 @@ def build_test_cases() -> list:
                 else (False, f"empty — got {len(d) if d else 0} items")
             ),
         ),
-        # ── Alpha Vantage ────────────────────────────────────────────────────
-        TestCase(
-            name='Alpha Vantage: news sentiment (earnings)',
-            callable=lambda: fetch_news_sentiment(topic='earnings', api_key=av_key),
-            validate_fn=lambda d: (
-                (True, f"{len(d)} articles, sentiment={d[0].get('overall_sentiment_score')}")
-                if d and len(d) > 0 and d[0].get('overall_sentiment_score') is not None
-                else (False, f"missing sentiment score — got {len(d) if d else 0} items")
-            ),
-        ),
         # ── FMP ──────────────────────────────────────────────────────────────
         TestCase(
             name='FMP: company profile (AAPL)',
@@ -148,15 +138,6 @@ def build_test_cases() -> list:
                 (True, f"name={d['name']}, sector={d.get('sector')}")
                 if d and d.get('name') and d.get('sector')
                 else (False, f"missing name or sector — got {d}")
-            ),
-        ),
-        TestCase(
-            name='FMP: forex quote (EURUSD)',
-            callable=lambda: fetch_fmp_quote('EURUSD', fmp_key),
-            validate_fn=lambda d: (
-                (True, f"price={d['current_price']}")
-                if d and (d.get('current_price') or 0) > 0
-                else (False, f"no price — got {d}")
             ),
         ),
         TestCase(
@@ -178,12 +159,31 @@ def build_test_cases() -> list:
             ),
         ),
         TestCase(
-            name='FMP: economic indicator (realGDP)',
-            callable=lambda: fetch_economic_indicator('realGDP', fmp_key),
+            name='FMP: economic indicator (CPI)',
+            callable=lambda: fetch_economic_indicator('CPI', fmp_key),
             validate_fn=lambda d: (
                 (True, f"{len(d)} rows, latest={d[0].get('date')} val={d[0].get('value')}")
                 if d and len(d) > 0 and d[0].get('date') and d[0].get('value') is not None
                 else (False, f"missing rows or fields — got {d[:1] if d else []}")
+            ),
+        ),
+        # ── Keyless (Frankfurter, FRED) ──────────────────────────────────────
+        TestCase(
+            name='Frankfurter: forex quote (USDEUR)',
+            callable=lambda: fetch_forex_quote('USDEUR'),
+            validate_fn=lambda d: (
+                (True, f"price={d['current_price']}")
+                if d and (d.get('current_price') or 0) > 0
+                else (False, f"no price — got {d}")
+            ),
+        ),
+        TestCase(
+            name='FRED: real GDP (GDPC1)',
+            callable=lambda: fetch_fred_series('realGDP'),
+            validate_fn=lambda d: (
+                (True, f"{len(d)} rows, latest={d[-1]['date']} val={d[-1]['value']}")
+                if d
+                else (False, "no observations")
             ),
         ),
         # ── ESPN ─────────────────────────────────────────────────────────────

@@ -13,7 +13,7 @@
  *    Eastern is the app's editorial timezone.
  *
  * 2. DATE-ONLY strings (`date` columns — economic_indicators.date,
- *    etf_holdings.as_of_date, "2026-07-30") are parsed by `new Date()` as UTC
+ *    "2026-07-30") are parsed by `new Date()` as UTC
  *    midnight. Formatting that in Eastern moves it *back* five hours and prints
  *    the PREVIOUS day. These must be formatted in UTC, which is the only zone
  *    where the parsed instant still lands on the date the string names. Use the

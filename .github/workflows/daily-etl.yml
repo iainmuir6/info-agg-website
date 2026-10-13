@@ -41,10 +41,6 @@ jobs:
       FINNHUB_API_KEY_2:               ${{ secrets.FINNHUB_API_KEY_2 }}
       FINNHUB_API_KEY_3:               ${{ secrets.FINNHUB_API_KEY_3 }}
       FMP_API_KEY:                     ${{ secrets.FMP_API_KEY }}
-      ALPHA_VANTAGE_API_KEY:           ${{ secrets.ALPHA_VANTAGE_API_KEY }}
-      ALPHA_VANTAGE_API_KEY_1:         ${{ secrets.ALPHA_VANTAGE_API_KEY_1 }}
-      ALPHA_VANTAGE_API_KEY_2:         ${{ secrets.ALPHA_VANTAGE_API_KEY_2 }}
-      ALPHA_VANTAGE_API_KEY_3:         ${{ secrets.ALPHA_VANTAGE_API_KEY_3 }}
       YOUTUBE_API_KEY:                 ${{ secrets.YOUTUBE_API_KEY }}
       # Misc domain. Each is optional: an unset key makes that one card skip
       # with a note rather than failing the domain (see sync_misc_data).

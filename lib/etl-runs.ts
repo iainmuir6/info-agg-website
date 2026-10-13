@@ -72,7 +72,6 @@ export const COUNTER_LABELS: Record<string, string> = {
   stocks_processed: "Tickers",
   quotes_inserted: "Quotes",
   market_news_inserted: "Market news",
-  sentiment_upserted: "Sentiment",
   economic_rows_upserted: "Econ rows",
   sections_processed: "Sections",
   articles_inserted: "Articles",

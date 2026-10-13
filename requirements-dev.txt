@@ -1,9 +1,0 @@
-# Dev / manual-tooling extras for the deprecated etfdb.com Selenium scraper
-# (--scrape-etf-info). NOT installed by the scheduled GitHub Actions runs — so
-# nothing reachable from run_etl.py or run_quick_refresh.py may import these at
-# module scope. See "ETL Import Constraint" in CLAUDE.md.
--r requirements.txt
-beautifulsoup4==4.12.2
-lxml==4.9.3
-selenium>=4.0.0
-webdriver-manager>=4.0.0

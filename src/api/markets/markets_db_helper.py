@@ -6,7 +6,6 @@
 # Description: Helper functions to insert market data into Supabase database
 
 from typing import Dict, List, Optional, Any
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from supabase import create_client, Client
 from supabase import ClientOptions
 from datetime import datetime, timezone
@@ -23,7 +22,7 @@ if _HERE not in sys.path:
 _PARENT = os.path.dirname(_HERE)
 if _PARENT not in sys.path:
     sys.path.insert(0, _PARENT)
-from etl_lib import chunked_upsert, db_call, run_deadline
+from etl_lib import chunked_upsert
 
 try:
     from .finnhub import (
@@ -46,7 +45,6 @@ except ImportError:
 
 try:
     from .fmp import (
-        fetch_company_profile as fmp_profile,
         get_fmp_api_key,
         fetch_fmp_quote,
         fetch_treasury_rates,
@@ -54,7 +52,6 @@ try:
     )
 except ImportError:
     from fmp import (
-        fetch_company_profile as fmp_profile,
         get_fmp_api_key,
         fetch_fmp_quote,
         fetch_treasury_rates,
@@ -67,22 +64,9 @@ except ImportError:
     from frankfurter import fetch_forex_quote
 
 try:
-    from .alpha_vantage import (
-        AVQuotaExhausted,
-        fetch_news_sentiment,
-        get_alphavantage_api_keys,
-    )
+    from .fred import FRED_SERIES, fetch_fred_series
 except ImportError:
-    from alpha_vantage import (
-        AVQuotaExhausted,
-        fetch_news_sentiment,
-        get_alphavantage_api_keys,
-    )
-
-try:
-    from .etfdb import scrape_all_etfs
-except ImportError:
-    from etfdb import scrape_all_etfs
+    from fred import FRED_SERIES, fetch_fred_series
 
 
 def get_supabase_client() -> Client:
@@ -531,301 +515,6 @@ def sync_market_news(supabase: Client, categories: List[str] = ['general'], api_
     return stats
 
 
-def upsert_etf_holdings(supabase: Client, etf_stock_id: str, holdings: List[Dict[str, Any]]) -> int:
-    """
-    Batch upsert ETF holdings into etf_holdings table.
-
-    Each holding dict must contain:
-        asset_stock_id (UUID), asset_name, weight_pct, shares, market_value, as_of_date
-
-    Returns number of rows upserted.
-    """
-    if not holdings:
-        return 0
-
-    batch_data = []
-    for h in holdings:
-        asset_stock_id = h.get('asset_stock_id')
-        if not asset_stock_id:
-            continue
-        batch_data.append({
-            'etf_stock_id': etf_stock_id,
-            'asset_stock_id': asset_stock_id,
-            'asset_name': h.get('asset_name'),
-            'weight_pct': h.get('weight_pct'),
-            'shares': h.get('shares'),
-            'market_value': h.get('market_value'),
-            'as_of_date': h.get('as_of_date'),
-        })
-
-    if not batch_data:
-        return 0
-
-    return chunked_upsert(
-        supabase, 'etf_holdings', batch_data,
-        on_conflict='etf_stock_id,asset_stock_id,as_of_date', chunk_size=100,
-    )
-
-
-def sync_etfdb_data(supabase: Client, etf_tickers: List[str]) -> Dict[str, Any]:
-    """
-    Manual only (--scrape-etf-info); no scheduled run calls it. Requires the
-    Selenium extras in requirements-dev.txt.
-
-    Scrape all ETF pages in one Selenium session, then batch-upsert to Supabase.
-
-    Flow:
-      1. scrape_all_etfs(etf_tickers) — one browser session, one page visit per ticker,
-         returns [{ticker, info, holdings}] for all tickers
-      2. For each result: info None → FMP company profile fallback
-      3. get_or_create_stock() + upsert_etf_holdings() for every ticker
-
-    Returns:
-        Stats dict: etf_info_updated, etf_holdings_upserted, fmp_fallbacks, errors
-    """
-    stats: Dict[str, Any] = {
-        'etf_info_updated': 0,
-        'etf_holdings_upserted': 0,
-        'fmp_fallbacks': 0,
-        'errors': [],
-    }
-
-    fmp_key: Optional[str] = None
-    try:
-        fmp_key = get_fmp_api_key()
-    except ValueError:
-        pass  # FMP key optional — used only as fallback for info
-
-    # --- Phase 1: scrape all pages in one browser session ---
-    print(f"\nScraping {len(etf_tickers)} ETF pages via Selenium...")
-    scraped = scrape_all_etfs(etf_tickers)
-
-    # --- Phase 2: upsert results to Supabase ---
-    print(f"\nUpserting {len(scraped)} ETF results to Supabase...")
-    for result in scraped:
-        ticker = result['ticker']
-        info = result['info']
-        holdings = result['holdings']
-
-        try:
-            # Info: fall back to FMP company profile if etfdb returned nothing
-            if info is None:
-                print(f"  [{ticker}] etfdb info unavailable — trying FMP profile fallback...")
-                if fmp_key:
-                    try:
-                        info = fmp_profile(ticker, fmp_key)
-                        if info:
-                            stats['fmp_fallbacks'] += 1
-                    except Exception as fmp_err:
-                        print(f"  [{ticker}] FMP profile fallback failed: {fmp_err}")
-
-            if info:
-                stock_id = get_or_create_stock(supabase, ticker, info, asset_type='etf')
-                if stock_id:
-                    stats['etf_info_updated'] += 1
-                else:
-                    print(f"  [{ticker}] Warning: get_or_create_stock returned None")
-                    continue
-            else:
-                print(f"  [{ticker}] Warning: no info available — creating stub row")
-                stock_id = get_or_create_stock(supabase, ticker, asset_type='etf')
-                if not stock_id:
-                    stats['errors'].append(f"{ticker}: failed to get/create stock row")
-                    continue
-
-            # Holdings: no FMP fallback (holdings endpoint is premium)
-            if holdings:
-                count = upsert_etf_holdings(supabase, stock_id, holdings)
-                stats['etf_holdings_upserted'] += count
-                print(f"  [{ticker}] Upserted {count} holdings")
-            else:
-                print(f"  [{ticker}] No holdings to upsert")
-
-        except Exception as e:
-            msg = f"{ticker}: {e}"
-            print(f"  [etfdb] DB error for {ticker}: {e}")
-            stats['errors'].append(msg)
-
-    return stats
-
-
-def insert_news_sentiment(
-    supabase: Client, articles: List[Dict[str, Any]], errors: Optional[List[str]] = None
-) -> int:
-    """
-    Upsert AV news sentiment articles into info_agg.news_sentiment.
-
-    On conflict (url) all fields are overwritten; topics from AV already
-    contain the full topic list for each article so no merge is needed.
-
-    Returns the number of rows upserted.
-    """
-    if not articles:
-        return 0
-
-    # Build ticker → stock UUID map for primary_ticker_id resolution.
-    #
-    # Look up only the tickers this batch actually mentions. An unfiltered
-    # select() is silently capped by PostgREST at 1000 rows, and with a few
-    # thousand stocks that truncated map left ~75% of sentiment rows with an
-    # unresolved primary_ticker_id despite AV returning ticker data for them.
-    wanted_tickers = sorted({
-        entry.get('ticker')
-        for article in articles
-        for entry in (article.get('ticker_sentiments') or [])
-        if entry.get('ticker')
-    })
-    ticker_to_id: Dict[str, str] = {}
-    for i in range(0, len(wanted_tickers), 200):
-        batch = wanted_tickers[i:i + 200]
-        try:
-            resp = db_call(
-                lambda b=batch: supabase.table('stocks').select('id, ticker').in_('ticker', b).execute(),
-                'sentiment ticker map',
-            )
-        except Exception as e:
-            if errors is not None:
-                errors.append(f"sentiment ticker map lookup failed: {e}")
-            continue
-        ticker_to_id.update({row['ticker']: row['id'] for row in (resp.data or [])})
-
-    batch_data = []
-    for article in articles:
-        # Parse AV time_published: '20240101T120000' → ISO timestamp
-        time_published = article.get('time_published')
-        published_at = None
-        if time_published:
-            try:
-                published_at = datetime.strptime(time_published, '%Y%m%dT%H%M%S').isoformat()
-            except ValueError:
-                published_at = None
-
-        # Extract topic strings from AV topic dicts
-        raw_topics = article.get('topics', [])
-        topic_strings = [t.get('topic') for t in raw_topics if t.get('topic')]
-
-        url = article.get('url')
-        if not url:
-            continue
-
-        # Resolve primary_ticker_id: highest relevance_score ticker present in stocks
-        ts = article.get('ticker_sentiments') or []
-        primary_ticker_id = None
-        if ts:
-            for entry in sorted(ts, key=lambda x: float(x.get('relevance_score') or 0), reverse=True):
-                tid = ticker_to_id.get(entry.get('ticker'))
-                if tid:
-                    primary_ticker_id = tid
-                    break
-
-        batch_data.append({
-            'title': article.get('title'),
-            'url': url,
-            'source': article.get('source'),
-            'source_domain': article.get('source_domain'),
-            'summary': article.get('summary'),
-            'published_at': published_at,
-            'topics': topic_strings,
-            'overall_sentiment_score': article.get('overall_sentiment_score'),
-            'overall_sentiment_label': article.get('overall_sentiment_label'),
-            'ticker_sentiments': article.get('ticker_sentiments'),
-            'primary_ticker_id': primary_ticker_id,
-        })
-
-    if not batch_data:
-        return 0
-
-    return chunked_upsert(
-        supabase, 'news_sentiment', batch_data,
-        on_conflict='url', errors=errors, chunk_size=100,
-    )
-
-
-def sync_news_sentiment(
-    supabase: Client,
-    topics: List[str],
-    tickers: Optional[List[str]] = None
-) -> Dict[str, Any]:
-    """
-    Fetch and store AV news sentiment using one worker per API key.
-
-    Topics are distributed round-robin across workers. Each worker fetches its
-    assigned topics sequentially with a 1s sleep between requests. After all workers
-    complete, articles are aggregated, deduplicated by URL, and batch-upserted.
-
-    Args:
-        supabase: Supabase client instance
-        topics: List of AV topic strings (e.g. ['earnings', 'technology'])
-        tickers: Optional ticker filter, at most MAX_SENTIMENT_TICKERS. AV ANDs
-            tickers with each other and with the topic, so a watchlist-sized list
-            matches nothing and is rejected outright. Normally leave this unset.
-
-    Returns:
-        Stats dict: topics_processed, articles_upserted, errors
-    """
-    stats: Dict[str, Any] = {
-        'topics_processed': 0,
-        'articles_upserted': 0,
-        'errors': []
-    }
-
-    try:
-        keys = get_alphavantage_api_keys()
-    except ValueError as e:
-        stats['errors'].append(str(e))
-        return stats
-
-    # Distribute topics round-robin across keys
-    worker_topics: List[List[str]] = [[] for _ in keys]
-    for i, topic in enumerate(topics):
-        worker_topics[i % len(keys)].append(topic)
-
-    def _worker(key: str, assigned_topics: List[str]) -> List[Dict[str, Any]]:
-        collected: List[Dict[str, Any]] = []
-        for i, topic in enumerate(assigned_topics):
-            if run_deadline.expired():
-                stats['errors'].append(
-                    run_deadline.skip_note('sentiment topic(s)', len(assigned_topics) - i))
-                break
-            try:
-                articles = fetch_news_sentiment(api_key=key, tickers=tickers, topic=topic)
-                collected.extend(articles)
-            except AVQuotaExhausted as e:
-                # This key is done for the UTC day. Report once and stop rather
-                # than spending a request per remaining topic to be told again.
-                remaining = assigned_topics[assigned_topics.index(topic):]
-                stats['errors'].append(
-                    f"{e} — skipped {len(remaining)} topic(s): {', '.join(remaining)}"
-                )
-                break
-            except Exception as e:
-                stats['errors'].append(f"Sentiment topic {topic}: {e}")
-
-        return collected
-
-    all_articles: List[Dict[str, Any]] = []
-    with ThreadPoolExecutor(max_workers=len(keys)) as executor:
-        futures = {
-            executor.submit(_worker, key, worker_topics[i]): key
-            for i, key in enumerate(keys)
-            if worker_topics[i]
-        }
-        for future in as_completed(futures):
-            try:
-                all_articles.extend(future.result())
-            except Exception as e:
-                stats['errors'].append(f"Worker error: {e}")
-
-    stats['topics_processed'] = len(topics)
-
-    if all_articles:
-        seen: set = set()
-        deduped = [a for a in all_articles if a.get('url') and not (a['url'] in seen or seen.add(a['url']))]
-        stats['articles_upserted'] = insert_news_sentiment(supabase, deduped, errors=stats['errors'])
-
-    return stats
-
-
 def upsert_economic_indicators(
     supabase: Client, rows: List[Dict[str, Any]], errors: Optional[List[str]] = None
 ) -> int:
@@ -851,14 +540,13 @@ def upsert_economic_indicators(
 
 def sync_economic_indicators(supabase: Client) -> Dict[str, Any]:
     """
-    Fetch and store economic indicators: treasury rates (1 FMP call) +
-    7 macro indicators (7 FMP calls) = 8 calls/day total.
+    Fetch and store economic indicators: treasury rates (1 FMP call) + 6 macro
+    indicators (6 FMP calls) + real GDP from FRED (keyless) = 7 FMP calls/day.
 
     Returns:
         {'indicators_processed': int, 'rows_upserted': int, 'errors': list}
     """
     MACRO_INDICATORS = [
-        'realGDP',
         'federalFunds',
         'CPI',
         'unemploymentRate',
@@ -898,6 +586,12 @@ def sync_economic_indicators(supabase: Client) -> Dict[str, Any]:
             break
         except Exception as e:
             stats['errors'].append(f"Error fetching {name}: {e}")
+
+    # FMP stopped serving realGDP (empty list since mid-2026); FRED's GDPC1 is
+    # the same series. Outside the FMP loop so an FMP 429 can't skip it.
+    for name in FRED_SERIES:
+        all_rows.extend(fetch_fred_series(name, errors=stats['errors']))
+        stats['indicators_processed'] += 1
 
     stats['rows_upserted'] += upsert_economic_indicators(supabase, all_rows, errors=stats['errors'])
     return stats

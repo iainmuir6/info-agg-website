@@ -29,7 +29,6 @@ from etl_lib import (
     chunked_upsert,
     db_call,
     preflight_env,
-    distinct_env_values,
     start_etl_run,
     finish_etl_run,
     collect_domain_errors,
@@ -39,9 +38,7 @@ from sports.sports_db_helper import sync_all_sports_data, sync_season_schedules,
 from markets.markets_db_helper import (
     sync_stock_data,
     sync_market_news,
-    sync_news_sentiment,
     sync_economic_indicators,
-    sync_etfdb_data,
     upsert_daily_stock_quotes_batch,
 )
 from news.news_db_helper import sync_nyt_data
@@ -69,13 +66,6 @@ MARKET_NEWS_CATEGORIES = [
     'general', 'forex', 'crypto',
     # 'merger'
 ]
-
-SENTIMENT_TOPICS_ALL = [
-    'earnings', 'financial_markets', 'technology', 'finance',
-    'economy_macro', 'economy_monetary', 'economy_fiscal',
-    'mergers_and_acquisitions', 'ipo', 'energy_transportation'
-]
-
 
 def load_baskets() -> Dict[str, List[str]]:
     """Load baskets.json — 5 groups of tickers driving all market ETL routing."""
@@ -176,12 +166,10 @@ def run_sports_etl(supabase: Client, season_schedules: bool = False) -> Dict[str
 def run_markets_etl(
     supabase: Client,
     watchlist: Optional[List[str]] = None,
-    skip_sentiment: bool = False,
 ) -> Dict[str, Any]:
     """
-    Daily markets ETL: quotes + company news + market news + AV sentiment (all 10 topics).
-    No quote backfill (OHLCV history) and no profile/info refresh; ETF info is
-    the manual --scrape-etf-info (ETFdb).
+    Daily markets ETL: quotes + company news + market news + economic indicators.
+    No quote backfill (OHLCV history) and no profile refresh.
     """
     baskets = load_baskets()
     asset_type_map = classify_tickers(baskets)
@@ -197,7 +185,6 @@ def run_markets_etl(
         'quotes_inserted': 0,
         'news_inserted': 0,
         'market_news_inserted': 0,
-        'sentiment_upserted': 0,
         'economic_rows_upserted': 0,
         'errors': []
     }
@@ -306,20 +293,12 @@ def run_markets_etl(
                 ignore_duplicates=True,
             )
 
-        # Run market-news, sentiment, and econ-indicators in parallel —
-        # each hits a different API (Finnhub / AV / FMP) so there is no contention.
+        # Run market-news and econ-indicators in parallel — each hits a
+        # different API (Finnhub / FMP + FRED) so there is no contention.
         post_fns: Dict[str, Any] = {
             'market_news': lambda: sync_market_news(supabase, categories=MARKET_NEWS_CATEGORIES),
             'econ':        lambda: sync_economic_indicators(supabase),
         }
-        if not skip_sentiment:
-            # No ticker filter: AV ANDs tickers with each other and with the
-            # topic, so passing the watchlist returned 0 rows at best and
-            # "Invalid inputs" once the list grew past ~20 symbols. Per-article
-            # ticker relevance still comes back in each article's payload.
-            post_fns['sentiment'] = lambda: sync_news_sentiment(
-                supabase, topics=SENTIMENT_TOPICS_ALL
-            )
 
         # Per-source error lists, not just one pooled list: the health check
         # below has to ask "did *this* source explain its own zero?", and a
@@ -336,8 +315,6 @@ def run_markets_etl(
                     continue
                 if name == 'market_news':
                     total_stats['market_news_inserted'] = s.get('articles_inserted', 0)
-                elif name == 'sentiment':
-                    total_stats['sentiment_upserted'] = s.get('articles_upserted', 0)
                 elif name == 'econ':
                     total_stats['economic_rows_upserted'] = s.get('rows_upserted', 0)
                 source_errors[name].extend(s.get('errors', []))
@@ -347,12 +324,11 @@ def run_markets_etl(
         # A source that wrote nothing is always worth an error line, whether or
         # not it explained itself: a total loss of company news (1847 rows -> 0)
         # was once recorded as a successful run with zero errors, and a total
-        # loss of AV sentiment (10 topics, 0 rows) was recorded as a successful
-        # markets domain purely because the *pooled* error list was non-empty,
-        # which switched the old check off. Ask each source about its own zero.
+        # loss of one source was once recorded as a successful markets domain
+        # purely because the *pooled* error list was non-empty, which switched
+        # the old check off. Ask each source about its own zero.
         for name, rows in (
             ('market_news', total_stats['market_news_inserted']),
-            ('sentiment', None if skip_sentiment else total_stats['sentiment_upserted']),
             ('economic_indicators', total_stats['economic_rows_upserted']),
         ):
             if rows != 0:
@@ -507,29 +483,6 @@ def run_summary_etl(supabase: Client) -> Dict[str, Any]:
                 'stats': {'day': 0, 'week': 0, 'errors': [f"summary failed: {e}"]}}
 
 
-def run_etfdb_etl(supabase: Client) -> None:
-    """Scrape ETF info and top-15 holdings from etfdb.com. Manual trigger only.
-
-    The only writer of etf_holdings, and not part of any scheduled run. Kept
-    for manual enrichment of ETFdb fields (expense ratio, AUM, category).
-    """
-    baskets = load_baskets()
-    asset_type_map = classify_tickers(baskets)
-    etf_tickers = [t for tickers in baskets.values() for t in tickers
-                   if asset_type_map.get(t) == 'etf']
-
-    print(f"ETFs to scrape: {len(etf_tickers)}")
-
-    stats = sync_etfdb_data(supabase, etf_tickers)
-
-    print(f"\nETFDB Scrape Complete:")
-    print(f"  ETF info updated:  {stats['etf_info_updated']}")
-    print(f"  Holdings upserted: {stats['etf_holdings_upserted']}")
-    print(f"  FMP fallbacks:     {stats['fmp_fallbacks']}")
-    if stats['errors']:
-        print(f"  Errors ({len(stats['errors'])}): {stats['errors'][:3]}")
-
-
 def run_full_etl(
     watchlist: Optional[List[str]] = None,
     skip_sports: bool = False,
@@ -538,7 +491,6 @@ def run_full_etl(
     skip_media: bool = False,
     skip_misc: bool = False,
     skip_summary: bool = False,
-    skip_sentiment: bool = False,
     triggered_by: str = 'manual',
     run_cleanup: bool = False,
     season_schedules: bool = False,
@@ -546,8 +498,8 @@ def run_full_etl(
 ) -> Dict[str, Any]:
     """
     Run the full ETL pipeline for all data sources.
-    Markets = today's quotes + company news + market news + AV sentiment (all 10 topics).
-    No quote backfill (OHLCV history); ETF info is the manual --scrape-etf-info.
+    Markets = today's quotes + company news + market news + economic indicators.
+    No quote backfill (OHLCV history).
     """
     start_time = et_now()
 
@@ -557,14 +509,6 @@ def run_full_etl(
     # DOMAIN_TIMEOUT_S cannot cancel a running future (see CLAUDE.md's <60s
     # requirement).
     run_deadline.start(budget_seconds)
-
-    # Sentiment on <2 distinct AV keys trips the 5/min limiter into a ~60s
-    # sleep and blows the <60s run budget — skip it and say so.
-    av_keys = distinct_env_values('ALPHA_VANTAGE_API_KEY', 'ALPHA_VANTAGE_API_KEY_1',
-                                  'ALPHA_VANTAGE_API_KEY_2', 'ALPHA_VANTAGE_API_KEY_3')
-    if not skip_sentiment and not skip_markets and len(av_keys) < 2:
-        log.warning('only %d distinct Alpha Vantage key(s) — skipping sentiment', len(av_keys))
-        skip_sentiment = True
 
     results = {
         'started_at': start_time.isoformat(),
@@ -604,7 +548,6 @@ def run_full_etl(
         domain_fns['markets'] = lambda: run_markets_etl(
             get_supabase_client(),
             watchlist=watchlist,
-            skip_sentiment=skip_sentiment,
         )
     if not skip_news:
         domain_fns['news'] = lambda: run_news_etl(get_supabase_client())
@@ -771,7 +714,6 @@ def run_full_etl(
             return (f"tickers={s.get('stocks_processed',0)}  "
                     f"cnews={s.get('news_inserted',0)}  "
                     f"mnews={s.get('market_news_inserted',0)}  "
-                    f"sentiment={s.get('sentiment_upserted',0)}  "
                     f"econ={s.get('economic_rows_upserted',0)}")
         if domain == 'news':
             return (f"sections={s.get('sections_processed',0)}  "
@@ -845,18 +787,13 @@ def main():
 
     # ── Domain "only" shortcuts ───────────────────────────────────────────────
     parser.add_argument('--sports-only',  action='store_true', help='Run sports ETL only')
-    parser.add_argument('--markets-only', action='store_true', help='Run markets ETL only (quotes + news + sentiment)')
+    parser.add_argument('--markets-only', action='store_true', help='Run markets ETL only (quotes + news + economic indicators)')
     parser.add_argument('--news-only',    action='store_true', help='Run news ETL only')
     parser.add_argument('--media-only',   action='store_true', help='Run media ETL only')
     parser.add_argument('--misc-only',    action='store_true', help='Run misc ETL only')
     parser.add_argument('--summary-only', action='store_true', help='Run the AI briefing ETL only')
 
     # ── Markets options ───────────────────────────────────────────────────────
-    parser.add_argument('--scrape-etf-info', action='store_true',
-                        help='Scrape ETF info and top-15 holdings from etfdb.com '
-                             '(run manually, not on daily/seed)')
-    parser.add_argument('--skip-sentiment', action='store_true',
-                        help='Skip AV news sentiment (daily run: quotes + news only)')
     parser.add_argument('--watchlist', nargs='+', metavar='TICKER',
                         help='Override basket watchlist with a custom ticker list')
 
@@ -888,12 +825,6 @@ def main():
         import subprocess
         result = subprocess.run([sys.executable, str(test_script)], check=False)
         sys.exit(result.returncode)
-
-    # --scrape-etf-info: standalone, does NOT chain into run_full_etl
-    if args.scrape_etf_info:
-        supabase = get_supabase_client()
-        run_etfdb_etl(supabase)
-        return
 
     # Expand "only" shortcuts into skip flags
     # A scoped run must also drop the summary: it reads every other domain's
@@ -936,7 +867,6 @@ def main():
         skip_media=args.skip_media,
         skip_misc=args.skip_misc,
         skip_summary=args.skip_summary,
-        skip_sentiment=args.skip_sentiment,
         triggered_by=args.triggered_by,
         run_cleanup=args.cleanup,
         season_schedules=args.season_schedules,

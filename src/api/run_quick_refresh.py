@@ -13,7 +13,7 @@
 #   Tier B (6 slots): tier A + NYT top stories, ESPN news, Frankfurter forex
 #       and FMP commodity quotes (3 FMP calls/run against the 250/day cap).
 #
-#   AV sentiment, FMP economic indicators and retention cleanup are
+#   Economic indicators (FMP + FRED) and retention cleanup are
 #   daily-only — see run_etl.py.
 
 import os
@@ -139,7 +139,7 @@ def _degraded_streak(history: List[Dict[str, Any]], domain: str) -> int:
 
 
 def run_quick_markets_etl(supabase, include_fmp_quotes: bool) -> Dict[str, Any]:
-    """Quotes + market news. Skips company news, sentiment, econ, profiles.
+    """Quotes + market news. Skips company news, econ, profiles.
 
     include_fmp_quotes=False drops forex/commodity tickers so tier A never
     touches the FMP daily budget.

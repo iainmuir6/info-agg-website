@@ -51,7 +51,7 @@ else fail=$((fail+1)); echo "  FAIL key= pattern still visible to anon"; fi
 
 echo
 echo "4. User-owned tables — anon must be denied outright, not merely empty"
-for t in watchlist_stocks watchlist_leagues watchlist_teams watchlist_podcasts user_home_prefs; do
+for t in watchlist_stocks watchlist_teams watchlist_podcasts user_home_prefs; do
   probe '^40[0-9]$' "GET info_agg.$t" "${curl_args[@]}" -H 'Accept-Profile: info_agg' "$URL/rest/v1/$t?select=*&limit=1"
 done
 

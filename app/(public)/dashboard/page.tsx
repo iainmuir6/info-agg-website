@@ -306,7 +306,7 @@ export default async function DashboardPage() {
           <Panel title="Manual Refresh" accent="hsl(45 90% 52%)">
             <div className="px-3 py-2 flex items-center justify-between gap-3 flex-wrap">
               <span className="text-[11px] font-mono text-muted-foreground">
-                Sports · News · Market quotes — skips sentiment, media, and economic indicators
+                Sports · News · Market quotes — skips media and economic indicators
               </span>
               <EtlTriggerButton />
             </div>
