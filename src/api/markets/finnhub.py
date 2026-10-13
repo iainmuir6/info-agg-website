@@ -193,7 +193,6 @@ def fetch_crypto_quote(symbol: str, api_key: Optional[str] = None) -> Optional[D
     return quote
 
 
-# DEPRECATED: fetch_stock_candles (Finnhub /stock/candle) — use alpha_vantage.fetch_stock_candles_av instead.
 # def fetch_stock_candles(ticker, resolution='D', days_back=365, api_key=None): ...
 
 
