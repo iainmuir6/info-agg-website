@@ -327,12 +327,52 @@ DB_BACKOFF_S = 0.4
 UPSERT_CHUNK = 250
 
 
+# PostgREST's "can't reach the database" family: PGRST000-003 (connection,
+# pool, schema-cache load, pool timeout). These mean the whole database is
+# unavailable, not that one request or row was bad.
+_DB_DOWN_CODES = {'PGRST000', 'PGRST001', 'PGRST002', 'PGRST003'}
+
+
+class DatabaseUnavailable(Exception):
+    """Raised instead of calling the database once it has been seen down."""
+
+
+def is_db_unavailable(exc: Any) -> bool:
+    """True when an error says the database is down rather than the request
+    or a row being wrong: a PGRST00x code, a non-JSON 5xx (postgrest puts the
+    int status in ``code``), or an httpx transport error (connect/timeout)."""
+    if isinstance(exc, (DatabaseUnavailable, TimeoutError, ConnectionError)):
+        return True
+    if any(c.__name__ == 'TransportError' and c.__module__.startswith('httpx')
+           for c in type(exc).__mro__):
+        return True
+    code = getattr(exc, 'code', None)
+    if isinstance(code, int):
+        return code >= 500
+    # String codes are PGRST* or Postgres SQLSTATEs — and SQLSTATEs can be all
+    # digits (23505), so never read a string code as an HTTP status.
+    return code in _DB_DOWN_CODES
+
+
+# Process-wide DB breaker. Once one call has exhausted its retries on an
+# outage, every later db_call fails immediately. Without it, an outage turned
+# a 30s intraday run into a 10-minute hang: each 503 took 5-9s, and
+# chunked_upsert bisected every failed chunk down to single rows (2026-11-04,
+# PGRST002 for ~6h). Setting an Event takes no lock that sleeps.
+_db_down = threading.Event()
+_db_down_reason = ''
+
+
 def db_call(fn: Any, what: str, attempts: int = DB_ATTEMPTS) -> Any:
     """Run a Supabase call, retrying transient failures with backoff.
 
     Raises the last exception if every attempt fails — callers decide whether
-    that is fatal or just an entry in their error list.
+    that is fatal or just an entry in their error list. Raises
+    DatabaseUnavailable at once if an earlier call found the database down.
     """
+    global _db_down_reason
+    if _db_down.is_set():
+        raise DatabaseUnavailable(f'{what} skipped: database unavailable ({_db_down_reason})')
     last: Optional[Exception] = None
     for attempt in range(1, attempts + 1):
         try:
@@ -342,6 +382,10 @@ def db_call(fn: Any, what: str, attempts: int = DB_ATTEMPTS) -> Any:
             if attempt < attempts:
                 _db_log.warning('%s failed (attempt %d/%d): %s', what, attempt, attempts, e)
                 time.sleep(DB_BACKOFF_S * attempt)
+    if is_db_unavailable(last) and not _db_down.is_set():
+        _db_down_reason = str(last)[:160]
+        _db_down.set()
+        _db_log.error('database unavailable — skipping remaining DB calls this run: %s', _db_down_reason)
     raise last  # type: ignore[misc]
 
 
@@ -406,6 +450,8 @@ def chunked_upsert(
         try:
             return _write(batch, attempts=1)
         except Exception as e:
+            if is_db_unavailable(e):
+                raise  # an outage, not a bad row: splitting can't help
             if len(batch) == 1:
                 try:
                     return _write(batch, attempts=DB_ATTEMPTS)
@@ -420,10 +466,18 @@ def chunked_upsert(
     for i in range(0, len(records), chunk_size):
         chunk = records[i:i + chunk_size]
         try:
-            written += _write(chunk, attempts=DB_ATTEMPTS)
+            try:
+                written += _write(chunk, attempts=DB_ATTEMPTS)
+            except Exception as e:
+                if is_db_unavailable(e):
+                    raise
+                _db_log.warning('%s: chunk of %d failed, bisecting: %s', table, len(chunk), str(e)[:160])
+                written += _bisect(chunk)
         except Exception as e:
-            _db_log.warning('%s: chunk of %d failed, bisecting: %s', table, len(chunk), str(e)[:160])
-            written += _bisect(chunk)
+            # Only outages escape _write/_bisect; stop rather than hammer a
+            # database that is down with the remaining chunks.
+            _note(f'{table}: database unavailable, wrote {written}/{len(records)} rows: {str(e)[:160]}')
+            return written
     # Under ignore_duplicates a short count is the skipped duplicates, not a
     # failure; real row failures were already noted by _bisect.
     if written < len(records) and not ignore_duplicates:
