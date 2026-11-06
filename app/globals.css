@@ -290,3 +290,6 @@
 .country-map canvas {
   border-radius: 0;
 }
+
+/* No rubber-band at the page's ends: it slides the whole page over empty space on macOS and iOS. */
+html { overscroll-behavior: none; }
