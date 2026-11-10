@@ -53,3 +53,12 @@ __pycache__/
 
 # Local ETL run reports (CI uploads its own as an artifact)
 etl-report.json
+
+# app-stack: local-only run artifacts (reports and ledgers are committed)
+.app-review/**/*.png
+.app-review/**/*.jpg
+.app-review/**/*.webp
+.app-review/**/*.metrics.json
+.app-review/**/*_summary*.json
+.app-review/**/*.log
+.app-review/**/.auth/
