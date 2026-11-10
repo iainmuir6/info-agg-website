@@ -416,3 +416,12 @@ Checklist for the consuming schema:
 2. Add a new table to `supabase/02_tables.sql` and corresponding RLS/indexes
 3. Add a `run_{domain}_etl()` function in `src/api/run_etl.py`
 4. Add a new route under `app/(public)/{domain}/page.tsx` and update the `NAV_LINKS` in `app/(public)/layout.tsx`
+
+## UI Work
+
+Before building or changing any UI, load the `ui-composition` skill. A screen is one
+composition: look at the whole page and its neighbors first, place controls by relationship,
+keep table and grid structure fixed across states, and design every state and context. After
+building, render the whole page (phone and desktop, both themes), flip every control, and
+report anything changed outside the request. `DESIGN.md` overrides the skill; departures are
+recorded under "Deviations" in `DESIGN.md` and are not to be "fixed".
