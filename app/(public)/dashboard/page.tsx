@@ -2,6 +2,7 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { isSuperAdmin } from "@/lib/rbac";
+import { OwnerMark } from "@/components/owner-mark";
 import { EtlTriggerButton } from "@/components/etl-trigger";
 import { EtlRunBreakdown } from "@/components/etl-run-breakdown";
 import { EtlRunHistory } from "@/components/etl-run-history";
@@ -191,6 +192,7 @@ export default async function DashboardPage() {
 
   return (
     <div className="px-3 sm:px-6 py-3 sm:py-4 space-y-3">
+      <OwnerMark />
       {/* ── Masthead — matches the profile page: title + identity left, the
              facts you'd otherwise give a card of their own inline right ── */}
       <div>

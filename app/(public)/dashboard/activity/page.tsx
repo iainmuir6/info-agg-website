@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { isSuperAdmin } from "@/lib/rbac";
+import { OwnerMark } from "@/components/owner-mark";
 import { ActivityChart } from "@/components/activity-chart";
 import {
   DIMENSIONS,
@@ -250,6 +251,7 @@ export default async function ActivityPage({ searchParams }: { searchParams: Sea
 
   return (
     <div className="px-3 sm:px-6 py-3 sm:py-4 space-y-3">
+      <OwnerMark />
       {/* ── Masthead: title + range picker ── */}
       <div>
         <div className="rule-double mb-2" />

@@ -24,6 +24,7 @@ import { HomeSectionPrefs } from "@/components/home-section-prefs";
 import { EtlTriggerButton } from "@/components/etl-trigger";
 import { formatDateLong } from "@/lib/format-date";
 import { leagueLabel } from "@/lib/leagues";
+import { OwnerMark } from "@/components/owner-mark";
 
 /** Matches the chrome the self-contained watchlist cards already render, so a
  *  wrapped section and an unwrapped one are indistinguishable in the grid. */
@@ -156,6 +157,7 @@ export default async function ProfilePage() {
 
   return (
     <div className="px-3 sm:px-6 py-3 sm:py-4 space-y-3">
+      {admin && <OwnerMark />}
       {/* ── Masthead — account facts live inline here instead of in their own
              card; three read-only key/value rows didn't earn a full panel ── */}
       <div>

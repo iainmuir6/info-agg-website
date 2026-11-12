@@ -1,7 +1,7 @@
 import type { Metadata, Viewport } from "next";
 import localFont from "next/font/local";
 import { ThemeProvider } from "next-themes";
-import { Analytics } from "@vercel/analytics/next";
+import { SiteAnalytics } from "@/components/site-analytics";
 import { getSiteUrl } from "@/lib/site-url";
 import "./globals.css";
 
@@ -101,7 +101,7 @@ export default function RootLayout({
         >
           {children}
         </ThemeProvider>
-        <Analytics />
+        <SiteAnalytics />
       </body>
     </html>
   );
