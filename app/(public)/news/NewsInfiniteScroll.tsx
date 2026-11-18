@@ -94,6 +94,7 @@ export default function NewsInfiniteScroll() {
 
   // Reset on filter change
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setOffset(0);
     setHasMore(true);
     fetchArticles(true);
