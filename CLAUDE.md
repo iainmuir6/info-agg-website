@@ -288,7 +288,7 @@ upsert the `stocks` row, then track and favorite it in one transaction (the
 SQL trigger; a test checks they agree) and auto-untrack when the last favorite goes. Both ETL
 orchestrators quote baskets + tracked through `run_etl.market_universe()`. `is_core` still means
 "in `baskets.json`", so tracked stocks show in Favorites, `/markets` and `/markets/[ticker]`,
-not the home Stocks panel or the briefing movers. Cap reasoning: `src/api/docs/RATE_LIMITS.md`.
+not the briefing movers; the home Stocks panel adds only the viewer's own favorited ones. Cap reasoning: `src/api/docs/RATE_LIMITS.md`.
 
 ### Python ETL (`src/api/`)
 
