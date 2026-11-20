@@ -35,10 +35,16 @@ export function FavoriteStockButton({ stockId, ticker, initialFavorited, signedI
         if (deleteError) setError(deleteError.message);
         else setFavorited(false);
       } else {
-        const { error: insertError } = await supabase
-          .from("watchlist_stocks")
-          .insert({ user_id: user.id, stock_id: stockId });
-        if (insertError) setError(insertError.message);
+        // Same add path as /profile: a basket or tracked stock is just
+        // favorited; any other is validated and tracked first, so a stock
+        // auto-untracked when its last favorite went comes back quoted.
+        const res = await fetch("/api/stocks/track", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ ticker }),
+        });
+        const data = (await res.json().catch(() => ({}))) as { error?: string };
+        if (!res.ok) setError(data.error ?? "Add Failed");
         else setFavorited(true);
       }
     } finally {

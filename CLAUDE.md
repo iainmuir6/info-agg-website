@@ -23,6 +23,9 @@ python src/api/run_etl.py --media-only
 python src/api/run_etl.py --misc-only                       # Weather, holidays, country, word, wiki, fact
 python src/api/run_etl.py --summary-only                    # Regenerate the AI briefings alone (day + week)
 python src/api/run_etl.py --skip-summary                    # Skip the AI briefings (no Gemini call)
+python src/api/run_etl.py --summary-only --force-summary    # Regenerate both briefings even if current (queues a briefing push)
+python src/api/summary/summary_db_helper.py --dry-run       # Print the numbered briefing context, source map and schema; no Gemini, no write
+python src/api/test_summary_citations.py                    # Offline tests for the citation resolver
 python src/api/run_etl.py --cleanup --season-schedules      # What the daily cron runs (+ retention cleanup)
 python src/api/run_etl.py --test                            # Dry-run: one sample call per Finnhub/FMP/Frankfurter/FRED/ESPN/NYT endpoint (src/api/run_test.py, 15 cases), no DB writes
 
@@ -107,7 +110,7 @@ is ours (always fails).
 - `SUPABASE_SERVICE_ROLE_KEY` — Service role key (ETL writes, `POST /api/auth/invite`)
 
 **Supabase Auth → URL configuration:** Add redirect URLs for the auth callback route, e.g. `http://localhost:3000/auth/callback` and `${NEXT_PUBLIC_SITE_URL}/auth/callback`.
-- API keys for fetchers: `NYT_API_KEY_1/_2/_3`, `FINNHUB_API_KEY_1/_2/_3`, `FMP_API_KEY`. Each fetcher rotates over the distinct non-empty values, so unset or repeated slots are harmless.
+- API keys for fetchers: `NYT_API_KEY_1/_2/_3`, `FINNHUB_API_KEY_1/_2/_3`, `FMP_API_KEY`. Each fetcher rotates over the distinct non-empty values, so unset or repeated slots are harmless. **The Finnhub keys are also needed on Vercel** (Production + Preview): `lib/finnhub.ts` uses them for the tracked-stock search and add (free tier, no per-use cost). `.env.example` lists every name.
 - `ETL_LOG_LEVEL` — optional Python log level for the ETL (default `INFO`).
 - `WEATHER_API_KEY` — Visual Crossing timeline API. Powers the weather cards. Billed per *day of data*, so cost is `WEATHER_LOCATIONS` × `FORECAST_DAYS` (currently **6 cities × 5 days = 30 records/run**) against 1,000/day.
 - `CALENDAR_API_KEY` — Calendarific. Powers the upcoming-holidays card. 500/month free; the daily run uses ~30.
@@ -143,6 +146,7 @@ This is a personal information aggregator ("Info Hub") with two layers:
 - `app/api/revalidate/` — `POST /api/revalidate` (bearer `REVALIDATE_SECRET`) — called by the GitHub Actions workflow after a successful run to `revalidateTag("etl-data")` so the site picks up new rows within seconds.
 - `app/api/auth/invite/` — `POST /api/auth/invite` with `{ "email": "…" }` — `super_admin` only; sends Supabase invite email (callback → update-password)
 - `app/api/podcasts/search/` — client-credentials Spotify search backing the "favorite a podcast" UI on `/profile`
+- `app/api/stocks/search/` (GET) and `app/api/stocks/track/` (POST `{ ticker }`) — signed-in, same-origin. The Favorites stock search and the one stock add path (see **Tracked stocks** below)
 
 **Supabase client pattern:**
 - `lib/supabase/server.ts` — Server Components and Route Handlers (cookie-based auth)
@@ -273,6 +277,19 @@ match cmf-tracker's), `components/notification-settings.tsx`. A subscription
 is per device; topic preferences are per person. iOS only delivers to a
 Home Screen web app (16.4+), and the settings say so.
 
+**Tracked stocks.** Any signed-in user can add a US ticker from `/profile`'s Favorites
+search: a result the ETL doesn't quote yet shows **Add**. `lib/tracked-stocks.ts`
+`addTrackedStock()` is the one add path (the track route and the detail page's Favorite button
+both call it): validate with Finnhub (`lib/finnhub.ts`: quote + profile2, US symbols without dots),
+upsert the `stocks` row, then track and favorite it in one transaction (the
+`info_agg.track_and_favorite` RPC), then write the first quote, all through the service role with
+`.schema("info_agg")`. Rules live in the database: the global cap of 10
+(`TRACKED_STOCKS_CAP`, mirrored in `lib/tracked-stocks-shared.ts`, `src/api/run_etl.py` and the
+SQL trigger; a test checks they agree) and auto-untrack when the last favorite goes. Both ETL
+orchestrators quote baskets + tracked through `run_etl.market_universe()`. `is_core` still means
+"in `baskets.json`", so tracked stocks show in Favorites, `/markets` and `/markets/[ticker]`,
+not the home Stocks panel or the briefing movers. Cap reasoning: `src/api/docs/RATE_LIMITS.md`.
+
 ### Python ETL (`src/api/`)
 
 Orchestrator: `src/api/run_etl.py` — runs the five fetch-domain ETL pipelines (sports, markets, news, media, misc) **in parallel** (`ThreadPoolExecutor`), which is what the <60s requirement above depends on. `run_quick_refresh.py` is the tiered intraday counterpart (Tier A and Tier B, dispatched from `vercel.json` slots — no backfill, no daily API budget spent on Tier A); `run_test.py` dry-run-tests one sample call per Finnhub/FMP/Frankfurter/FRED/ESPN/NYT endpoint with no DB writes; `backfill_scores.py` is the standalone recovery tool for historical ESPN scores. The sixth
@@ -297,7 +314,13 @@ Each domain follows the same pattern:
   in the only forward-looking rows the schema holds (scheduled games, upcoming holidays) plus
   unresolved threads in stories already in the bundle. Both briefings are freshness-gated — the daily
   on the Eastern calendar day, the weekly on the ISO week — so a re-dispatched run costs no
-  generation, and any failure leaves the previous briefing in place rather than emptying the card
+  generation, and any failure leaves the previous briefing in place rather than emptying the card.
+  `--force-summary` skips both gates. **Citations:** every citable CONTEXT row (news, market news,
+  movers, finished and scheduled games; not holidays) gets an integer `id`; URLs never go into the
+  prompt. The schema makes each item/bullet return `cites: int[]`, and `_resolve_citations` drops
+  unknown ids, caps 3 per item, renumbers by first appearance and stores
+  `sources: [{n, title, url, kind, outlet}]` in the payload. Movers link to `/markets/{ticker}`,
+  games to the ESPN gamecast. The headline is never cited (it is the push body)
 - `archive/` — retired scripts kept for reference, not run by anything (`run_db_seed.py`, `seed.py`, `av_seed.py`, `generate_snippets.py`, plus old schema docs)
 
 Python venv: `_agg_venv/` (at repo root). Dependencies: `requirements.txt` (repo root).
@@ -327,7 +350,8 @@ All tables live in the `info_agg` schema. Apply migrations in order:
 11. `11_ai_summaries.sql` — widens `misc_content`'s `kind` CHECK to allow `'summary'`, the two AI
    briefing rows (keys `day` and `week`). No new table: same small, display-only, read-whole shape
    that `10` was built for. Index, RLS policy and grant are table-wide and already cover it. The
-   payload shape is enforced in `lib/ai-summary.ts`.
+   payload shape is enforced in `lib/ai-summary-parse.ts` (pure, tested; `lib/ai-summary.ts` fetches).
+   Citations (`cites`, `sources`) live in the same JSONB, so they needed no migration.
 12. `12_news_churn.sql` — `suppress_redundant_updates_trigger()` on the five news tables, so a
    re-fetched story that hasn't changed writes nothing (no-op upserts had bloated their indexes
    5–10x). A suppressed row is missing from `RETURNING`, which is why `chunked_upsert` uses
@@ -341,6 +365,12 @@ All tables live in the `info_agg` schema. Apply migrations in order:
    scraper was retired) and `watchlist_leagues` (its UI was already gone). Recreates
    `cleanup_daily()` without `p_sentiment_days`, keeping its `service_role`-only grant.
 
+15. `15_tracked_stocks.sql` — `tracked_stocks` (user-added tickers; anon/authenticated may
+   SELECT only `stock_id, added_at`, writes service-role only), a BEFORE INSERT cap trigger (10,
+   advisory lock), the service-role-only `track_and_favorite(p_stock, p_user)` RPC,
+   an AFTER DELETE trigger on `watchlist_stocks` that untracks a non-basket stock when its last
+   favorite goes, and the `watchlist_stocks` policies rewritten with `(select auth.uid())`.
+
 > This Supabase project is shared with other apps, separated by schema. Keep `info_agg` migrations
 > scoped to `info_agg` — do not modify `public` or another app's schema from this repo.
 
@@ -352,6 +382,7 @@ All tables live in the `info_agg` schema. Apply migrations in order:
 - Misc: `misc_content` — one JSONB row per (kind, key) for all six almanac cards, plus the two
   AI briefings at `('summary','day')` and `('summary','week')`
 - User prefs: `watchlist_stocks`, `watchlist_teams`, `watchlist_podcasts`, `user_home_prefs`
+- Tracked: `tracked_stocks` — US tickers users added beyond `baskets.json` (cap 10)
 - Ops: `etl_runs` — one row per ETL run (status, tier, timing, per-domain stats/errors), read by `/dashboard`
 
 The ETL uses `SUPABASE_SERVICE_ROLE_KEY` with `ClientOptions(schema='info_agg')` for writes. The frontend uses the publishable key targeting the same schema.

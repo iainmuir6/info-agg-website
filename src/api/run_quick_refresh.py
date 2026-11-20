@@ -39,8 +39,7 @@ from etl_lib import (
     collect_domain_errors,
 )
 from run_etl import (
-    load_baskets,
-    classify_tickers,
+    market_universe,
     get_supabase_client,
     run_news_etl,
     _sports_outcome,
@@ -144,10 +143,10 @@ def run_quick_markets_etl(supabase, include_fmp_quotes: bool) -> Dict[str, Any]:
     include_fmp_quotes=False drops forex/commodity tickers so tier A never
     touches the FMP daily budget.
     """
-    baskets = load_baskets()
-    asset_type_map = classify_tickers(baskets)
+    universe_errors: List[str] = []
+    universe, asset_type_map = market_universe(supabase, universe_errors)
     tickers: List[str] = [
-        t for group in baskets.values() for t in group
+        t for t in universe
         if include_fmp_quotes or asset_type_map.get(t, 'stock') not in FMP_ASSET_TYPES
     ]
 
@@ -155,7 +154,7 @@ def run_quick_markets_etl(supabase, include_fmp_quotes: bool) -> Dict[str, Any]:
         'stocks_processed': 0,
         'quotes_inserted': 0,
         'market_news_inserted': 0,
-        'errors': [],
+        'errors': universe_errors,
     }
 
     # Pre-load stock IDs in ONE query so worker threads make zero DB calls

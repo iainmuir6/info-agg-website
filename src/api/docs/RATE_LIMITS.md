@@ -4,7 +4,7 @@
 | Domain  | API               | Env Var(s)                                  | Keys | Req/min      | Req/day               | Implementation                                                                                           | Active Endpoints                                                                                                                             |
 | ------- | ----------------- | ------------------------------------------- | ---- | ------------ | --------------------- | -------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
 | Sports  | ESPN (unofficial) | —                                           | 0    | Unknown      | Unknown               | No limiter; 1 call/sport/league per run (+1 more per league for standings, daily-only via `--season-schedules`) | `GET /apis/site/v2/sports/{sport}/{league}/news` · `/scoreboard` · `GET /apis/v2/sports/{sport}/{league}/standings`                          |
-| Markets | Finnhub           | `FINNHUB_API_KEY_1` `FINNHUB_API_KEY_2`   | 2    | 60/key       | None                  | Per-key sliding-window `_fh_rate_limit(key)` + module-level `>=1s` minimum between requests; round-robin key selection with `max_workers=2` | `GET /quote` · `/stock/profile2` · `/company-news` · `/news`                                                                                 |
+| Markets | Finnhub           | `FINNHUB_API_KEY_1` `FINNHUB_API_KEY_2` (`_3` optional) | 2    | 60/key       | None                  | Per-key sliding-window `_fh_rate_limit(key)` only (no global minimum gap); round-robin key selection with `max_workers=2`. The Next.js app (`lib/finnhub.ts`) uses the same keys for tracked-stock search and add | `GET /quote` · `/stock/profile2` · `/company-news` · `/news` · `/search` (app only)                                                          |
 | Markets | FMP               | `FMP_API_KEY`                               | 1    | None         | **250**               | Daily counter `_fmp_rate_check()` (thread-safe) + module-level `>=1s` minimum between requests | `GET /stable/quote` (commodities) · `/treasury-rates` · `/economic-indicators`                                              |
 | News    | NYT               | `NYT_API_KEY_1` `NYT_API_KEY_2`            | 2    | 5/key        | 500                   | Daily run switches keys after 5 requests: first 5 top-stories calls on key1, next 5 calls on key2; `>=1s` minimum between NYT HTTP calls; batch upsert after all sections | `GET /topstories/v2/{section}.json` (9 sections) · `/mostpopular/v2/viewed/{period}.json`                                                   |
 | Media   | YouTube Data v3   | `YOUTUBE_API_KEY`                           | 1    | None         | **10,000 units**      | No limiter needed; 1 call/run, 1 unit cost                                                                | `GET /youtube/v3/videos?chart=mostPopular`                                                                                                   |
@@ -28,7 +28,8 @@ equivalent.
 Spotify (playlists, Top Podcasts) and Reddit (removed) are not in this table — Spotify is live-embedded via `<iframe>` on the frontend with no backend fetch or rate limit to manage.
 
 `MinInterval` (`etl_lib.py`) is the shared slot-reservation primitive behind the "global gap"
-rows above (Finnhub, FMP, NYT): it reserves the next allowed timestamp under a lock, then
+rows above (FMP, NYT, and ESPN's 1s scoreboard / 0.2s standings pacing; Finnhub has none,
+only its per-key window): it reserves the next allowed timestamp under a lock, then
 releases the lock *before* sleeping — the historical ETL hang was a global limiter that slept
 while still holding its lock, serializing every parallel worker behind it (see the ETL
 Performance Requirement in the repo root `CLAUDE.md`).
@@ -67,7 +68,7 @@ matches the whole value). `finish_etl_run` redacts the same patterns out of `etl
 | ------------- | ---- | ----------- | ------------------------------------------------------------- | -------- |
 | FMP           | 1    | 250 req/day | 28 (6 Tier B × 3 commodity quotes + the daily's 10: 3 commodities + treasury + 6 macro) | +222 |
 | NYT           | 2    | 500 req/day | 10 (9 top-stories sections + most-popular)                               | +490     |
-| Finnhub       | 2    | 120 req/min | ~100–150/run (quotes + news, 2 workers)                       | —        |
+| Finnhub       | 2    | 60/min per key | Daily: 57 + 2N (41 quotes + 13 company news + 3 market news, + quote and company news per tracked stock). Tier A/B: 44 + N | Per key: ~29 of 60 today; ~39 at N=10 |
 | ESPN          | —    | Unknown     | 18 calls/run (9 leagues × news + scores), +9 on `--season-schedules` (standings) | —        |
 | YouTube       | —    | 10,000/day  | 1 call/run                                                    | +9,999   |
 | Visual Crossing | 1  | 1,000/day (records) | 30/run (6 cities × 5 forecast days), daily run only  | +970     |
@@ -81,6 +82,29 @@ would spend another request for a card that only changes once a day — hence th
 `_country_is_current()` guard in `misc_db_helper.py`, which caps it at one fetch per calendar
 day no matter how often the run fires. `fetch_all_countries()` paginates at 100/page (3 requests
 for all 254) and is **not** called by the ETL; it exists for one-off use.
+
+## Tracked Stocks (Finnhub)
+
+Signed-in users can add US tickers beyond `baskets.json` (`info_agg.tracked_stocks`, migration
+15). Both orchestrators quote baskets + tracked through `run_etl.market_universe()`.
+**N** below is the number of tracked stocks, capped at **10** (`TRACKED_STOCKS_CAP` in
+`run_etl.py` and `lib/tracked-stocks-shared.ts`, and the trigger in `15_tracked_stocks.sql`;
+change all three together).
+
+| Run | Finnhub calls | Per key (2 keys) |
+|---|---|---|
+| Daily | 57 + 2N (quote + company news each) | 39 at N=10, 49 at N=20 |
+| Tier A / B | 44 + N (quote only) | 27 at N=10 |
+| One add (app) | 2 (quote + profile2), 3 for an ETF or ADR | shares the same 60/min window |
+| One search (app) | 1, after a 300ms typing pause | |
+
+**Why 10.** Quota isn't the limit: even N=20 stays under 60/min per key, so the limiter never
+sleeps. Time is. Daily runs already take 50 to 57s against the 60s rule, and each tracked stock
+adds roughly 0.3 to 0.5s of markets wall time with 2 workers. Raise the cap only once per-domain
+timings show markets isn't the slow domain, or add `FINNHUB_API_KEY_3` and a third worker.
+
+Crypto, forex and commodities can't be tracked (they need `CRYPTO_SYMBOL_MAP`, FMP or
+Frankfurter), and a tracked ticker that is also in a basket is quoted once, as the basket says.
 
 ## Google Gemini (AI briefings)
 

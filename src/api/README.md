@@ -47,7 +47,7 @@ src/api/
 │   └── misc_db_helper.py
 ├── summary/                # AI briefings → misc_content ('summary','day'|'week')
 │   ├── gemini.py           # Gemini REST client
-│   └── summary_db_helper.py
+│   └── summary_db_helper.py  # `--dry-run` prints the numbered context + schema (no Gemini, no write)
 │
 └── archive/                # Retired, not run: run_db_seed.py (broken), seed.py, av_seed.py,
                             # generate_snippets.py, old schema docs
@@ -113,6 +113,14 @@ All market ETL is driven by `markets/baskets.json`. The group sets `asset_type` 
 
 To add or remove tickers, edit `baskets.json` — no code changes required.
 
+**Tracked stocks.** Signed-in users can add US tickers from `/profile`'s Favorites search
+(`info_agg.tracked_stocks`, at most 10, migration `15`). `run_etl.market_universe()` merges them
+after the baskets for both orchestrators (stocks get company news in the daily run too); a
+ticker in both is quoted once, as its basket says. A tracked stock is untracked automatically
+when its last favorite is removed. `stocks.is_core` still means "in `baskets.json`", so tracked
+stocks show on `/markets`, `/markets/[ticker]` and in Favorites, not on the home Stocks panel or
+in the AI briefing movers. Offline check: `python src/api/test_market_universe.py`.
+
 ---
 
 ## Running the ETL
@@ -160,7 +168,8 @@ Scheduling" in the root `CLAUDE.md` for why the schedule left GitHub's `schedule
 | Flag | Effect |
 |------|--------|
 | `--sports-only` / `--markets-only` / `--news-only` / `--media-only` / `--misc-only` | Run one fetch domain (also skips the summary) |
-| `--summary-only` | Regenerate the AI briefings alone, from current DB rows |
+| `--summary-only` | Regenerate the AI briefings alone, from current DB rows (still freshness-gated) |
+| `--force-summary` | Skip the briefings' day/week freshness gates and regenerate both. Each write queues a briefing push |
 | `--skip-sports` / `--skip-markets` / `--skip-news` / `--skip-media` / `--skip-misc` | Skip one fetch domain |
 | `--skip-summary` | Skip the AI briefings (no Gemini call) |
 | `--watchlist TICKER ...` | Override the basket watchlist |
@@ -186,7 +195,7 @@ daily-only.
 ## Data Flow
 
 ```
-baskets.json
+baskets.json + tracked_stocks
     ├─ stocks / ETFs / crypto ──► Finnhub /quote ──────────────► stock_quotes
     ├─ forex ───────────────────► Frankfurter (ECB) ───────────► stock_quotes
     └─ commodities ─────────────► FMP /stable/quote ───────────► stock_quotes

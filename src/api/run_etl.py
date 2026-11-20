@@ -56,6 +56,16 @@ DOMAIN_TIMEOUT_S = 600
 
 BASKETS_PATH = Path(__file__).parent / 'markets' / 'baskets.json'
 
+# Global cap on user-added (tracked) stocks. Mirrors the BEFORE INSERT trigger
+# in supabase/15_tracked_stocks.sql and lib/tracked-stocks-shared.ts; change
+# all three together. Each tracked stock adds 2 Finnhub calls to the daily run
+# and 1 to each intraday run (see docs/RATE_LIMITS.md for why 10).
+TRACKED_STOCKS_CAP = 10
+
+# Only these asset types can be tracked: crypto needs CRYPTO_SYMBOL_MAP and
+# forex/commodities go through FMP/Frankfurter, so those stay basket-only.
+TRACKABLE_ASSET_TYPES = {'stock', 'etf'}
+
 DEFAULT_NYT_SECTIONS = [
     'us', 'world', 'opinion', 'business', 'insider',
     'realestate', 'science', 'technology', 'arts',
@@ -68,7 +78,8 @@ MARKET_NEWS_CATEGORIES = [
 ]
 
 def load_baskets() -> Dict[str, List[str]]:
-    """Load baskets.json — 5 groups of tickers driving all market ETL routing."""
+    """Load baskets.json — 8 groups of tickers; with tracked_stocks (see
+    market_universe) they drive all market ETL routing."""
     with open(BASKETS_PATH) as f:
         return json.load(f)
 
@@ -88,6 +99,80 @@ def classify_tickers(baskets: Dict[str, List[str]]) -> Dict[str, str]:
         for t in tickers:
             result[t] = at
     return result
+
+
+def load_tracked(supabase: Client) -> Dict[str, str]:
+    """{ticker: asset_type} for user-added stocks (info_agg.tracked_stocks),
+    oldest first, at most TRACKED_STOCKS_CAP. Raises on a failed read."""
+    resp = (
+        supabase.table('tracked_stocks')
+        .select('added_at, stocks(ticker, asset_type)')
+        .order('added_at')
+        .limit(TRACKED_STOCKS_CAP)
+        .execute()
+    )
+    out: Dict[str, str] = {}
+    for row in resp.data or []:
+        stock = row.get('stocks') or {}
+        ticker = (stock.get('ticker') or '').strip().upper()
+        if ticker:
+            out[ticker] = stock.get('asset_type') or 'stock'
+    return out
+
+
+def merge_universe(
+    baskets: Dict[str, List[str]],
+    tracked: Dict[str, str],
+) -> tuple:
+    """Pure merge of baskets + tracked into (tickers, asset_type_map).
+
+    Basket tickers keep their order and their basket classification (a tracked
+    ticker that is also in a basket is quoted once, as the basket says).
+    Tracked tickers follow, capped at TRACKED_STOCKS_CAP and limited to
+    TRACKABLE_ASSET_TYPES.
+    """
+    asset_type_map = classify_tickers(baskets)
+    tickers: List[str] = []
+    seen = set()
+    for group in baskets.values():
+        for t in group:
+            if t not in seen:
+                seen.add(t)
+                tickers.append(t)
+    added = 0
+    for t, at in tracked.items():
+        if added >= TRACKED_STOCKS_CAP:
+            break
+        if t in seen or at not in TRACKABLE_ASSET_TYPES:
+            continue
+        seen.add(t)
+        tickers.append(t)
+        asset_type_map[t] = at
+        added += 1
+    return tickers, asset_type_map
+
+
+def market_universe(supabase: Client, errors: Optional[List[str]] = None) -> tuple:
+    """Every ticker the markets domain quotes: baskets.json plus tracked_stocks.
+
+    The one helper both orchestrators use, so the daily run and the intraday
+    tiers can never disagree about what is followed. A failed tracked read
+    falls back to baskets only, so markets never fails because of it; a
+    missing table (migration 15 not applied yet) only logs.
+    """
+    baskets = load_baskets()
+    tracked: Dict[str, str] = {}
+    try:
+        tracked = load_tracked(supabase)
+    except Exception as e:
+        msg = str(e)
+        if 'tracked_stocks' in msg and ('PGRST205' in msg or '42P01' in msg or 'does not exist' in msg):
+            log.warning('tracked_stocks missing; quoting baskets only')
+        else:
+            log.warning(f'tracked_stocks read failed; quoting baskets only: {redact_secrets(msg)}')
+            if errors is not None:
+                errors.append(f"tracked_stocks read failed (baskets only): {redact_secrets(msg)}")
+    return merge_universe(baskets, tracked)
 
 
 def get_supabase_client() -> Client:
@@ -171,22 +256,20 @@ def run_markets_etl(
     Daily markets ETL: quotes + company news + market news + economic indicators.
     No quote backfill (OHLCV history) and no profile refresh.
     """
-    baskets = load_baskets()
-    asset_type_map = classify_tickers(baskets)
-
-    all_tickers = [t for tickers in baskets.values() for t in tickers]
+    # Outside the try: an exception halfway through must still report the rows
+    # that were already written, not an empty domain.
+    universe_errors: List[str] = []
+    all_tickers, asset_type_map = market_universe(supabase, universe_errors)
     if watchlist is None:
         watchlist = all_tickers
 
-    # Outside the try: an exception halfway through must still report the rows
-    # that were already written, not an empty domain.
     total_stats: Dict[str, Any] = {
         'stocks_processed': 0,
         'quotes_inserted': 0,
         'news_inserted': 0,
         'market_news_inserted': 0,
         'economic_rows_upserted': 0,
-        'errors': []
+        'errors': universe_errors,
     }
 
     try:
@@ -450,7 +533,7 @@ def run_misc_etl(supabase: Client) -> Dict[str, Any]:
                 'stats': {'weather': 0, 'errors': [f"misc failed: {e}"]}}
 
 
-def run_summary_etl(supabase: Client) -> Dict[str, Any]:
+def run_summary_etl(supabase: Client, force: bool = False) -> Dict[str, Any]:
     """Run the AI briefing ETL: Summary of the Day and Summary of the Week.
 
     Unlike every other domain this one has no upstream of its own — it
@@ -459,10 +542,11 @@ def run_summary_etl(supabase: Client) -> Dict[str, Any]:
 
     Never fails the run. Both summaries are gated on freshness and degrade to
     the previously stored briefing, so a Gemini outage costs the card its
-    newness, not its content.
+    newness, not its content. `force` (--force-summary) skips both freshness
+    gates; each write fires the briefing push trigger.
     """
     try:
-        summary_stats = sync_summaries(supabase)
+        summary_stats = sync_summaries(supabase, force=force)
 
         stats = {
             'day': summary_stats.get('day_generated', 0),
@@ -470,6 +554,9 @@ def run_summary_etl(supabase: Client) -> Dict[str, Any]:
             'model': summary_stats.get('model'),
             'errors': summary_stats.get('errors', []),
         }
+        for k in ('day_cites', 'week_cites'):
+            if summary_stats.get(k):
+                stats[k] = summary_stats[k]
         if summary_stats.get('notes'):
             stats['notes'] = summary_stats['notes']
 
@@ -491,6 +578,7 @@ def run_full_etl(
     skip_media: bool = False,
     skip_misc: bool = False,
     skip_summary: bool = False,
+    force_summary: bool = False,
     triggered_by: str = 'manual',
     run_cleanup: bool = False,
     season_schedules: bool = False,
@@ -632,7 +720,7 @@ def run_full_etl(
     if not skip_summary:
         t0 = et_now()
         try:
-            results['summary'] = run_summary_etl(get_supabase_client())
+            results['summary'] = run_summary_etl(get_supabase_client(), force=force_summary)
         except Exception as e:
             results['summary'] = {'success': True, 'degraded': True,
                                   'stats': {'day': 0, 'week': 0,
@@ -730,8 +818,12 @@ def run_full_etl(
                     f"otd={s.get('onthisday',0)}")
         if domain == 'summary':
             model = s.get('model')
+            cites = ''.join(
+                f"  {k[0]}cited={c.get('cited', 0)}/{c.get('cited', 0) + c.get('uncited', 0)}"
+                for k in ('day_cites', 'week_cites') if (c := s.get(k))
+            )
             return (f"day={s.get('day',0)}  week={s.get('week',0)}"
-                    + (f"  model={model}" if model else ''))
+                    + (f"  model={model}" if model else '') + cites)
         return ''
 
     passed = failed = skipped = warned = 0
@@ -792,6 +884,10 @@ def main():
     parser.add_argument('--media-only',   action='store_true', help='Run media ETL only')
     parser.add_argument('--misc-only',    action='store_true', help='Run misc ETL only')
     parser.add_argument('--summary-only', action='store_true', help='Run the AI briefing ETL only')
+    parser.add_argument('--force-summary', action='store_true',
+                        help='Regenerate the AI briefings even if today\'s/this week\'s '
+                             'already exist (skips the freshness gates; each write '
+                             'queues a briefing push)')
 
     # ── Markets options ───────────────────────────────────────────────────────
     parser.add_argument('--watchlist', nargs='+', metavar='TICKER',
@@ -867,6 +963,7 @@ def main():
         skip_media=args.skip_media,
         skip_misc=args.skip_misc,
         skip_summary=args.skip_summary,
+        force_summary=args.force_summary,
         triggered_by=args.triggered_by,
         run_cleanup=args.cleanup,
         season_schedules=args.season_schedules,

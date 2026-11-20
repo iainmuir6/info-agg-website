@@ -1,9 +1,15 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { createClient } from "@/lib/supabase/client";
 import { leagueLabel } from "@/lib/leagues";
+import {
+  TRACKED_STOCKS_CAP,
+  type AddStockResult,
+  type StockSearchHit,
+  type StockSearchResponse,
+} from "@/lib/tracked-stocks-shared";
 
 export type FavoriteStock = {
   stock_id: string;
@@ -42,6 +48,12 @@ type TeamResult = {
 };
 
 type AddMode = "stock" | "team" | "podcast";
+
+/** Mode pills and the search input share one height. */
+const CONTROL_H = "h-7";
+
+/** Stock search waits for a typing pause: each search is a Finnhub call. */
+const STOCK_SEARCH_DEBOUNCE_MS = 300;
 
 /** Row-side accent is the only thing distinguishing the three kinds of
  *  favorite — they share one panel, so a per-kind header would just be three
@@ -93,10 +105,13 @@ export function FavoritesPanel({
   initialStocks,
   initialTeams,
   initialPodcasts,
+  initialTracked,
 }: {
   initialStocks: FavoriteStock[];
   initialTeams: FavoriteTeamRow[];
   initialPodcasts: FavoritePodcastRow[];
+  /** User-added stocks across the site (global cap); null when unknown. */
+  initialTracked: number | null;
 }) {
   const [stocks, setStocks] = useState(initialStocks);
   const [teams, setTeams] = useState(initialTeams);
@@ -104,14 +119,24 @@ export function FavoritesPanel({
 
   const [mode, setMode] = useState<AddMode>("stock");
   const [query, setQuery] = useState("");
-  const [stockHits, setStockHits] = useState<{ id: string; ticker: string; name: string }[]>([]);
+  const [stockHits, setStockHits] = useState<StockSearchHit[]>([]);
+  const [tracked, setTracked] = useState<number | null>(initialTracked);
+  const stockTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const stockSeq = useRef(0);
   const [teamHits, setTeamHits] = useState<TeamResult[]>([]);
   const [podcastHits, setPodcastHits] = useState<PodcastResult[]>([]);
   const [searching, setSearching] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  useEffect(() => () => {
+    if (stockTimer.current) clearTimeout(stockTimer.current);
+  }, []);
+
   function resetSearch() {
+    if (stockTimer.current) clearTimeout(stockTimer.current);
+    stockSeq.current++;
+    setSearching(false);
     setQuery("");
     setStockHits([]);
     setTeamHits([]);
@@ -122,15 +147,27 @@ export function FavoritesPanel({
     setQuery(value);
     setError(null);
     if (mode === "stock") {
-      if (value.length < 1) return setStockHits([]);
-      const supabase = createClient();
-      const { data } = await supabase
-        .from("stocks")
-        .select("id, ticker, name")
-        .ilike("ticker", `${value}%`)
-        .eq("is_active", true)
-        .limit(6);
-      setStockHits(data ?? []);
+      if (stockTimer.current) clearTimeout(stockTimer.current);
+      // A newer keystroke invalidates any response still in flight.
+      const seq = ++stockSeq.current;
+      if (value.trim().length < 1) {
+        setSearching(false);
+        return setStockHits([]);
+      }
+      stockTimer.current = setTimeout(async () => {
+        setSearching(true);
+        try {
+          const res = await fetch(`/api/stocks/search?q=${encodeURIComponent(value.trim())}`);
+          const data = (await res.json()) as StockSearchResponse;
+          if (seq !== stockSeq.current) return;
+          setStockHits(res.ok ? (data.results ?? []) : []);
+          if (res.ok) setTracked(data.tracked);
+        } catch {
+          if (seq === stockSeq.current) setStockHits([]);
+        } finally {
+          if (seq === stockSeq.current) setSearching(false);
+        }
+      }, STOCK_SEARCH_DEBOUNCE_MS);
       return;
     }
     if (mode === "team") {
@@ -184,24 +221,32 @@ export function FavoritesPanel({
     }
   }
 
-  async function addStock(hit: { id: string; ticker: string; name: string }) {
+  /** One path for every stock: the route favorites a quoted ticker and
+   *  tracks-then-favorites an addable one (lib/tracked-stocks.ts). */
+  async function addStock(hit: StockSearchHit) {
     setBusy(true);
     setError(null);
-    const supabase = createClient();
-    const { data: { user } } = await supabase.auth.getUser();
-    const { error: insertError } = await supabase
-      .from("watchlist_stocks")
-      .insert({ stock_id: hit.id, user_id: user?.id });
-    if (insertError) {
-      setError(insertError.message);
-    } else {
-      setStocks((prev) => [
-        ...prev,
-        { stock_id: hit.id, ticker: hit.ticker, name: hit.name, current_price: null, percent_change: null },
-      ]);
+    try {
+      const res = await fetch("/api/stocks/track", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ticker: hit.ticker }),
+      });
+      const data = (await res.json()) as AddStockResult | { error: string };
+      if (!res.ok || !("ok" in data) || !data.ok) {
+        setError("error" in data ? data.error : "message" in data ? data.message : "Add Failed");
+        return;
+      }
+      setTracked(data.tracked);
+      setStocks((prev) =>
+        prev.some((s) => s.stock_id === data.stock.stock_id) ? prev : [...prev, data.stock],
+      );
       resetSearch();
+    } catch {
+      setError("Add Failed");
+    } finally {
+      setBusy(false);
     }
-    setBusy(false);
   }
 
   async function addTeam(hit: TeamResult) {
@@ -262,6 +307,11 @@ export function FavoritesPanel({
     const { error: e } = await supabase.from("watchlist_stocks").delete().eq("stock_id", stockId);
     if (e) return setError(e.message);
     setStocks((prev) => prev.filter((s) => s.stock_id !== stockId));
+    // Removing the last favorite can auto-untrack it (supabase/15).
+    const { count } = await supabase
+      .from("tracked_stocks")
+      .select("stock_id", { count: "exact", head: true });
+    if (count != null) setTracked(count);
   }
 
   async function removeTeam(id: string) {
@@ -283,6 +333,7 @@ export function FavoritesPanel({
   const total = stocks.length + teams.length + podcasts.length;
   const addedShowIds = new Set(podcasts.map((p) => p.show_id));
   const addedStockIds = new Set(stocks.map((s) => s.stock_id));
+  const trackingFull = tracked != null && tracked >= TRACKED_STOCKS_CAP;
   const addedTeamKeys = new Set(teams.map((t) => `${t.league}:${t.team_name}`));
 
   return (
@@ -300,6 +351,11 @@ export function FavoritesPanel({
               {count} {label}
             </span>
           ))}
+          {tracked != null && (
+            <span className="text-[9px] font-mono text-muted-foreground tabular-nums">
+              {tracked}/{TRACKED_STOCKS_CAP} Tracked
+            </span>
+          )}
         </div>
       </div>
 
@@ -373,12 +429,12 @@ export function FavoritesPanel({
       {/* Add row — one search box, switched between the three kinds */}
       <div className="px-3 py-2 border-t border-border relative">
         <div className="flex items-center gap-2">
-          <div className="flex items-center gap-0.5 shrink-0">
+          <div className={`flex items-stretch gap-0.5 shrink-0 ${CONTROL_H}`}>
             {(["stock", "team", "podcast"] as const).map((m) => (
               <button
                 key={m}
                 onClick={() => { setMode(m); resetSearch(); }}
-                className={`text-[9px] font-mono uppercase tracking-wider px-1.5 py-0.5 transition-colors ${
+                className={`text-[9px] font-mono uppercase tracking-wider px-1.5 transition-colors ${
                   mode === m ? "bg-foreground text-background font-bold" : "text-muted-foreground hover:text-foreground"
                 }`}
               >
@@ -391,9 +447,10 @@ export function FavoritesPanel({
             value={query}
             onChange={(e) => handleSearch(e.target.value)}
             placeholder={
-              mode === "stock" ? "Add ticker…" : mode === "team" ? "Search teams…" : "Search podcasts…"
+              mode === "stock" ? "Ticker" : mode === "team" ? "Team" : "Podcast"
             }
-            className="flex-1 min-w-0 text-[11px] font-mono bg-transparent border border-border px-2 py-1 outline-none focus:border-foreground placeholder:text-muted-foreground"
+            aria-label={mode === "stock" ? "Search tickers" : mode === "team" ? "Search teams" : "Search podcasts"}
+            className={`flex-1 min-w-0 ${CONTROL_H} text-[11px] font-mono bg-transparent border border-border px-2 outline-none focus:border-foreground placeholder:text-muted-foreground`}
           />
         </div>
 
@@ -402,17 +459,27 @@ export function FavoritesPanel({
         {mode === "stock" && stockHits.length > 0 && (
           <div className="absolute left-3 right-3 top-full z-10 border border-border bg-background divide-y divide-border shadow-sm max-h-64 overflow-y-auto">
             {stockHits.map((s) => {
-              const added = addedStockIds.has(s.id);
+              const added = s.status === "favorite" || (!!s.stockId && addedStockIds.has(s.stockId));
+              const addable = !added && s.status === "addable";
+              const full = addable && trackingFull;
               return (
                 <button
-                  key={s.id}
-                  disabled={busy || added}
+                  key={s.ticker}
+                  disabled={busy || added || full}
                   onClick={() => addStock(s)}
                   className="w-full text-left px-3 py-1.5 flex items-center gap-2 hover:bg-muted transition-colors disabled:opacity-50"
                 >
-                  <span className="text-[11px] font-mono font-bold">{s.ticker}</span>
+                  <span className="text-[11px] font-mono font-bold shrink-0">{s.ticker}</span>
                   <span className="text-[10px] font-mono text-muted-foreground truncate">{s.name}</span>
                   {added && <span className="text-[9px] font-mono text-muted-foreground ml-auto shrink-0">added</span>}
+                  {addable && (
+                    <span
+                      className="text-[9px] font-mono uppercase tracking-wider ml-auto shrink-0 border px-1.5 py-0.5"
+                      style={full ? undefined : { color: ACCENT.stock, borderColor: ACCENT.stock }}
+                    >
+                      {full ? "Full" : "Add"}
+                    </span>
+                  )}
                 </button>
               );
             })}

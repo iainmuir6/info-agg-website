@@ -10,7 +10,12 @@
 -- inside it. Adding a table would mean a second RLS policy, a second grant,
 -- and a second reader for no gain.
 --
--- The payload shape is enforced in lib/ai-summary.ts, the way every other
+-- Citations need no DDL: each item (day) or bullet object (week) carries
+-- `cites` (int[]) into the payload's `sources` [{n, title, url, kind, outlet}],
+-- written by src/api/summary/summary_db_helper.py. Older payloads lack both and
+-- still render.
+--
+-- The payload shape is enforced in lib/ai-summary-parse.ts, the way every other
 -- misc_content kind is. `_summary_kind` inside the payload distinguishes the
 -- two shapes (day has yesterday/today item lists; week has domain sections).
 --

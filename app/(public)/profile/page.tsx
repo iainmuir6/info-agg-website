@@ -108,7 +108,7 @@ export default async function ProfilePage() {
   // sports cards on an in-season date check, not on user league prefs — so the
   // control did nothing. Table and component are left in place; only the dead
   // UI is gone.
-  const [watchlistStocksRes, favoriteTeamsRes, watchlistPodcastsRes, homePrefsRes] =
+  const [watchlistStocksRes, favoriteTeamsRes, watchlistPodcastsRes, homePrefsRes, trackedRes] =
     await Promise.all([
       supabase
         .from("watchlist_stocks")
@@ -130,6 +130,8 @@ export default async function ProfilePage() {
         .select("section_order, hidden_sections")
         .eq("user_id", userId)
         .maybeSingle(),
+      // Site-wide count against the tracked-stocks cap (supabase/15).
+      supabase.from("tracked_stocks").select("stock_id", { count: "exact", head: true }),
     ]);
 
   /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -199,6 +201,7 @@ export default async function ProfilePage() {
             initialStocks={stocks}
             initialTeams={favoriteTeams}
             initialPodcasts={watchlistPodcastsRes.data ?? []}
+            initialTracked={trackedRes.error ? null : (trackedRes.count ?? 0)}
           />
 
           {/* Account settings — the two single-field forms share a row rather
