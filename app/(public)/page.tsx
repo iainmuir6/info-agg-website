@@ -438,16 +438,9 @@ function estimateCardHeight(section: HomeSectionKey, count: number): number {
   }
 }
 
-async function getCoreAssetsByType(supabase: Awaited<ReturnType<typeof createClient>>) {
-  try {
-    const { data } = await supabase
-      .from("stocks")
-      .select("ticker, name, asset_type, market_cap, stock_quotes(current_price, percent_change, quote_timestamp)")
-      .eq("is_core", true)
-      .eq("is_active", true);
-
-    const withQuote = ((data ?? []) as CoreAssetRow[])
-      .map((s) => {
+function toQuoteRows(data: CoreAssetRow[] | null): QuoteRow[] {
+  return (data ?? [])
+    .map((s) => {
         // Sort by quote_timestamp (what trading day/moment the quote is
         // FOR), not fetched_at (when we happened to pull it) — a historical
         // backfill run after today's live quote stamps every backfilled row
@@ -469,7 +462,39 @@ async function getCoreAssetsByType(supabase: Awaited<ReturnType<typeof createCli
             : null,
         } satisfies QuoteRow;
       })
-      .filter((r) => r.quote !== null);
+    .filter((r) => r.quote !== null);
+}
+
+/** Favorited stocks outside baskets.json (user-added, tracked): the home Stocks panel shows the
+ *  viewer's own alongside the core list, pinned like every favorite. Other users' adds stay off it. */
+async function getFavoriteExtraStocks(
+  supabase: Awaited<ReturnType<typeof createClient>>,
+  tickers: string[],
+): Promise<QuoteRow[]> {
+  if (tickers.length === 0) return [];
+  try {
+    const { data } = await supabase
+      .from("stocks")
+      .select("ticker, name, asset_type, market_cap, stock_quotes(current_price, percent_change, quote_timestamp)")
+      .in("ticker", tickers)
+      .eq("is_core", false)
+      .eq("is_active", true)
+      .eq("asset_type", "stock");
+    return toQuoteRows(data as CoreAssetRow[] | null);
+  } catch {
+    return [];
+  }
+}
+
+async function getCoreAssetsByType(supabase: Awaited<ReturnType<typeof createClient>>) {
+  try {
+    const { data } = await supabase
+      .from("stocks")
+      .select("ticker, name, asset_type, market_cap, stock_quotes(current_price, percent_change, quote_timestamp)")
+      .eq("is_core", true)
+      .eq("is_active", true);
+
+    const withQuote = toQuoteRows(data as CoreAssetRow[] | null);
 
     const byType = (type: string) =>
       withQuote
@@ -1242,6 +1267,13 @@ export default async function CommandCenter() {
     favorites = favoritesRes;
   }
 
+  // The viewer's favorited non-basket stocks (e.g. ANT) join the Stocks panel; TickerGrid pins favorites first.
+  const extraStocks = await getFavoriteExtraStocks(
+    supabase,
+    [...favorites.tickers].filter((t) => !assets.coreTickers.includes(t)),
+  );
+  const panelStocks = [...assets.stocks, ...extraStocks];
+
   // ── Card registry: every card is tagged with a section key so user prefs
   //    can reorder and hide sections. Default order interleaves markets /
   //    news / sports (DEFAULT_HOME_ORDER).
@@ -1270,11 +1302,11 @@ export default async function CommandCenter() {
     )});
   }
 
-  if (assets.stocks.length > 0) {
+  if (panelStocks.length > 0) {
     cards.push({ section: "stocks", node: (
       <CollapsibleCard label="Stocks" accent="hsl(142 65% 42%)" href="/markets"
-        count={assets.stocks.length} summary={`${assets.stocks.length} stocks`}>
-        <TickerGrid rows={assets.stocks} href="/markets" columns={2} large favoriteTickers={favorites.tickers} />
+        count={panelStocks.length} summary={`${panelStocks.length} stocks`}>
+        <TickerGrid rows={panelStocks} href="/markets" columns={2} large favoriteTickers={favorites.tickers} />
       </CollapsibleCard>
     )});
   }
