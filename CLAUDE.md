@@ -425,3 +425,6 @@ keep table and grid structure fixed across states, and design every state and co
 building, render the whole page (phone and desktop, both themes), flip every control, and
 report anything changed outside the request. `DESIGN.md` overrides the skill; departures are
 recorded under "Deviations" in `DESIGN.md` and are not to be "fixed".
+
+## Home-Screen Icon
+- **Home-screen icon** (2026-11-20): `app/apple-icon.png` and `public/apple-touch-icon.png` is "Stacked Paper" (v3), picked in the cross-app icon refresh and rendered from HTML (app-stack `ios-pwa/references/icon-depth.md`). Its source and the previous icon (`original/`) live in git-ignored `icon-refresh/`.
