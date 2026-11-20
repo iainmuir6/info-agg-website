@@ -69,33 +69,59 @@ function formatDate(dateStr: string | null) {
   return formatWeekdayDateTime(dateStr);
 }
 
+const SCORE_COLUMNS =
+  "id, league_id, home_team, away_team, home_abbrev, away_abbrev, home_logo, away_logo, event_id, home_score, away_score, home_record, away_record, status, status_detail, game_date, venue, broadcast";
+
 async function getSportsData(supabase: Awaited<ReturnType<typeof createClient>>) {
-  const [leaguesRes, scoresRes, newsRes] = await Promise.all([
+  const [leaguesRes, newsRes] = await Promise.all([
     supabase
       .from("leagues")
       .select("id, sport, league, display_name")
       .eq("is_active", true)
       .order("sport"),
-    // Window around today. Ordering by game_date desc without a window
-    // returns only far-future fixtures (e.g. college football in August),
-    // which the in-season filter then rejects — leaving the page blank.
-    supabase
-      .from("sports_scores")
-      .select("id, league_id, home_team, away_team, home_abbrev, away_abbrev, home_logo, away_logo, event_id, home_score, away_score, home_record, away_record, status, status_detail, game_date, venue, broadcast")
-      .gte("game_date", new Date(Date.now() - 10 * 24 * 3600 * 1000).toISOString())
-      .lte("game_date", new Date(Date.now() + 10 * 24 * 3600 * 1000).toISOString())
-      .order("game_date", { ascending: false })
-      .limit(400),
     supabase
       .from("sports_news")
       .select("id, league_id, title, description, url, image_url, published_at, source")
       .order("published_at", { ascending: false })
       .limit(50),
   ]);
+  const leagues = (leaguesRes.data ?? []) as League[];
+
+  // Window around today, read per league and per side of now. One query over
+  // every league ordered by game_date desc with a row limit filled up with the
+  // furthest-future fixtures of the busiest leagues (college basketball alone
+  // schedules hundreds a week), so every league lost its recent results and
+  // its next few days: the Scores column vanished and Schedule opened five
+  // days out. Ordering by game_date desc with no window at all is worse still:
+  // it returns only far-future fixtures, which the in-season filter rejects.
+  const now = Date.now();
+  const nowIso = new Date(now).toISOString();
+  const from = new Date(now - 10 * 24 * 3600 * 1000).toISOString();
+  const to = new Date(now + 10 * 24 * 3600 * 1000).toISOString();
+  const perLeague = await Promise.all(
+    leagues.flatMap((l) => [
+      supabase
+        .from("sports_scores")
+        .select(SCORE_COLUMNS)
+        .eq("league_id", l.id)
+        .gte("game_date", from)
+        .lt("game_date", nowIso)
+        .order("game_date", { ascending: false })
+        .limit(200),
+      supabase
+        .from("sports_scores")
+        .select(SCORE_COLUMNS)
+        .eq("league_id", l.id)
+        .gte("game_date", nowIso)
+        .lte("game_date", to)
+        .order("game_date", { ascending: true })
+        .limit(200),
+    ]),
+  );
 
   return {
-    leagues: (leaguesRes.data ?? []) as League[],
-    scores: (scoresRes.data ?? []) as Score[],
+    leagues,
+    scores: perLeague.flatMap((r) => (r.data ?? []) as Score[]),
     news: (newsRes.data ?? []) as NewsItem[],
   };
 }

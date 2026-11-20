@@ -1608,25 +1608,30 @@ export default async function CommandCenter() {
         count={companyNews.length} summary={`${companyNews.length} articles`}>
         <div>
           {companyNews.map((item) => (
-            <a key={item.id} href={item.url} target="_blank" rel="noopener noreferrer"
-              className="tap-row flex items-center min-h-[30px] gap-1.5 px-2 py-0.5 border-b border-border last:border-0 hover:bg-secondary/50 transition-colors group">
+            // The row is a div with a stretched headline link, not one big <a>: the ticker chips are
+            // links of their own, and an <a> inside an <a> is invalid HTML that broke hydration.
+            <div key={item.id}
+              className="tap-row relative flex items-center min-h-[30px] gap-1.5 px-2 py-0.5 border-b border-border last:border-0 hover:bg-secondary/50 transition-colors group">
               {item.source && <HubCap label={item.source} />}
               <div className="min-w-0">
-                <p className="text-[10px] font-medium leading-tight line-clamp-2 group-hover:underline">
-                  {item.headline}
-                </p>
+                <a href={item.url} target="_blank" rel="noopener noreferrer"
+                  className="after:absolute after:inset-0">
+                  <p className="text-[10px] font-medium leading-tight line-clamp-2 group-hover:underline">
+                    {item.headline}
+                  </p>
+                </a>
                 {(item.related_tickers ?? []).length > 0 && (
                   <div className="flex items-center gap-1 flex-wrap mt-0.5">
                     {(item.related_tickers ?? []).slice(0, 3).map((t) => (
                       <TickerHoverChart key={t} ticker={t} href={`/markets/${t}`}
-                        className="text-[8px] font-mono px-0.5 bg-secondary leading-none hover:bg-border">
+                        className="relative z-10 text-[8px] font-mono px-0.5 bg-secondary leading-none hover:bg-border">
                         {t}
                       </TickerHoverChart>
                     ))}
                   </div>
                 )}
               </div>
-            </a>
+            </div>
           ))}
         </div>
       </CollapsibleCard>

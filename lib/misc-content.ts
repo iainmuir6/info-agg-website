@@ -1,5 +1,7 @@
 import "server-only";
 import { createClient } from "@/lib/supabase/server";
+import { demoWeather } from "@/lib/demo/weather";
+import { isDemoViewer } from "@/lib/demo/viewer";
 
 /** Typed access to `info_agg.misc_content`.
  *
@@ -149,9 +151,16 @@ function asOnThisDay(p: unknown): OnThisDayEvent[] {
 }
 function asHolidays(p: unknown): Holiday[] {
   if (!isRecord(p) || !Array.isArray(p.holidays)) return [];
-  return (p.holidays as unknown[]).filter(
-    (h): h is Holiday => isRecord(h) && typeof h.name === "string" && typeof h.date === "string"
-  );
+  // Calendarific lists a holiday once per observance type (Christmas Day came
+  // back four times for Dec 25), so keep one row per name and date.
+  const seen = new Set<string>();
+  return (p.holidays as unknown[]).filter((h): h is Holiday => {
+    if (!isRecord(h) || typeof h.name !== "string" || typeof h.date !== "string") return false;
+    const k = `${h.name}|${h.date}`;
+    if (seen.has(k)) return false;
+    seen.add(k);
+    return true;
+  });
 }
 
 /** Order weather cards the way the ETL lists the cities, not by insertion. */
@@ -171,9 +180,11 @@ export async function getMiscContent(
   supabase?: Awaited<ReturnType<typeof createClient>>
 ): Promise<MiscContent> {
   const client = supabase ?? (await createClient());
-  const { data } = await client
-    .from("misc_content")
-    .select("kind, key, payload, fetched_at");
+  // A demo login (public demo video) sees stand-in cities: see lib/demo/weather.ts.
+  const [{ data }, demo] = await Promise.all([
+    client.from("misc_content").select("kind, key, payload, fetched_at"),
+    isDemoViewer(client),
+  ]);
 
   const rows = (data ?? []) as MiscRow[];
   const byKind = (kind: string) =>
@@ -184,7 +195,7 @@ export async function getMiscContent(
       .sort((a, b) => a.key.localeCompare(b.key, undefined, { numeric: true }));
   const one = (kind: string) => byKind(kind)[0]?.payload;
 
-  const weather = byKind("weather")
+  const realWeather = byKind("weather")
     .map((r) => {
       const payload = asWeather(r.payload);
       return payload ? { key: r.key, payload, fetched_at: r.fetched_at } : null;
@@ -195,6 +206,7 @@ export async function getMiscContent(
       const ib = WEATHER_ORDER.indexOf(b.key as (typeof WEATHER_ORDER)[number]);
       return (ia === -1 ? 99 : ia) - (ib === -1 ? 99 : ib);
     });
+  const weather = demo ? demoWeather(realWeather) : realWeather;
 
   const fetchedAt =
     rows.length > 0

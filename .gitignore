@@ -62,3 +62,7 @@ etl-report.json
 .app-review/**/*_summary*.json
 .app-review/**/*.log
 .app-review/**/.auth/
+
+# demo video: logins (passwords) and takes
+/private/
+/public/_split.html
